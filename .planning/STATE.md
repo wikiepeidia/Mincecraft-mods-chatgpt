@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-current_phase: 1
+current_phase: 01
 current_phase_name: Java 25 and Fabric 26.2 Foundation
 status: executing
-stopped_at: Roadmap and initial state created; Phase 1 is ready for planning.
-last_updated: "2026-08-25T19:29:41.227Z"
-last_activity: 2026-08-25
-last_activity_desc: Initial six-phase MVP roadmap created with 50/50 v1 requirements mapped.
-state_head: 12e41e902178d76485a41e231cf6e4041b985af1
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-08-25T19:56:00.464Z"
+last_activity: 2026-08-26
+last_activity_desc: Phase 01 execution started
+state_head: 2b3bba70902b27884ad039ac84a2049ed1729524
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-25)
 
 **Core value:** Deliver a genuinely funny, replayable boss-rush experience whose university and developer jokes become visible Minecraft mechanics rather than merely renamed items or text references.
-**Current focus:** Phase 1 — Java 25 and Fabric 26.2 Foundation
+**Current focus:** Phase 01 — Java 25 and Fabric 26.2 Foundation
 
 ## Current Position
 
-Phase: 1 (Java 25 and Fabric 26.2 Foundation) — READY TO EXECUTE
-Plan: 0 of TBD in current phase
+Phase: 01 (Java 25 and Fabric 26.2 Foundation) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-08-25 — Initial six-phase MVP roadmap created with 50/50 v1 requirements mapped.
+Last activity: 2026-08-26 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,11 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 17 min | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -65,6 +70,9 @@ Recent decisions affecting current work:
 - [Roadmap]: Protect the runnable four-boss Contract-to-Diploma path before optional breadth.
 - [Roadmap]: Prove persistence, cleanup, retry, and exactly-once rewards with the complete Lecture vertical slice before adding later bosses.
 - [Roadmap]: Keep Metadata Roulette isolated behind curated reversible Trait Cards after the lower-risk developer-tool modules.
+- [Phase 01]: Use the exact Fabric 26.2 tuple: Temurin 25.0.4+7, Loader 0.19.3, Fabric API 0.158.0+26.2, Loom 1.17.19, and Gradle 9.5.1.
+- [Phase 01]: Keep common and client entrypoints physically split, with the client initializer intentionally behavior-free until client systems are introduced.
+- [Phase 01]: Ship the Foundation Token as an unconditional built-in registry item backed only by bundled metadata and vanilla paper visuals.
 
 ### Pending Todos
 
@@ -85,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-25
-Stopped at: Roadmap and initial state created; Phase 1 is ready for planning.
+Last session: 2026-08-25T19:56:00.453Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None

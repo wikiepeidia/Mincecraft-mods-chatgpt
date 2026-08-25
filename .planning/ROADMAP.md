@@ -33,12 +33,12 @@ Developer's Hell moves through six runnable MVP boundaries: first prove the exac
   3. The same distribution bytes reach a playable client world and ready/clean-stop dedicated-server state without client-only classloading failures, with pre/post hashes and zero residual firewall group members proven.
   4. A world remains loadable when module toggles change because every stable content and payload ID is registered independently of enabled behavior.
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Atomically prove the pristine official scaffold, then complete the first registered client-visible item tracer.
+- [x] 01-01-PLAN.md — Atomically prove the pristine official scaffold, then complete the first registered client-visible item tracer.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -142,7 +142,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Java 25 and Fabric 26.2 Foundation | 0/4 | Not started | - |
+| 1. Java 25 and Fabric 26.2 Foundation | 1/4 | In Progress|  |
 | 2. Persistent Lecture Vertical Slice | 0/TBD | Not started | - |
 | 3. Contract-to-Diploma Boss Campaign | 0/TBD | Not started | - |
 | 4. Developer-Tool Sandbox Loops | 0/TBD | Not started | - |
