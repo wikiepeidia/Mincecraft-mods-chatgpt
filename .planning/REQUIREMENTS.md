@@ -145,11 +145,62 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| FND-01 | Phase 1 | Pending |
+| FND-02 | Phase 1 | Pending |
+| FND-03 | Phase 1 | Pending |
+| FND-04 | Phase 1 | Pending |
+| FND-05 | Phase 2 | Pending |
+| FND-06 | Phase 2 | Pending |
+| FND-07 | Phase 2 | Pending |
+| CAMP-01 | Phase 2 | Pending |
+| CAMP-02 | Phase 2 | Pending |
+| CAMP-03 | Phase 3 | Pending |
+| CAMP-04 | Phase 3 | Pending |
+| CAMP-05 | Phase 3 | Pending |
+| CAMP-06 | Phase 3 | Pending |
+| LECT-01 | Phase 2 | Pending |
+| LECT-02 | Phase 2 | Pending |
+| JURY-01 | Phase 3 | Pending |
+| JURY-02 | Phase 3 | Pending |
+| CHAIR-01 | Phase 3 | Pending |
+| CHAIR-02 | Phase 3 | Pending |
+| CODEX-01 | Phase 3 | Pending |
+| CODEX-02 | Phase 3 | Pending |
+| CODEX-03 | Phase 3 | Pending |
+| MOD-01 | Phase 5 | Pending |
+| META-01 | Phase 5 | Pending |
+| META-02 | Phase 5 | Pending |
+| PYTH-01 | Phase 4 | Pending |
+| PYTH-02 | Phase 4 | Pending |
+| TERM-01 | Phase 4 | Pending |
+| TERM-02 | Phase 4 | Pending |
+| GIT-01 | Phase 4 | Pending |
+| GIT-02 | Phase 4 | Pending |
+| TOTM-01 | Phase 4 | Pending |
+| TOTM-02 | Phase 4 | Pending |
+| DUCK-01 | Phase 4 | Pending |
+| DUCK-02 | Phase 4 | Pending |
+| DEAD-01 | Phase 4 | Pending |
+| DEAD-02 | Phase 4 | Pending |
+| ACC-01 | Phase 3 | Pending |
+| ACC-02 | Phase 6 | Pending |
+| ACC-03 | Phase 6 | Pending |
+| ACC-04 | Phase 6 | Pending |
+| OFFL-01 | Phase 6 | Pending |
+| OFFL-02 | Phase 6 | Pending |
+| OFFL-03 | Phase 6 | Pending |
+| OFFL-04 | Phase 6 | Pending |
+| REL-01 | Phase 6 | Pending |
+| REL-02 | Phase 6 | Pending |
+| REL-03 | Phase 6 | Pending |
+| REL-04 | Phase 6 | Pending |
+| REL-05 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 50 total
-- Mapped to phases: 0
-- Unmapped: 50 ⚠️
+- Mapped to phases: 50
+- Unmapped: 0 ✓
+- Duplicate mappings: 0 ✓
 
 ---
 *Requirements defined: 2026-08-25*
