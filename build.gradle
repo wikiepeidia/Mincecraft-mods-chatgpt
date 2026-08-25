@@ -36,6 +36,13 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Loader JUnit is a test-only dependency and never enters the production runtime.
+	testImplementation "net.fabricmc:fabric-loader-junit:0.19.3"
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {
