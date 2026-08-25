@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "developers_hell",
+  "version": "${version}",
+  "name": "Developer's Hell",
+  "description": "An offline fictional comedy campaign about developer life and university bureaucracy.",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.developershell.DevelopersHell"
+    ],
+    "client": [
+      "dev.developershell.client.DevelopersHellClient"
+    ]
+  },
+  "license": "Unlicense",
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
