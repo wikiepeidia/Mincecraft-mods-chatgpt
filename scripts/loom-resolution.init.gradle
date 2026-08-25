@@ -1,0 +1,69 @@
+def developersHellLoom = new java.util.concurrent.ConcurrentHashMap<String, String>()
+
+gradle.settingsEvaluated { settings ->
+	settings.pluginManagement.resolutionStrategy.eachPlugin { details ->
+		if (details.requested.id.id == 'net.fabricmc.fabric-loom') {
+			def requested = details.requested.version ?: ''
+			if (!requested) {
+				throw new GradleException("Developer's Hell Loom probe: configured plugin version is missing")
+			}
+			developersHellLoom.put('selected', requested)
+		}
+	}
+}
+
+gradle.taskGraph.whenReady {
+	def root = gradle.rootProject
+	def loomPlugin = root.plugins.findPlugin('net.fabricmc.fabric-loom')
+	if (loomPlugin == null) {
+		throw new GradleException("Developer's Hell Loom probe: applied plugin was not found")
+	}
+
+	def implementationVersion = loomPlugin.class.package.implementationVersion
+	def codeSource = loomPlugin.class.protectionDomain?.codeSource?.location
+	def classpath = root.buildscript.configurations.findByName('classpath')
+	if (classpath == null) {
+		throw new GradleException("Developer's Hell Loom probe: buildscript classpath was not found")
+	}
+
+	def loomArtifacts = classpath.resolvedConfiguration.resolvedArtifacts.findAll { artifact ->
+		artifact.moduleVersion.id.group == 'net.fabricmc' &&
+				artifact.moduleVersion.id.name == 'fabric-loom'
+	}
+	if (loomArtifacts.size() != 1) {
+		throw new GradleException("Developer's Hell Loom probe: expected one resolved fabric-loom artifact, found ${loomArtifacts.size()}")
+	}
+
+	def loomArtifact = loomArtifacts.iterator().next()
+	def selected = developersHellLoom.get('selected')
+	def component = loomArtifact.moduleVersion.id
+	def resolved = component.version
+	def artifactFile = loomArtifact.file
+	if (!selected || !resolved || artifactFile == null || !artifactFile.isFile()) {
+		throw new GradleException("Developer's Hell Loom probe: incomplete selected/resolved/artifact evidence")
+	}
+	if (resolved == '1.17-SNAPSHOT') {
+		throw new GradleException("Developer's Hell Loom probe: unresolved moving snapshot alias is forbidden")
+	}
+
+	def codeSourceFile = codeSource == null ? null : new File(codeSource.toURI())
+	if (codeSourceFile == null || !codeSourceFile.isFile() ||
+			codeSourceFile.canonicalFile != artifactFile.canonicalFile) {
+		throw new GradleException("Developer's Hell Loom probe: plugin code source does not equal the resolved artifact")
+	}
+
+	def digest = java.security.MessageDigest.getInstance('SHA-256')
+	artifactFile.withInputStream { input ->
+		byte[] buffer = new byte[8192]
+		for (int read = input.read(buffer); read != -1; read = input.read(buffer)) {
+			digest.update(buffer, 0, read)
+		}
+	}
+	def artifactSha256 = digest.digest().encodeHex().toString()
+
+	println "DEVELOPERS_HELL_LOOM_SELECTED=${selected}"
+	println "DEVELOPERS_HELL_LOOM_COMPONENT=${component.group}:${component.name}:${component.version}"
+	println "DEVELOPERS_HELL_LOOM_RESOLVED=${resolved}"
+	println "DEVELOPERS_HELL_LOOM_IMPLEMENTATION=${implementationVersion ?: 'absent'}"
+	println "DEVELOPERS_HELL_LOOM_ARTIFACT_SHA256=${artifactSha256}"
+}

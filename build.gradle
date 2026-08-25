@@ -29,6 +29,16 @@ loom {
 	}
 }
 
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "developers_hell_test"
+		enableGameTests = true
+		enableClientGameTests = false
+		eula = true
+	}
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
@@ -38,7 +48,10 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
 	// Loader JUnit is a test-only dependency and never enters the production runtime.
-	testImplementation "net.fabricmc:fabric-loader-junit:0.19.3"
+	testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
+
+	// Loom's production tasks launch the ordinary project JAR with the exact runtime API.
+	productionRuntimeMods "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
 test {
@@ -66,6 +79,145 @@ java {
 
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
+}
+
+def java25Launcher = javaToolchains.launcherFor {
+	languageVersion = JavaLanguageVersion.of(25)
+}
+
+tasks.register("runProductionClient", net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+	group = "fabric"
+	description = "Launches the ordinary Developer's Hell JAR in an isolated production client profile."
+	runDir = file("run/production-client")
+	javaLauncher = java25Launcher
+}
+
+tasks.register("runProductionServer", net.fabricmc.loom.task.prod.ServerProductionRunTask) {
+	group = "fabric"
+	description = "Launches the ordinary Developer's Hell JAR in an isolated production server profile."
+	runDir = file("run/production-server")
+	javaLauncher = java25Launcher
+	installerVersion = project.fabric_installer_version
+	loaderVersion = project.loader_version
+	minecraftVersion = project.minecraft_version
+}
+
+tasks.register("auditDirectDependencies") {
+	group = "verification"
+	description = "Fails unless every project-owned direct dependency is an exact approved coordinate."
+
+	doLast {
+		def expected = [
+			"minecraft|com.mojang:minecraft:${project.minecraft_version}",
+			"implementation|net.fabricmc:fabric-loader:${project.loader_version}",
+			"implementation|net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}",
+			"testImplementation|net.fabricmc:fabric-loader-junit:${project.loader_version}",
+			"productionRuntimeMods|net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+		].sort()
+		def loomOwnedConfigurations = [
+			"cfrDecompilerClasspath", "loaderLibraries", "loomDevelopmentDependencies",
+			"minecraftClientLibraries", "minecraftClientOnlyNamedCompile", "minecraftClientOnlyNamedRuntime",
+			"minecraftCommonNamedCompile", "minecraftCommonNamedRuntime", "minecraftNatives",
+			"minecraftServerLibraries", "vineflowerDecompilerClasspath"
+		] as Set
+		def injectedAnnotations = "org.jetbrains:annotations:26.0.2"
+		def injectedClientOutput = [
+			file("${layout.buildDirectory.get().asFile}/classes/java/client").canonicalPath,
+			file("${layout.buildDirectory.get().asFile}/resources/client").canonicalPath
+		].sort()
+
+		def declared = []
+		configurations.findAll {
+			it.canBeDeclared && !loomOwnedConfigurations.contains(it.name) && !it.dependencies.empty
+		}.each { configuration ->
+			configuration.dependencies.each { dependency ->
+				def coordinate = dependency.group && dependency.name && dependency.version
+						? "${dependency.group}:${dependency.name}:${dependency.version}"
+						: null
+				if (configuration.name in ["compileOnly", "testCompileOnly"] && coordinate == injectedAnnotations) {
+					logger.lifecycle("DEVELOPERS_HELL_PLUGIN_INJECTED=${configuration.name}|${coordinate}")
+					return
+				}
+				if (configuration.name == "testImplementation" &&
+						dependency instanceof org.gradle.api.artifacts.FileCollectionDependency) {
+					def actualFiles = dependency.files.files.collect { it.canonicalPath }.sort()
+					if (actualFiles == injectedClientOutput) {
+						logger.lifecycle("DEVELOPERS_HELL_PLUGIN_INJECTED=testImplementation|client-source-output")
+						return
+					}
+				}
+				if (!(dependency instanceof org.gradle.api.artifacts.ExternalModuleDependency)) {
+					throw new GradleException("Forbidden non-module direct dependency on ${configuration.name}: ${dependency}")
+				}
+
+				def groupName = dependency.group
+				def moduleName = dependency.name
+				def moduleVersion = dependency.version
+				if (!groupName || !moduleName || !moduleVersion) {
+					throw new GradleException("Direct dependency on ${configuration.name} is missing group, name, or version: ${dependency}")
+				}
+				def dynamicVersion = moduleVersion == '+' ||
+						moduleVersion.endsWith('.+') ||
+						moduleVersion ==~ /(?i)^latest(?:[.-].*)?$/ ||
+						moduleVersion ==~ /(?i).*[-.]snapshot$/ ||
+						moduleVersion.find(/[\[\](){}*,]/) != null
+				if (dynamicVersion || moduleVersion != moduleVersion.trim()) {
+					throw new GradleException("Dynamic, range, latest, or unresolved snapshot dependency is forbidden: ${configuration.name} -> ${dependency}")
+				}
+
+				declared << "${configuration.name}|${groupName}:${moduleName}:${moduleVersion}"
+			}
+		}
+
+		def actual = declared.sort()
+		if (actual != expected) {
+			throw new GradleException("Direct dependency allowlist mismatch. Expected ${expected}; actual ${actual}")
+		}
+
+		def installationPaths = System.getProperty("org.gradle.java.installations.paths", "")
+		def installations = installationPaths.split(java.util.regex.Pattern.quote(File.pathSeparator))
+				.findAll { !it.isBlank() }
+		if (installations.size() != 1 ||
+				System.getProperty("org.gradle.java.installations.auto-detect") != "false" ||
+				System.getProperty("org.gradle.java.installations.auto-download") != "false") {
+			throw new GradleException("Dependency audit requires one explicit Java installation with discovery and download disabled")
+		}
+		def expectedJava = new File(installations[0], "bin/java.exe").canonicalFile
+		def expectedProjectJar = layout.buildDirectory.file("libs/${project.archives_base_name}-${project.mod_version}.jar")
+				.get().asFile.canonicalFile
+		def expectedRunDirs = [
+			runProductionClient: file("run/production-client").canonicalFile,
+			runProductionServer: file("run/production-server").canonicalFile
+		]
+		expectedRunDirs.each { taskName, expectedRunDir ->
+			def productionTask = tasks.named(taskName).get()
+			def launcher = productionTask.javaLauncher.get()
+			if (launcher.metadata.languageVersion.asInt() != 25 ||
+					launcher.executablePath.asFile.canonicalFile != expectedJava) {
+				throw new GradleException("${taskName} did not resolve the sole exact Java 25 launcher")
+			}
+			if (productionTask.runDir.get().asFile.canonicalFile != expectedRunDir) {
+				throw new GradleException("${taskName} run directory is not isolated at ${expectedRunDir}")
+			}
+			def modFiles = productionTask.mods.files.collect { it.canonicalFile }
+			if (modFiles.count { it == expectedProjectJar } != 1 ||
+					modFiles.count { it.name == "fabric-api-${project.fabric_api_version}.jar" } != 1) {
+				throw new GradleException("${taskName} must select one ordinary project JAR and exact Fabric API runtime")
+			}
+			def taskDependencies = productionTask.taskDependencies.getDependencies(productionTask)*.name
+			if (!taskDependencies.contains("jar") || taskDependencies.contains("remapJar")) {
+				throw new GradleException("${taskName} must depend on ordinary jar and never remapJar")
+			}
+		}
+		def serverTask = tasks.named("runProductionServer").get()
+		if (serverTask.installerVersion.get() != project.fabric_installer_version ||
+				serverTask.loaderVersion.get() != project.loader_version ||
+				serverTask.minecraftVersion.get() != project.minecraft_version) {
+			throw new GradleException("runProductionServer tuple does not match Installer/Loader/Minecraft pins")
+		}
+		logger.lifecycle("DEVELOPERS_HELL_DIRECT_DEPENDENCIES=${actual.join(',')}")
+		logger.lifecycle("DEVELOPERS_HELL_PRODUCTION_TASKS=ordinary-jar|java25|isolated-runs|installer-${project.fabric_installer_version}")
+	}
 }
 
 jar {

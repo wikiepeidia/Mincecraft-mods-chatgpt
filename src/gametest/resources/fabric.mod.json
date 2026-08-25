@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "developers_hell_test",
+  "version": "0.1.0",
+  "name": "Developer's Hell Foundation Tests",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-gametest": [
+      "dev.developershell.gametest.FoundationGameTests"
+    ]
+  }
+}
