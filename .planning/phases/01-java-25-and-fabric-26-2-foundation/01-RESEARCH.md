@@ -28,7 +28,7 @@
 - Prove the untouched scaffold with `help` and `build` before introducing registrations, then preserve a known-good checkpoint.
 - Add one unit smoke test and one minimal Fabric GameTest that exercises real mod initialization or a stable registered object.
 - Launch a production client world and a production dedicated server; a dev-client launch alone is insufficient evidence.
-- Prime dependencies once, then prove `--offline build` produces the same remapped production JAR and inspect the archive for `fabric.mod.json`, classes, and resources.
+- Prime dependencies once, then prove `--offline build` produces the same ordinary no-remap production JAR and inspect the archive for `fabric.mod.json`, classes, and resources.
 
 ### Sprint Scope and Failure Policy
 - Treat any unresolved Java, Loom, Gradle, Fabric, or side-only classloading error as a Phase 1 blocker; do not mask it with gameplay work.
@@ -61,7 +61,7 @@
 
 Build from FabricMC's official `26.2` example branch and change only identity, fixed pins, tests, and production-smoke wiring before gameplay. The live template pins Minecraft `26.2`, Loader `0.19.3`, Fabric API `0.158.0+26.2`, Java release 25, Loom `1.17-SNAPSHOT`, and Gradle Wrapper `9.5.1`. Official Fabric Maven publishes fixed Loom `1.17.19`, but publication does not prove compatibility with this exact template; `help` then `build` on a usable JDK 25 must decide it. [VERIFIED: https://github.com/FabricMC/fabric-example-mod/tree/26.2] [VERIFIED: https://maven.fabricmc.net/net/fabricmc/fabric-loom/net.fabricmc.fabric-loom.gradle.plugin/1.17.19/]
 
-The vertical slice should be one common initializer, one client initializer, one harmless stable item, a behavior-gate seam, one unit test, one server GameTest, and two Loom production tasks. Final proof is a built-output client entering a world, a built-output dedicated server reaching ready state and stopping cleanly, archive inspection, then a second build under `--offline`. Gradle offline mode is cache-only: it cannot make an unprimed checkout, absent wrapper distribution, or never-downloaded Minecraft profile work offline. [VERIFIED: https://docs.gradle.org/current/userguide/dependency_caching.html] [VERIFIED: https://docs.fabricmc.net/develop/loom/production-run-tasks]
+The vertical slice should be one common initializer, one client initializer, one harmless stable item, a behavior-gate seam, one unit test, one server GameTest, and two Loom production tasks. First, checksum-verify the official Eclipse Temurin `25.0.4+7` Windows x64 ZIP against its same-release Adoptium sidecar and bind every task to its machine-derived runtime/vendor/architecture/home and executable/path hashes. Final build proof starts from an exactly registered detached clean checkout under a canonical GUID-named direct child of OS temp, verifies required inputs tracked, runs its committed wrapper online and then under same-cache `--offline`, and requires an equal production-only JAR containing exact `LICENSE_developers-hell`. Cleanup uses only exact registered-worktree removal plus guarded owned-container removal while repo/home/temp roots survive. The built-output client enters a world and the built-output dedicated server reaches ready state and stops cleanly. Gradle offline mode is cache-only: it cannot make an unprimed checkout, absent wrapper distribution, or never-downloaded Minecraft profile work offline, and it does not prove runtime network isolation. Runtime proof must separately use a recorded, independently probed operating-system block around the exact verified Java process. [VERIFIED: https://docs.gradle.org/current/userguide/dependency_caching.html] [VERIFIED: https://docs.fabricmc.net/develop/loom/production-run-tasks]
 
 **Primary recommendation:** plan three gates in order—Java/template proof, thin playable/tested mod, production/offline evidence—and treat any unresolved toolchain, output-task, or side-loading error as a phase blocker.
 
@@ -142,10 +142,10 @@ These are locked decisions or direct metadata derivations. [VERIFIED: 01-CONTEXT
 
 ### Version/Bootstrap Commands
 
-Adoptium documents `winget install EclipseAdoptium.Temurin.25.JDK`, MSI, and ZIP installation routes. This workstation has no `winget`, Chocolatey, or Scoop, so use the official Windows x64 MSI/ZIP, verify its official checksum, and select it outside the repository. [VERIFIED: https://adoptium.net/installation/] [VERIFIED: local environment audit]
+This workstation has no `winget`, Chocolatey, or Scoop, so use the official release ZIP `OpenJDK25U-jdk_x64_windows_hotspot_25.0.4_7.zip` and same-release `.sha256.txt` sidecar under ignored `.work/toolchain`. Require the computed archive hash to equal the official sidecar before extraction; normalize the extracted root to `.work/toolchain/temurin-25.0.4+7-x64`, record only its path class/hash, and retain it through the phase. [VERIFIED: https://adoptium.net/installation/] [VERIFIED: official Temurin release] [VERIFIED: local environment audit]
 
 ~~~powershell
-$devHellJdk = '<verified Temurin 25 JDK directory>'
+$devHellJdk = (Resolve-Path '.work\toolchain\temurin-25.0.4+7-x64').Path
 if (-not (Test-Path -LiteralPath "$devHellJdk\bin\java.exe")) { throw 'java.exe missing' }
 if (-not (Test-Path -LiteralPath "$devHellJdk\bin\javac.exe")) { throw 'javac.exe missing' }
 $env:JAVA_HOME = $devHellJdk
@@ -156,7 +156,7 @@ java --version
 javac --version
 ~~~
 
-Both Java tools and `.\gradlew.bat --version` must report major 25. Never commit the resolved machine path. [VERIFIED: https://fabricmc.net/2026/06/15/262.html]
+Machine-query `java.runtime.version`, `java.vendor`, `java.vm.vendor`, `os.arch`, and `java.home`; normalize only an optional documented `-LTS` suffix and require exact `25.0.4+7`, Eclipse Adoptium/Temurin, x64/amd64, one canonical root, and matching Java/Javac binary hashes. Every wrapper command disables Java-toolchain auto-detection/download and supplies this exact root as the sole installation path. Never commit the resolved absolute path. [VERIFIED: https://fabricmc.net/2026/06/15/262.html]
 
 ## Package Legitimacy Audit
 
@@ -214,13 +214,15 @@ src/main/resources/assets/developers_hell/models/item/foundation_token.json
 src/test/java/dev/developershell/module/ModuleGateTest.java
 src/gametest/java/dev/developershell/gametest/FoundationGameTests.java
 src/gametest/resources/fabric.mod.json
+scripts/audit-foundation.ps1
+scripts/verify-foundation.ps1
 ~~~
 
 The source-set shape is official; concrete smoke names are recommendations within the user's discretion. [VERIFIED: official template/testing docs] [RECOMMENDED]
 
-### Pattern 1: Untouched Template Gate
+### Pattern 1: Exact-JDK, Fresh-Stream Official Template Gate
 
-Import the official `26.2` shape, test fixed Loom `1.17.19` with `help` then `build` before adding mod code, and change only Loom to `1.17-SNAPSHOT` on a captured failure. Record Java, Gradle, Minecraft, Loader, API, Loom, and output task names. [RECOMMENDED: locked failure policy]
+Keep the verified ignored Temurin root and official `26.2` Git checkout through verification. Require canonical origin, checked-out branch `26.2`, 40-hex `HEAD` equal to `refs/remotes/origin/26.2`, exact tree ID, no staged/unignored changes, and a semantic fixed-Loom patch containing only `-loom_version=1.17-SNAPSHOT` plus `+loom_version=1.17.19` in `gradle.properties`. Derive the tuple from actual Git/files. Every initial command and rerun first overwrites its own ignored log, captures combined stdout/stderr and numeric exit from that same invocation, and classifies only that fresh stream. An ignored Gradle init/build-environment probe derives applied Loom component/implementation/code-source artifact and SHA-256 from actual plugin resolution rather than echoing the property. Fixed success resolves exact `1.17.19`; snapshot fallback is eligible only for same-stream `plugin-resolution` or `minecraft-setup`, rejects compile/test/network/transient anchors, and must yield a concrete resolved build rather than literal `1.17-SNAPSHOT`. Hash-compare every copied scaffold file/wrapper against the selected checkout. [RECOMMENDED: locked failure policy]
 
 ### Pattern 2: Registration Before Behavior
 
@@ -241,21 +243,21 @@ Use `splitEnvironmentSourceSets()`, include `main` and `client` in one mod, and 
 
 Loom production tasks are manually registered and names are project-defined. Loom 1.17 automatically adds the current project artifact and `productionRuntimeMods`. With 26.2's no-remap plugin it selects ordinary `jar`; with remapping enabled it selects `remapJar`. Thus the 26.2 production artifact is technically not a remapped JAR despite older generic documentation wording. [VERIFIED: Loom 1.17.19 `AbstractProductionRunTask` source]
 
-Pin `runProductionClient` and `runProductionServer`, separate run directories, Java 25 launcher, Installer `1.1.2`, and Fabric API in `productionRuntimeMods`. Do not manually add `remapJar`. [VERIFIED: official Loom production task source/docs]
+Preserve the official Fabric Jar rule that renames source `LICENSE` to `${it}_${project.base.archivesName.get()}`; with `archives_base_name=developers-hell`, the one exact production entry is `LICENSE_developers-hell`. Pin `runProductionClient` and `runProductionServer`, separate run directories, the checksum-bound Temurin `25.0.4+7` launcher, Installer `1.1.2`, and Fabric API in `productionRuntimeMods`. Final runtime proof uses the exact ignored `dist/developers-hell-0.1.0.jar` copied from the verified clean-checkout artifact; if a Loom task needs a copy in its conventional path, hash-bind that copy and prove the launch command/classpath uses it. Do not manually add `remapJar`. [VERIFIED: official template and Loom production task source/docs]
 
 ### Pattern 5: Prime Then Prove Offline
 
-Gradle `--offline` consults cached metadata/artifacts only and fails on a missing component. First perform a complete online build and production launches; then repeat `clean build` offline and compare the production JAR SHA-256. Gradle 9 defaults archive timestamps/order to reproducible values, but the measured hash remains the gate. [VERIFIED: https://docs.gradle.org/current/userguide/dependency_caching.html] [VERIFIED: https://docs.gradle.org/current/userguide/best_practices_security.html]
+Gradle `--offline` consults cached metadata/artifacts only and fails on a missing component. First perform a complete online clean build, then repeat `clean build` offline from the same clean checkout/cache; attach the committed Loom component/artifact-SHA probe to each build and require exact frozen evidence equality. Copy the verified equal JAR to ignored `dist/developers-hell-0.1.0.jar` before worktree removal and use those exact bytes for production launches. Gradle 9 defaults archive timestamps/order to reproducible values, but measured three-way hash equality remains the gate. [VERIFIED: https://docs.gradle.org/current/userguide/dependency_caching.html] [VERIFIED: https://docs.gradle.org/current/userguide/best_practices_security.html]
 
 ## Recommended Walking-Skeleton Sequence
 
 ### Gate A — Toolchain and Scaffold
 
-1. Install/select Temurin 25; verify `java`, `javac`, and Gradle's JVM.
-2. Scaffold from FabricMC `26.2` and apply only locked identity plus fixed Loom `1.17.19`.
-3. Run `.\gradlew.bat help --no-daemon --stacktrace` and `.\gradlew.bat build --no-daemon --stacktrace`.
-4. If and only if fixed Loom fails, use `1.17-SNAPSHOT` and rerun unchanged.
-5. Preserve the known-good checkpoint and resolution evidence.
+1. Download the exact official Temurin `25.0.4+7` x64 ZIP plus release sidecar, require matching SHA-256, extract under ignored `.work/toolchain`, and verify runtime/vendor/VM-vendor/architecture/home/path and Java/Javac binary hashes.
+2. Clone FabricMC `26.2`, prove its Git origin/ref/commit/tree, and change exactly the one Loom property to fixed `1.17.19`; do not apply project identity/source customization yet.
+3. Run exact probe-attached `help`, `build`, and resolution commands under that exact JDK; overwrite a deterministic ignored log per run, bind each numeric exit/classification to its own fresh stream, and require every successful invocation's configured/resolved Loom and implementation artifact SHA to agree.
+4. If and only if the retained fixed checkout's exact fresh stream proves an eligible plugin-resolution or Minecraft-setup failure—with compile/test/network/transient causes excluded—validate a second clean same-commit checkout at official `1.17-SNAPSHOT` and mechanically derive its concrete resolved plugin build/artifact hash; otherwise fixed failure blocks.
+5. Hash-compare the selected root/wrapper scaffold into the repository, preserve the known-good atomic checkpoint/evidence, then begin identity customization.
 
 ### Gate B — Thin Playable/Tested Mod
 
@@ -267,11 +269,12 @@ Gradle `--offline` consults cached metadata/artifacts only and fails on a missin
 ### Gate C — Production and Offline Proof
 
 1. Register production client/server tasks plus Fabric API in `productionRuntimeMods`.
-2. Enter a production-client local world and exit cleanly.
-3. Reach production-server ready state, enter `stop`, and exit cleanly.
-4. Inspect the distributable archive and capture SHA-256.
-5. Repeat the build under `--offline` and require the same SHA-256.
-6. Record exact commands, versions, artifact path, logs, and any snapshot fallback.
+2. Commit the complete verification harness, then resolve canonical repo/temp/home Win32 final paths, create a non-reparse `developers-hell-<32hex>` direct child of OS temp, add `<child>\worktree` detached at `HEAD`, and require the exact path/HEAD/detached record from `git worktree list --porcelain -z` plus every required tracked source/resource/script.
+3. Run that checkout's committed wrapper plus committed Loom probe under the exact retained JDK online; require the production-only archive including exact `LICENSE_developers-hell`, and capture resolved Loom build/artifact SHA plus JAR SHA-256 from that fresh invocation.
+4. Repeat from the same checkout/cache under `--offline` with a separate fresh probe/log, require the same frozen Loom and JAR SHA values, copy the verified artifact to ignored workspace `dist/developers-hell-0.1.0.jar`, then in `finally` remove only the exact registered worktree and prove pre-existing porcelain bytes/roots unchanged.
+5. Use only that distribution (or a hash-equal explicit runtime copy) for production client/server; hash before and after every launch.
+6. Reach server ready/clean stop online and under a fresh unique group containing exactly two outbound-block rules for verified java/javaw; remove both exact IDs in `finally` and require group membership zero.
+7. Automation starts hidden `-SuperviseInteractiveUat`, launches the visible online client, and hands off only at ONLINE_READY with live PIDs. The checkpoint performs eight in-game observations/normal exits while automation launches the isolated client and owns rules/cleanup. The auto finalizer consumes the canonical-payload-hashed COMPLETE receipt plus observations, confirms supervisor exit/cleanup/hash, validates, and commits evidence.
 
 This delivers a vertical walking skeleton before boss/module work and keeps failures attributable to one layer. [RECOMMENDED: planning structure]
 
@@ -323,6 +326,8 @@ All observations are from read-only probes on 2026-08-25. [VERIFIED: local envir
 | Production smoke | `.\gradlew.bat runProductionClient --no-daemon` and `.\gradlew.bat runProductionServer --no-daemon` |
 | Task discovery | `.\gradlew.bat tasks --all` |
 
+Plan `<automated>` bodies execute under a Windows PowerShell host. Write inline statements directly so `$ErrorActionPreference`, `$LASTEXITCODE`, and task variables are evaluated once by that host. For checked-in scripts, invoke `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script>` and check its native exit. Never wrap a variable-bearing verifier in a nested double-quoted child-shell command string. [RECOMMENDED: executable verifier hygiene]
+
 ### Required Gradle Wiring
 
 ~~~groovy
@@ -362,6 +367,14 @@ Use the unit test for pure invariants:
 
 If a unit test touches `ItemStack` or another registry-dependent class, call `SharedConstants.tryDetectVersion()` and `Bootstrap.bootStrap()` once in `@BeforeAll`. [VERIFIED: official Fabric testing docs]
 
+### Comprehensive Offline-Security Audit Contract
+
+The reusable audit must fail closed over both `src/main` and `src/client`, including Java and resources. It searches imports, type references, string endpoints, and configuration for `java.net` networking surfaces (`URL`, `URLConnection`, sockets, HTTP/WebSocket clients), OpenAI/ChatGPT SDKs, analytics, telemetry, remote configuration, accounts/keys, and runtime downloads. The final production JAR receives the same namespace/string audit so shaded or generated code cannot bypass source checks.
+
+Audit direct runtime declarations from the Gradle model rather than grepping only a resolved classpath. The only direct runtime inputs are Minecraft `26.2`, Fabric Loader `0.19.3`, and Fabric API `0.158.0+26.2`; `fabric-loader-junit:0.19.3` is test-only, and Fabric API is also present in `productionRuntimeMods`. Expected transitive Fabric modules, Minecraft libraries, and Loader support artifacts may appear in resolved configurations and must be reported as evidence without being misclassified as new direct dependencies. Reject extra direct runtime coordinates, dynamic versions, Git/file dependencies, non-first-party repositories, or a test dependency promoted into production.
+
+Run this audit when the GameTest/production wiring lands and invoke the same script again before and after final archive/reproducibility/runtime proof. A narrow `java.net.http` grep or Gradle `--offline` flag is insufficient evidence for the runtime-offline contract.
+
 ### Minimal Server GameTest Contract
 
 1. Test mod metadata lives in `src/gametest/resources/fabric.mod.json` and declares a `fabric-gametest` entrypoint.
@@ -369,16 +382,16 @@ If a unit test touches `ItemStack` or another registry-dependent class, call `Sh
 3. It asks `BuiltInRegistries.ITEM` for the item's key.
 4. It requires exact `developers_hell:foundation_token` and calls `context.succeed()`.
 
-The official test shape uses `CustomTestMethodInvoker`, `@GameTest`, and `GameTestHelper`. The exact 26.2 lookup method is expected to be `BuiltInRegistries.ITEM.getKey(item)` but must be compile-checked against Loom-generated sources. [VERIFIED: official testing and item docs] [ASSUMED]
+The official test shape uses `CustomTestMethodInvoker`, `@GameTest`, and `GameTestHelper`. The exact 26.2 lookup method is expected to be `BuiltInRegistries.ITEM.getKey(item)` but must be compile-checked against Loom-generated sources. Deliberately fail then restore the assertion to prove `build` executes it. The `src/gametest` source set and its `developers_hell_test` metadata are test runtime inputs only: none of their classes, resources, mod ID, or `fabric-gametest` entrypoint may ship in the ordinary production JAR. [VERIFIED: official testing and item docs] [ASSUMED]
 
 ### Requirements → Test Map
 
 | Req | Behavior | Type | Command/check | Exists? |
 |-----|----------|------|---------------|---------|
-| FND-01 | Built JAR enters world offline after prime | Production client manual | `.\gradlew.bat --offline runProductionClient --no-daemon`; create/enter world, save/quit | ❌ Wave 0 |
+| FND-01 | Built JAR enters world offline after prime | Production client manual | Verify an OS-level block with the exact Java connectivity probe; launch the same primed production profile, create/enter world, save/quit | ❌ Wave 0 |
 | FND-01 | JAR contains metadata/classes/resources | Archive integration | `jar --list --file build\libs\developers-hell-0.1.0.jar` | ❌ Wave 0 |
-| FND-02 | Wrapper/JVM/frozen tuple | Build integration | `--version`, `help`, dependency report, `build` | ❌ Wave 0 |
-| FND-02 | Cached build yields identical artifact | Reproducibility | offline `clean build` plus SHA-256 equality | ❌ Wave 0 |
+| FND-02 | Wrapper/JVM/frozen tuple | Build integration | official Temurin ZIP/sidecar + runtime/vendor/arch/home/binary/path hashes; `--version`, fresh captured `help`/Loom probe, dependency report, `build` | ❌ Wave 0 |
+| FND-02 | Clean committed checkout yields identical artifact | Reproducibility | canonical GUID-temp-child exact registered worktree, tracked manifest, exact-JDK committed-wrapper online build, same-cache offline `clean build`, `LICENSE_developers-hell`, SHA-256 equality, guarded Git-only cleanup/root survival | ❌ Wave 0 |
 | FND-03 | No client imports in common | Static audit | `rg -n "net\.minecraft\.client|com\.mojang\.blaze3d" src/main`; no matches | ❌ Wave 0 |
 | FND-03 | Production client enters world | Manual runtime | `runProductionClient` | ❌ Wave 0 |
 | FND-03 | Production server ready/clean stop | Manual runtime | `runProductionServer`, wait ready, type `stop` | ❌ Wave 0 |
@@ -392,6 +405,7 @@ $jarPath = Resolve-Path 'build\libs\developers-hell-0.1.0.jar'
 $entries = & jar --list --file $jarPath
 $required = @(
   'fabric.mod.json',
+  'LICENSE_developers-hell',
   'dev/developershell/DevelopersHell.class',
   'dev/developershell/client/DevelopersHellClient.class',
   'assets/developers_hell/lang/en_us.json'
@@ -402,55 +416,72 @@ foreach ($entry in $required) {
 if ($entries | Select-String 'com/example|example-mod|modid') {
     throw 'Example scaffold residue found'
 }
+if (($entries | Where-Object { $_ -match '^LICENSE(?:_|$)' }).Count -ne 1) {
+    throw 'Expected exactly one renamed production license entry'
+}
+$forbidden = $entries | Select-String 'dev/developershell/gametest/|FoundationGameTests.*[.]class|ModuleGateTest.*[.]class'
+if ($forbidden) { throw "Test output shipped in production JAR: $forbidden" }
+# Open the single root fabric.mod.json from the ZIP: require id developers_hell,
+# reject developers_hell_test and any fabric-gametest entrypoint/string.
 Get-FileHash -Algorithm SHA256 -LiteralPath $jarPath
 ~~~
 
-Resolve exactly one expected artifact; do not select “the shortest JAR” because source/dev artifacts may coexist. [RECOMMENDED]
+Resolve exactly one expected artifact; do not select “the shortest JAR” because source/dev artifacts may coexist. Require exactly one root production `fabric.mod.json` and exact one `LICENSE_developers-hell`; source `LICENSE` remains tracked but unrenamed/duplicate license and all unit/GameTest output/test metadata are forbidden in distribution. [RECOMMENDED]
 
 ### Online/Offline Equality
 
 ~~~powershell
-.\gradlew.bat clean build --no-daemon
+# Run from an exactly registered canonical GUID-temp-child worktree at committed
+# HEAD after proving the wrapper and every required path with git ls-files.
+.\gradlew.bat clean build --no-daemon --init-script .\scripts\loom-resolution.init.gradle
 $onlineHash = (Get-FileHash build\libs\developers-hell-0.1.0.jar -Algorithm SHA256).Hash
-.\gradlew.bat --offline clean build --no-daemon
+# Preserve the online JAR outside build before clean.
+.\gradlew.bat --offline clean build --no-daemon --init-script .\scripts\loom-resolution.init.gradle
 $offlineHash = (Get-FileHash build\libs\developers-hell-0.1.0.jar -Algorithm SHA256).Hash
 if ($onlineHash -ne $offlineHash) { throw 'Online/offline JAR hash mismatch' }
+# Copy the verified offline JAR to workspace dist before exact worktree removal;
+# require distribution SHA equality. In finally remove only the exact registered worktree,
+# preserve pre-existing porcelain bytes, remove guarded owned child, and prove roots survive.
 ~~~
+
+The verification script itself must be committed before this gate, unchanged at `HEAD`, bound to the exact verified JDK, and own canonical path/8.3-safe containment, exact porcelain registration, Git-only worktree removal, guarded owned-child cleanup, and repo/home/temp survival proof. The upstream Fabric template checkout and clean Developer's Hell checkout are distinct proof surfaces. [RECOMMENDED: FND-02]
 
 ### Production Client Checklist
 
-1. Use clean `run/production-client`.
+1. Use the primed `run/production-client` with exact `dist/developers-hell-0.1.0.jar`; prove any profile copy hash-equal before/after launch.
 2. Confirm Loader lists Developer's Hell `0.1.0` and Fabric API.
 3. Create and enter a singleplayer world.
 4. Confirm no fatal metadata/resource errors.
 5. Save/quit to title, then exit normally.
-6. Repeat after cache prime with networking disabled or Gradle `--offline`.
-7. Preserve `latest.log` and concise manual evidence.
+6. Automation has already started a hidden committed supervisor and visible online client before the checkpoint. Observe online behavior and exit normally; wait for the supervisor to establish/prove exactly-two-rule isolation and launch the visible isolated client; repeat observations and exit normally.
+7. Return eight in-game PASS/FAIL observations only. The checkpoint invokes no commands, scripts, profile setup, network control, evidence mutation, validation, cleanup, or commit. The auto finalizer consumes the hashed COMPLETE receipt, confirms both client/supervisor exits plus rule/group cleanup/distribution hash, and runs `-RequireUatPass`.
 
-The Windows client is interactive and may not self-terminate; a bounded manual checkpoint proves clean save/exit more credibly than a timer kill. [RECOMMENDED: user's discretion]
+The Windows client is interactive and may not self-terminate; a bounded manual checkpoint proves clean save/exit more credibly than a timer kill. Gradle `--offline` may still be used for cache discipline, but it never substitutes for the recorded OS-level runtime block. [RECOMMENDED: user's discretion]
 
 ### Production Dedicated-Server Checklist
 
-1. Use clean `run/production-server` and explicitly accept the EULA there.
+1. Use clean `run/production-server`, exact distribution bytes, and explicitly accept the EULA only there.
 2. Start with Java 25; the production task supplies `nogui`.
 3. Confirm Loader lists the mod and the log reaches ready/`Done` state.
 4. Reject `NoClassDefFoundError`, `ClassNotFoundException`, client-package, or mixin failures.
 5. Type `stop` and require normal Gradle exit.
-6. Repeat from the primed directory offline; preserve `logs/latest.log`.
+6. Repeat from the primed directory with the same distribution/profile and one unique group of exactly two rules scoped to verified java/javaw; record both IDs/program hashes, membership two, online/blocked probes, both-rule absence and group zero after `finally`; preserve `logs/latest.log` only in ignored evidence.
 
-Loom forwards `System.in`, so clean interactive `stop` is supported. First production-server/client launches are not offline proof because missing game/Loader/assets may be downloaded. [VERIFIED: Loom 1.17.19 production task sources]
+Loom forwards `System.in`, so clean interactive `stop` is supported. First production-server/client launches are not offline proof because missing game/Loader/assets may be downloaded. Gradle `--offline` proves cache completeness only; the Java process must also be unable to reach the network under a verified operating-system control. [VERIFIED: Loom 1.17.19 production task sources]
 
 ### Sampling Rate
 
-- **After scaffold:** `help` then `build`.
-- **Per implementation task:** `test`.
-- **Per wave:** `build` including server GameTests.
-- **After common/client boundary changes:** import audit plus development server.
-- **Phase gate:** clean online build, identical offline hash, archive inspection, production client world, production server ready/stop.
+- **After Task 01-01-01 pristine prerequisite:** verify exact Temurin; attach the probe to every official-template `help`, `build`, and resolution invocation with its own overwritten fresh log/exit and frozen resolved-build/artifact-SHA proof; do not claim a repository build before mod source exists.
+- **After Task 01-01-02 tracer:** under the same JDK, run first repository `help` and fresh probe-attached `build`, require frozen Loom evidence equality, then inspect the ordinary JAR.
+- **After Task 01-02-01 gate extraction:** run focused `ModuleGateTest` and fresh probe-attached repository `build`; do not claim GameTest yet.
+- **After Task 01-03-01 GameTest/production task:** run fail-first/restored builds with per-invocation Loom proof, require license/test exclusion, run audits, and self-check the committed probe plus complete distribution/two-rule/interactive-receipt harness.
+- **After Task 01-04-01:** finish clean-worktree/dist/server/preflight gates, verify elevation, then auto-start hidden supervisor/fresh GUID session and visible online client; hand off only at atomic ONLINE_READY with matching live PIDs.
+- **Task 01-04-02 checkpoint:** observe only in-game online behavior/normal exit, wait for automatically launched isolated client, repeat, exit, and return eight values; no command/setup/network/file/cleanup/validation/commit instruction.
+- **Final Task 01-04-03:** consume unique pointer/status plus hashed COMPLETE receipt and eight values, confirm both clients/supervisor exited, distribution hash and rule/group cleanup, validate, and commit public-safe evidence/README.
 
 ### Wave 0 Gaps
 
-- [ ] Install/select Temurin `25.0.4+7`.
+- [ ] Download exact Temurin `25.0.4+7` x64 ZIP/sidecar, verify archive SHA-256, extract under ignored `.work/toolchain`, and bind evidence to runtime/vendor/architecture/home/path plus Java/Javac hashes.
 - [ ] Add Gradle 9.5.1 wrapper and root build files.
 - [ ] Add unit and GameTest sources/metadata.
 - [ ] Add production client/server tasks.
@@ -686,7 +717,7 @@ Source shape: official Fabric `26.2` example initializers. [VERIFIED: https://gi
 
 Separate these contracts:
 
-- **Runtime offline:** Minecraft 26.2, Loader, Fabric API, Developer's Hell, libraries, and assets are already local; the mod makes no network calls.
+- **Runtime offline:** Minecraft 26.2, Loader, Fabric API, Developer's Hell, libraries, and assets are already local; comprehensive source/dependency/JAR audits find no network surface, and an OS-level block plus an exact-Java connectivity probe proves the production process cannot reach the network.
 - **Build offline:** Gradle distribution, Maven metadata/artifacts, Minecraft libraries/assets, and Loom products were successfully primed from the same repositories.
 
 A fresh unprimed machine cannot meet either contract without obtaining prerequisites. [VERIFIED: Gradle caching docs]
@@ -736,7 +767,7 @@ Security enforcement is enabled at ASVS Level 1. This is a local offline mod, so
 | Run world/private config committed | Information disclosure | Official ignore rules and status audit. |
 | Client class on server | Denial of service | Source split, grep audit, production server. |
 | Toggle removes ID | Tampering / denial of service | Unconditional registration and behavior gates. |
-| Runtime HTTP/telemetry | Information disclosure | No HTTP package, endpoint, key, or network code. |
+| Runtime network/SDK/telemetry | Information disclosure | Fail-closed scans across `src/main`, `src/client`, direct dependency declarations, and the final JAR; repeat under a verified exact-Java OS-level network block. |
 
 ### Supply-Chain Recommendations
 
@@ -754,23 +785,19 @@ Security enforcement is enabled at ASVS Level 1. This is a local offline mod, so
 | A2 | Windows GUI is available for the bounded production-client smoke. | MEDIUM: if headless/locked, leave one human checkpoint while all other gates continue. |
 | A3 | Loom/resources preserve byte equality under Gradle 9 defaults. | MEDIUM: if hashes differ, compare entries and fix nondeterminism; do not weaken the locked criterion. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Will fixed Loom `1.17.19` pass on Java 25?**
-   - Known: official marker exists; template still uses snapshot.
-   - Gate: untouched `help`/`build`; snapshot only after captured failure.
+1. **Fixed Loom compatibility — RESOLVED**
+   - Accepted outcome: try fixed Loom `1.17.19` with the untouched official exact-Temurin/Fabric 26.2 template first. Every initial/rerun command overwrites its own ignored log, attaches the mechanical probe when resolution succeeds, and binds exit/category/resolved build/artifact SHA to that same combined stream. Use only official `1.17-SNAPSHOT` after an eligible fresh-stream plugin-resolution/Minecraft-setup failure, reject compile/test/network/transient causes, change no other tuple member, and rerun/freeze that concrete build and SHA on every later Plan 01–04 build.
 
-2. **What exact output task does the generated no-remap build expose?**
-   - Known: Loom production code selects `jar` for no-remap, `remapJar` otherwise.
-   - Gate: `tasks --all` and `build/libs`; record actual task/artifact.
+2. **No-remap output task and artifact — RESOLVED**
+   - Accepted outcome: Minecraft 26.2 uses ordinary `jar`, not legacy `remapJar`. Confirm the intermediate `build/libs/developers-hell-0.1.0.jar`, then copy the verified equal clean-checkout artifact before worktree removal to exact ignored `dist/developers-hell-0.1.0.jar`; record three-way hash equality and use only that distribution for final runtimes.
 
-3. **Can the overnight environment keep an interactive client session?**
-   - Known: entering a world and clean exit are manual on Windows.
-   - Fallback: run all automated/server gates, then leave one concise client checkpoint.
+3. **Production-client interaction — RESOLVED**
+   - Accepted outcome: run every automated build/archive/audit/client-preflight/server gate first, then have automation start a hidden committed supervisor that visibly launches the online production client and hands off only at machine-proven `ONLINE_READY`. The blocking-human checkpoint owns only eight in-game observations and normal exits while that supervisor automatically advances to the visibly launched isolated session, retains the exact two-rule block for its lifetime, restores both rules in `finally`, and writes a canonical-payload-hashed ignored receipt. The auto finalizer consumes the receipt plus eight values, independently confirms both client exits, supervisor exit, both-rule/group cleanup, and distribution hashes, then validates and commits. Forced timeout never counts.
 
-4. **Which launcher assets are already cached outside the repo?**
-   - Known: neither Gradle nor Minecraft can use absent prerequisites offline.
-   - Gate: prime a clean production directory once online, then disconnect and repeat.
+4. **Offline cache boundary — RESOLVED**
+   - Accepted outcome: prime Gradle, Fabric, Minecraft libraries/assets, and each production profile online once under exact Temurin `25.0.4+7`, then repeat from the same cache/profile and exact distribution. Use Gradle `--offline` for cache proof and separately enforce one unique exactly-two-rule java/javaw OS isolation group for server/client, recording both IDs/program hashes, membership, reachable/blocked probes, and both-rule/group cleanup. Never claim an unprimed fresh machine can build or launch offline or equate Gradle offline mode with runtime isolation.
 
 ## Sources
 
