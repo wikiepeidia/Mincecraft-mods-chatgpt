@@ -27,6 +27,7 @@ $script:ExpectedInstallerVersion = '1.1.2'
 $script:ExpectedFabricApiVersion = '0.158.0+26.2'
 $script:ExpectedModId = 'developers_hell'
 $script:ExpectedModVersion = '0.1.0'
+$script:ServerFirstTickMarker = 'DEVELOPERS_HELL_SERVER_FIRST_TICK_READY'
 $script:ProbeHost = 'www.minecraft.net'
 $script:ProbePort = 443
 $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -1394,12 +1395,26 @@ function Install-DistributionRuntimeCopy {
     return (Resolve-CanonicalPath -LiteralPath $runtimeCopy)
 }
 
+function Assert-ScopedProcessInspectionAvailable {
+    if (-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) { Throw-Failure 'CIM process inspection is unavailable' }
+    try {
+        $selfRows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop)
+    }
+    catch {
+        Throw-Failure "Runtime launch requires scoped CIM process inspection before any child is started: $($_.Exception.Message)"
+    }
+    if ($selfRows.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$selfRows[0].ExecutablePath)) {
+        Throw-Failure 'Runtime launch cannot prove the current supervisor process identity through CIM'
+    }
+}
+
 function Start-GradleRuntime {
     param(
         [Parameter(Mandatory)][ValidateSet('runProductionServer','runProductionClient')][string] $TaskName,
         [Parameter(Mandatory)] $Jdk,
         [switch] $Offline
     )
+    Assert-ScopedProcessInspectionAvailable
     $wrapper = Join-Path $script:RepositoryRoot 'gradlew.bat'
     $arguments = @(Get-GradleJvmArguments -Jdk $Jdk)
     if ($Offline) { $arguments += '--offline' }
@@ -1416,13 +1431,257 @@ function Start-GradleRuntime {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     if (-not $process.Start()) { Throw-Failure "Could not start Gradle runtime task $TaskName" }
+    $rootStartTimeUtcTicks = $process.StartTime.ToUniversalTime().Ticks
     return [pscustomobject]@{
         Process = $process
         StdOutTask = $process.StandardOutput.ReadToEndAsync()
         StdErrTask = $process.StandardError.ReadToEndAsync()
         TaskName = $TaskName
         Offline = [bool]$Offline
+        Jdk = $Jdk
+        RootProcessId = [int]$process.Id
+        RootStartTimeUtcTicks = [long]$rootStartTimeUtcTicks
+        ProcessTreeSnapshot = @()
+        LifecycleState = 'RUNNING'
     }
+}
+
+function Get-LiveProcessStartTimeUtcTicks {
+    param([Parameter(Mandatory)][int] $ProcessId)
+    $process = $null
+    try {
+        $process = [Diagnostics.Process]::GetProcessById($ProcessId)
+        return [long]$process.StartTime.ToUniversalTime().Ticks
+    }
+    catch [ArgumentException] { return $null }
+    catch [InvalidOperationException] { return $null }
+    catch { Throw-Failure "Could not inspect start-time identity for PID $ProcessId`: $($_.Exception.Message)" }
+    finally { if ($process) { $process.Dispose() } }
+}
+
+function Get-GradleJavaCommandClass {
+    param(
+        [Parameter(Mandatory)][string] $CommandLine,
+        [Parameter(Mandatory)][ValidateSet('runProductionServer','runProductionClient')][string] $TaskName
+    )
+    # gradlew.bat launches the wrapper with `-jar gradle-wrapper.jar`; that JAR's
+    # manifest main class is GradleWrapperMain, so both spellings are the same
+    # exact bootstrap class for identity purposes.
+    if ($CommandLine -match '(?i)(org\.gradle\.wrapper\.GradleWrapperMain|[\\/]gradle-wrapper\.jar(?:"|\s))' -and
+        $CommandLine.IndexOf($TaskName, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return 'GradleWrapperMain'
+    }
+    if ($CommandLine -match '(?i)org\.gradle\.launcher\.daemon\.bootstrap\.GradleDaemon') {
+        return 'GradleDaemon'
+    }
+    if ($TaskName -eq 'runProductionServer' -and
+        $CommandLine -match '(?i)(net\.fabricmc\.installer\.ServerLauncher|FabricServerLauncher|KnotServer|MinecraftGameProvider)') {
+        return 'ServerLauncher'
+    }
+    if ($TaskName -eq 'runProductionClient' -and
+        $CommandLine -match '(?i)(KnotClient|net\.minecraft\.client\.main\.Main)') {
+        return 'ClientLauncher'
+    }
+    Throw-Failure "Java descendant command line is not an expected $TaskName wrapper, daemon, or launcher"
+}
+
+function Get-ValidatedGradleRuntimeProcessTree {
+    param(
+        [Parameter(Mandatory)] $Runtime,
+        [switch] $RequireReadyClasses
+    )
+    if ($Runtime.LifecycleState -ne 'RUNNING') { Throw-Failure 'Cannot capture a process tree for a completed Gradle runtime' }
+    if ($Runtime.Process.HasExited) { Throw-Failure 'Cannot capture the Gradle process tree after its exact root exited' }
+    Assert-Equal $Runtime.Process.Id $Runtime.RootProcessId 'Gradle root PID identity'
+    $rootTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId $Runtime.RootProcessId
+    if ($null -eq $rootTicks) { Throw-Failure 'Gradle root process disappeared before tree capture' }
+    Assert-Equal $rootTicks $Runtime.RootStartTimeUtcTicks 'Gradle root start-time identity'
+    if (-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) { Throw-Failure 'CIM process inspection is unavailable' }
+    $rootRows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$Runtime.RootProcessId)" -ErrorAction Stop)
+    if ($rootRows.Count -ne 1) { Throw-Failure 'Exact Gradle root PID is absent or ambiguous in CIM' }
+    # Query only children of the already validated root/descendants. A global
+    # Win32_Process enumeration can be denied by unrelated protected processes
+    # and is broader than the cleanup ownership boundary.
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $rows.Add($rootRows[0])
+    $byPid = @{}
+    $rootKey = [string][int]$Runtime.RootProcessId
+    $byPid[$rootKey] = $rootRows[0]
+    $depthByPid = @{}
+    $depthByPid[$rootKey] = 0
+    $parents = [System.Collections.Generic.Queue[int]]::new()
+    $parents.Enqueue([int]$Runtime.RootProcessId)
+    while ($parents.Count -gt 0) {
+        $parentPid = $parents.Dequeue()
+        foreach ($row in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentPid" -ErrorAction Stop)) {
+            $pidKey = [string][int]$row.ProcessId
+            if ($byPid.ContainsKey($pidKey)) { continue }
+            $parentKey = [string][int]$row.ParentProcessId
+            $byPid[$pidKey] = $row
+            $depthByPid[$pidKey] = [int]$depthByPid[$parentKey] + 1
+            $rows.Add($row)
+            $parents.Enqueue([int]$row.ProcessId)
+        }
+    }
+    $rootRow = $rootRows[0]
+    $rootExecutable = Resolve-CanonicalPath -LiteralPath ([string]$rootRow.ExecutablePath)
+    $expectedRootExecutable = Resolve-CanonicalPath -LiteralPath $env:ComSpec
+    if (-not $rootExecutable.Equals($expectedRootExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+        Throw-Failure 'Gradle root executable is not the exact cmd.exe bootstrap'
+    }
+    $rootCommandLine = [string]$rootRow.CommandLine
+    $wrapper = Join-Path $script:RepositoryRoot 'gradlew.bat'
+    if ($rootCommandLine.IndexOf($wrapper, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+        $rootCommandLine.IndexOf($Runtime.TaskName, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        Throw-Failure 'Gradle root command line is not bound to the exact wrapper and runtime task'
+    }
+
+    $allowedJavaExecutables = if ($Runtime.TaskName -eq 'runProductionServer') {
+        @((Resolve-CanonicalPath -LiteralPath $Runtime.Jdk.Java))
+    }
+    else {
+        @((Resolve-CanonicalPath -LiteralPath $Runtime.Jdk.Java),(Resolve-CanonicalPath -LiteralPath $Runtime.Jdk.Javaw))
+    }
+    $snapshot = [System.Collections.Generic.List[object]]::new()
+    $javaClasses = [System.Collections.Generic.List[string]]::new()
+    foreach ($pidKey in $depthByPid.Keys) {
+        $row = $byPid[$pidKey]
+        $pidValue = [int]$row.ProcessId
+        $startTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId $pidValue
+        if ($null -eq $startTicks) { Throw-Failure "Captured runtime PID $pidValue disappeared during identity validation" }
+        $name = ([string]$row.Name).ToLowerInvariant()
+        $executable = if ([string]::IsNullOrWhiteSpace([string]$row.ExecutablePath)) { '' } else { Resolve-CanonicalPath -LiteralPath ([string]$row.ExecutablePath) }
+        $commandLine = [string]$row.CommandLine
+        $commandClass = if ($pidValue -eq $Runtime.RootProcessId) { 'CmdBootstrap' } else { 'OwnedDescendant' }
+        if ($name -in @('java.exe','javaw.exe')) {
+            if (-not @($allowedJavaExecutables | Where-Object { $_.Equals($executable, [StringComparison]::OrdinalIgnoreCase) }).Count) {
+                Throw-Failure "Java descendant PID $pidValue is outside the exact retained Java 25 toolchain"
+            }
+            $commandClass = Get-GradleJavaCommandClass -CommandLine $commandLine -TaskName $Runtime.TaskName
+            $javaClasses.Add($commandClass)
+        }
+        $snapshot.Add([pscustomobject]@{
+            Pid = $pidValue
+            ParentPid = [int]$row.ParentProcessId
+            Depth = [int]$depthByPid[$pidKey]
+            Name = $name
+            Executable = $executable
+            CommandLine = $commandLine
+            CommandClass = $commandClass
+            StartTimeUtcTicks = [long]$startTicks
+        })
+    }
+    if ($RequireReadyClasses) {
+        $requiredClasses = @('GradleWrapperMain','GradleDaemon', $(if ($Runtime.TaskName -eq 'runProductionServer') { 'ServerLauncher' } else { 'ClientLauncher' }))
+        foreach ($requiredClass in $requiredClasses) {
+            if ($requiredClass -notin $javaClasses) { Throw-Failure "Ready runtime process tree is missing expected Java class: $requiredClass" }
+        }
+    }
+    return @($snapshot)
+}
+
+function Assert-CapturedRuntimeProcessIdentity {
+    param(
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] $Runtime
+    )
+    $rows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$Entry.Pid)" -ErrorAction Stop)
+    if ($rows.Count -eq 0) { return $false }
+    if ($rows.Count -ne 1) { Throw-Failure "Runtime PID identity is ambiguous: $($Entry.Pid)" }
+    $row = $rows[0]
+    $startTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$Entry.Pid)
+    if ($null -eq $startTicks -or [long]$startTicks -ne [long]$Entry.StartTimeUtcTicks) { return $false }
+    if ([int]$Entry.Pid -eq [int]$Runtime.RootProcessId) {
+        Assert-Equal $startTicks $Runtime.RootStartTimeUtcTicks 'Cleanup Gradle root start-time identity'
+        $rootExecutable = Resolve-CanonicalPath -LiteralPath ([string]$row.ExecutablePath)
+        if (-not $rootExecutable.Equals((Resolve-CanonicalPath -LiteralPath $env:ComSpec), [StringComparison]::OrdinalIgnoreCase)) {
+            Throw-Failure 'Cleanup Gradle root executable identity changed'
+        }
+        $rootCommandLine = [string]$row.CommandLine
+        if ($rootCommandLine.IndexOf((Join-Path $script:RepositoryRoot 'gradlew.bat'), [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+            $rootCommandLine.IndexOf($Runtime.TaskName, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            Throw-Failure 'Cleanup Gradle root command-line identity changed'
+        }
+    }
+    elseif (([string]$row.Name).ToLowerInvariant() -in @('java.exe','javaw.exe')) {
+        $executable = Resolve-CanonicalPath -LiteralPath ([string]$row.ExecutablePath)
+        $allowed = if ($Runtime.TaskName -eq 'runProductionServer') {
+            @((Resolve-CanonicalPath $Runtime.Jdk.Java))
+        }
+        else {
+            @((Resolve-CanonicalPath $Runtime.Jdk.Java),(Resolve-CanonicalPath $Runtime.Jdk.Javaw))
+        }
+        if (-not @($allowed | Where-Object { $_.Equals($executable,[StringComparison]::OrdinalIgnoreCase) }).Count) {
+            Throw-Failure "Cleanup Java PID $($Entry.Pid) changed outside the retained Java 25 toolchain"
+        }
+        Assert-Equal (Get-GradleJavaCommandClass -CommandLine ([string]$row.CommandLine) -TaskName $Runtime.TaskName) $Entry.CommandClass "Cleanup Java PID $($Entry.Pid) command identity"
+    }
+    return $true
+}
+
+function Wait-CapturedRuntimeProcessesGone {
+    param(
+        [Parameter(Mandatory)][object[]] $Snapshot,
+        [int] $TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $live = @($Snapshot | Where-Object {
+            $currentTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$_.Pid)
+            $null -ne $currentTicks -and [long]$currentTicks -eq [long]$_.StartTimeUtcTicks
+        })
+        if ($live.Count -eq 0) { return @() }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return @($live)
+}
+
+function Stop-ValidatedGradleRuntimeTree {
+    param([Parameter(Mandatory)] $Runtime)
+    if ($Runtime.LifecycleState -ne 'RUNNING') { return [pscustomobject]@{ TerminatedPids=@(); AlreadyComplete=$true } }
+    $rootLive = -not $Runtime.Process.HasExited
+    $snapshot = if ($rootLive) {
+        @(Get-ValidatedGradleRuntimeProcessTree -Runtime $Runtime)
+    }
+    else {
+        @($Runtime.ProcessTreeSnapshot)
+    }
+    if ($rootLive -and $snapshot.Count -eq 0) { Throw-Failure 'Scoped cleanup captured an empty live Gradle process tree' }
+    $Runtime.ProcessTreeSnapshot = @($snapshot)
+
+    # Closing stdin is allowed only now: the exact process tree has been captured,
+    # validated, and this function owns bounded teardown of every captured PID.
+    try { $Runtime.Process.StandardInput.Close() } catch { }
+    $terminated = [System.Collections.Generic.List[int]]::new()
+    if ($rootLive) {
+        $rootEntry = @($snapshot | Where-Object { [int]$_.Pid -eq [int]$Runtime.RootProcessId })
+        if ($rootEntry.Count -ne 1 -or -not (Assert-CapturedRuntimeProcessIdentity -Entry $rootEntry[0] -Runtime $Runtime)) {
+            Throw-Failure 'Exact Gradle root could not be revalidated immediately before tree termination'
+        }
+        $taskkill = Invoke-NativeCapture -FilePath (Join-Path $env:SystemRoot 'System32\taskkill.exe') -ArgumentList @('/PID',[string]$Runtime.RootProcessId,'/T','/F') -WorkingDirectory $script:RepositoryRoot -AllowFailure -TimeoutSeconds 30
+        if ($taskkill.ExitCode -ne 0) {
+            $remainingAfterTaskkill = @(Wait-CapturedRuntimeProcessesGone -Snapshot $snapshot -TimeoutSeconds 1)
+            if ($remainingAfterTaskkill.Count -ne 0) { Throw-Failure "Exact-root taskkill failed with exit $($taskkill.ExitCode)" }
+        }
+        foreach ($entry in $snapshot) { $terminated.Add([int]$entry.Pid) }
+    }
+    else {
+        foreach ($entry in @($snapshot | Sort-Object Depth -Descending)) {
+            if (Assert-CapturedRuntimeProcessIdentity -Entry $entry -Runtime $Runtime) {
+                Stop-Process -Id ([int]$entry.Pid) -Force -ErrorAction Stop
+                $terminated.Add([int]$entry.Pid)
+            }
+        }
+    }
+    $remaining = @(Wait-CapturedRuntimeProcessesGone -Snapshot $snapshot -TimeoutSeconds 20)
+    if ($remaining.Count -ne 0) { Throw-Failure "Scoped runtime cleanup left captured PIDs alive: $((@($remaining | ForEach-Object { $_.Pid })) -join ',')" }
+    if (-not $Runtime.StdOutTask.Wait(15000) -or -not $Runtime.StdErrTask.Wait(15000)) {
+        Throw-Failure 'Scoped runtime cleanup left redirected output streams open'
+    }
+    try { [void]$Runtime.Process.WaitForExit(15000) } catch { }
+    try { $Runtime.Process.Dispose() } catch { }
+    $Runtime.LifecycleState = 'CLEANED'
+    return [pscustomobject]@{ TerminatedPids=@($terminated); AlreadyComplete=$false }
 }
 
 function Complete-GradleRuntime {
@@ -1431,12 +1690,27 @@ function Complete-GradleRuntime {
         [int] $TimeoutSeconds = 120
     )
     if (-not $Runtime.Process.WaitForExit($TimeoutSeconds * 1000)) {
-        try { $Runtime.Process.Kill() } catch { }
-        Throw-Failure "$($Runtime.TaskName) did not terminate inside $TimeoutSeconds seconds"
+        try {
+            $cleanup = Stop-ValidatedGradleRuntimeTree -Runtime $Runtime
+        }
+        catch {
+            Throw-Failure "$($Runtime.TaskName) timed out and scoped process-tree cleanup failed: $($_.Exception.Message)"
+        }
+        Throw-Failure "$($Runtime.TaskName) did not terminate inside $TimeoutSeconds seconds; scoped cleanup terminated $(@($cleanup.TerminatedPids).Count) captured processes"
+    }
+    # The exact Gradle root has exited, so closing its stdin can no longer inject
+    # EOF ahead of the Minecraft stop command.
+    try { $Runtime.Process.StandardInput.Close() } catch { }
+    $remaining = @(Wait-CapturedRuntimeProcessesGone -Snapshot @($Runtime.ProcessTreeSnapshot) -TimeoutSeconds 15)
+    if ($remaining.Count -ne 0) {
+        try { [void](Stop-ValidatedGradleRuntimeTree -Runtime $Runtime) }
+        catch { Throw-Failure "$($Runtime.TaskName) root exited but scoped descendant cleanup failed: $($_.Exception.Message)" }
+        Throw-Failure "$($Runtime.TaskName) root exited while captured descendants were still alive"
     }
     $stdout = $Runtime.StdOutTask.GetAwaiter().GetResult()
     $stderr = $Runtime.StdErrTask.GetAwaiter().GetResult()
     $exit = $Runtime.Process.ExitCode
+    $Runtime.LifecycleState = 'COMPLETED'
     return [pscustomobject]@{ ExitCode = $exit; StdOut = $stdout; StdErr = $stderr; Combined = (($stdout.TrimEnd(),$stderr.TrimEnd()) | Where-Object { $_ }) -join "`n" }
 }
 
@@ -1455,7 +1729,10 @@ function Wait-ForRuntimeLog {
         $all = $true
         foreach ($pattern in $RequiredPatterns) { if ($text -notmatch $pattern) { $all = $false; break } }
         if ($all) {
-            if (-not $AdditionalCheck -or (& $AdditionalCheck)) { return $text }
+            if (-not $AdditionalCheck -or (& $AdditionalCheck)) {
+                $Runtime.ProcessTreeSnapshot = @(Get-ValidatedGradleRuntimeProcessTree -Runtime $Runtime -RequireReadyClasses)
+                return $text
+            }
         }
         Start-Sleep -Milliseconds 500
     }
@@ -1512,28 +1789,46 @@ function Invoke-ServerSession {
     try {
         $logText = Wait-ForRuntimeLog -Runtime $runtime -LogPath $logPath -RequiredPatterns @(
             '(?i)Developer''s Hell foundation initialized',
-            '(?i)Done \([^)]+\)! For help'
+            '(?i)Done \([^)]+\)! For help',
+            [regex]::Escape($script:ServerFirstTickMarker)
         ) -TimeoutSeconds 300
-        if ($logText -match '(?i)(NoClassDefFoundError|ClassNotFoundException|net\.minecraft\.client|com\.mojang\.blaze3d|crash report)') {
+        if ($logText -match '(?i)(NoClassDefFoundError|ClassNotFoundException|net\.minecraft\.client|com\.mojang\.blaze3d|crash report|An unexpected error occurred while trying to execute that command)') {
             Throw-Failure 'Production server log contains linkage/crash markers'
         }
         $runtime.Process.StandardInput.WriteLine('stop')
         $runtime.Process.StandardInput.Flush()
-        $runtime.Process.StandardInput.Close()
         $complete = Complete-GradleRuntime -Runtime $runtime -TimeoutSeconds 120
         if ($complete.ExitCode -ne 0) { Throw-Failure "Production server exited nonzero: $($complete.ExitCode)" }
         if (($complete.Combined -replace '\\','/') -notmatch [regex]::Escape($script:ExpectedDistributionName)) {
             Throw-Failure 'Production server launch output does not name the exact runtime JAR'
         }
+        $finalLogText = Get-Content -LiteralPath $logPath -Raw -ErrorAction Stop
+        if ($finalLogText -notmatch [regex]::Escape($script:ServerFirstTickMarker)) { Throw-Failure 'Production server final log lost the exact first-tick readiness marker' }
+        if (($complete.Combined + "`n" + $finalLogText) -match '(?i)(An unexpected error occurred while trying to execute that command|Failed to execute command|Could not execute command|NoClassDefFoundError|ClassNotFoundException|crash report|Exception in server tick loop|Encountered an unexpected exception)') {
+            Throw-Failure 'Production server completion contains a generic command error or crash marker'
+        }
+        $stoppingIndex = $finalLogText.LastIndexOf('Stopping server', [StringComparison]::OrdinalIgnoreCase)
+        if ($stoppingIndex -lt 0) { Throw-Failure 'Production server final log lacks the shutdown marker: Stopping server' }
+        $savedIndex = $finalLogText.IndexOf('All dimensions are saved', $stoppingIndex + 'Stopping server'.Length, [StringComparison]::OrdinalIgnoreCase)
+        if ($savedIndex -lt 0) { Throw-Failure 'Production server final log lacks an All dimensions are saved marker after Stopping server' }
         $runtime.Process.Dispose()
     }
     catch {
-        Stop-RuntimeAfterFailure -Runtime $runtime -ClientInfo $null
-        throw
+        $primaryError = $_
+        try { Stop-RuntimeAfterFailure -Runtime $runtime -ClientInfo $null }
+        catch { Throw-Failure "Production server failed and scoped cleanup also failed: $($_.Exception.Message)" }
+        throw $primaryError
     }
     Assert-Equal (Get-Sha256 $RuntimeCopy) $Distribution.Sha256 'Server postlaunch runtime-copy SHA-256'
     Assert-Equal (Get-Sha256 $Distribution.Path) $Distribution.Sha256 'Server postlaunch distribution SHA-256'
-    return [pscustomobject]@{ Ready = $true; CleanStop = $true; ExitCode = 0 }
+    return [pscustomobject]@{
+        Ready = $true
+        CleanStop = $true
+        ExitCode = 0
+        CapturedPids = @($runtime.ProcessTreeSnapshot | ForEach-Object { [int]$_.Pid })
+        FirstTickMarker = 'PASS'
+        OrderedShutdown = 'PASS'
+    }
 }
 
 function Invoke-RunServerSmokeMode {
@@ -1609,23 +1904,12 @@ function Stop-RuntimeAfterFailure {
         [Parameter(Mandatory)] $Runtime,
         $ClientInfo
     )
-    if ($ClientInfo) {
-        try {
-            $client = [Diagnostics.Process]::GetProcessById([int]$ClientInfo.Pid)
-            [void]$client.CloseMainWindow()
-            if (-not $client.WaitForExit(15000)) { $client.Kill() }
-            $client.Dispose()
-        }
-        catch { }
+    if ($Runtime.LifecycleState -ne 'RUNNING') { return }
+    $cleanup = Stop-ValidatedGradleRuntimeTree -Runtime $Runtime
+    if ($ClientInfo -and (Get-Process -Id ([int]$ClientInfo.Pid) -ErrorAction SilentlyContinue)) {
+        Throw-Failure "Scoped cleanup left the captured client PID alive: $($ClientInfo.Pid)"
     }
-    try {
-        if (-not $Runtime.Process.HasExited) {
-            $Runtime.Process.Kill()
-            [void]$Runtime.Process.WaitForExit(15000)
-        }
-    }
-    catch { }
-    try { $Runtime.Process.Dispose() } catch { }
+    if (-not $cleanup.AlreadyComplete) { Write-Detail "scoped runtime cleanup terminated $(@($cleanup.TerminatedPids).Count) exact process-tree members" }
 }
 
 function Wait-ForHumanClientExit {
@@ -1866,7 +2150,7 @@ function Invoke-SuperviseInteractiveUatMode {
     }
     catch {
         $failure = Get-SanitizedFailure -Message $_.Exception.Message
-        if ($onlineRuntime -and -not $onlineRuntime.Process.HasExited) { Stop-RuntimeAfterFailure -Runtime $onlineRuntime -ClientInfo $onlineClient }
+        if ($onlineRuntime -and $onlineRuntime.LifecycleState -eq 'RUNNING') { Stop-RuntimeAfterFailure -Runtime $onlineRuntime -ClientInfo $onlineClient }
         $isolationRecord = $script:LastIsolationRecord
     }
     finally {
@@ -2163,8 +2447,33 @@ function Invoke-SelfCheckMode {
         if (-not (Test-Path -LiteralPath (Join-Path $script:RepositoryRoot ($relative -replace '/', '\')))) { Throw-Failure "Self-check required local path missing: $relative" }
     }
     $source = Get-Content -LiteralPath $PSCommandPath -Raw
-    foreach ($token in @('GetFinalPathNameByHandle',"'worktree','list','--porcelain','-z'", "'worktree','remove','--force','--'",'New-NetFirewallRule','Remove-NetFirewallRule','member_count_active','member_count_after','ONLINE_READY','ISOLATED_READY','receipt_payload_sha256','finally','Copy-FileAtomically','Assert-ReceiptContract')) {
+    foreach ($token in @('GetFinalPathNameByHandle',"'worktree','list','--porcelain','-z'", "'worktree','remove','--force','--'",'New-NetFirewallRule','Remove-NetFirewallRule','member_count_active','member_count_after','ONLINE_READY','ISOLATED_READY','receipt_payload_sha256','finally','Copy-FileAtomically','Assert-ReceiptContract','DEVELOPERS_HELL_SERVER_FIRST_TICK_READY','Get-ValidatedGradleRuntimeProcessTree','RootStartTimeUtcTicks',"'/PID'", "'/T'", "'/F'",'Stopping server','All dimensions are saved')) {
         if ($source -notmatch [regex]::Escape($token)) { Throw-Failure "Self-check harness contract token missing: $token" }
+    }
+    $serverSession = [regex]::Match($source, '(?s)function Invoke-ServerSession\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Invoke-RunServerSmokeMode')
+    if (-not $serverSession.Success) { Throw-Failure 'Self-check could not isolate the production-server session implementation' }
+    $serverSessionBody = $serverSession.Groups['body'].Value
+    foreach ($serverToken in @('foundation initialized','Done \([^)]+\)! For help','$script:ServerFirstTickMarker','An unexpected error occurred while trying to execute that command','LastIndexOf(''Stopping server''','IndexOf(''All dimensions are saved'', $stoppingIndex')) {
+        if ($serverSessionBody -notmatch [regex]::Escape($serverToken)) { Throw-Failure "Server-session lifecycle contract token missing: $serverToken" }
+    }
+    $stdinSequence = [regex]::Match($serverSessionBody, '(?s)StandardInput\.WriteLine\(''stop''\).*?StandardInput\.Flush\(\)(?<between>.*?)Complete-GradleRuntime')
+    if (-not $stdinSequence.Success) { Throw-Failure 'Server stop command is not flushed before bounded completion' }
+    if ($stdinSequence.Groups['between'].Value -match 'StandardInput\.Close\(') { Throw-Failure 'Server stdin closes before Gradle/root completion owns teardown' }
+    $cleanupFunction = [regex]::Match($source, '(?s)function Stop-ValidatedGradleRuntimeTree\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Complete-GradleRuntime')
+    if (-not $cleanupFunction.Success) { Throw-Failure 'Self-check could not isolate scoped process-tree cleanup' }
+    foreach ($cleanupToken in @('Get-ValidatedGradleRuntimeProcessTree','Assert-CapturedRuntimeProcessIdentity','taskkill.exe',"@('/PID',[string]`$Runtime.RootProcessId,'/T','/F')",'Wait-CapturedRuntimeProcessesGone','StdOutTask.Wait','StdErrTask.Wait')) {
+        if ($cleanupFunction.Groups['body'].Value -notmatch [regex]::Escape($cleanupToken)) { Throw-Failure "Scoped cleanup contract token missing: $cleanupToken" }
+    }
+    if ($cleanupFunction.Groups['body'].Value -match '\.Process\.Kill\(') { Throw-Failure 'Scoped cleanup kills only the wrapper and can strand descendants' }
+    if ($source -match '(?i)(Stop-Process\s+-Name\s+java|Get-Process\s+(?:-Name\s+)?java)') { Throw-Failure 'Broad Java process cleanup pattern found' }
+    $initializerPath = Join-Path $script:RepositoryRoot 'src\main\java\dev\developershell\DevelopersHell.java'
+    $initializerSource = Get-Content -LiteralPath $initializerPath -Raw
+    foreach ($initializerToken in @('ServerTickEvents.END_SERVER_TICK.register','server.getTickCount() == 1','DEVELOPERS_HELL_SERVER_FIRST_TICK_READY')) {
+        if ($initializerSource -notmatch [regex]::Escape($initializerToken)) { Throw-Failure "First-tick initializer contract token missing: $initializerToken" }
+    }
+    $startFunction = [regex]::Match($source, '(?s)function Start-GradleRuntime\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Get-LiveProcessStartTimeUtcTicks')
+    if (-not $startFunction.Success -or $startFunction.Groups['body'].Value -notmatch [regex]::Escape('Assert-ScopedProcessInspectionAvailable')) {
+        Throw-Failure 'Runtime start no longer fails before launch when scoped CIM inspection is unavailable'
     }
     if ([regex]::Matches($source, '(?m)^\s*\[void\]\(New-NetFirewallRule\b').Count -ne 2) { Throw-Failure 'Firewall primitive must contain exactly two rule creations' }
     if ($source -match '(?i)Get-NetFirewallRule\s*\|\s*Remove-NetFirewallRule|Remove-NetFirewallRule\s+-Group') { Throw-Failure 'Broad firewall cleanup pattern found' }
