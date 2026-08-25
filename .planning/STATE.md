@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 01
 current_phase_name: Java 25 and Fabric 26.2 Foundation
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-08-25T19:56:00.464Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-08-25T20:14:39.235Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 01 execution started
-state_head: 2b3bba70902b27884ad039ac84a2049ed1729524
+state_head: 9f76fe58d839e29fcb5c0bdc5a584cfe54d10016
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 ## Current Position
 
 Phase: 01 (Java 25 and Fabric 26.2 Foundation) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 01 execution started
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 17 min | 2 tasks | 14 files |
+| Phase 01 P02 | 9 min | 1 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Use the exact Fabric 26.2 tuple: Temurin 25.0.4+7, Loader 0.19.3, Fabric API 0.158.0+26.2, Loom 1.17.19, and Gradle 9.5.1.
 - [Phase 01]: Keep common and client entrypoints physically split, with the client initializer intentionally behavior-free until client systems are introduced.
 - [Phase 01]: Ship the Foundation Token as an unconditional built-in registry item backed only by bundled metadata and vanilla paper visuals.
+- [Phase 01]: Stable item registration remains unconditional and independent of ModuleGate; toggles select behavior only. — Preserves registered identity across configuration changes so existing saves remain loadable.
+- [Phase 01]: Freeze eight explicit snake-case serialized module names behind one defensive-copy immutable gate. — Keeps public configuration keys deliberate while preventing callers from mutating enabled state.
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-25T19:56:00.453Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-08-25T20:14:39.222Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
