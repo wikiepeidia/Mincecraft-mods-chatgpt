@@ -22,3 +22,52 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Gradle and generated build output
+.gradle/
+build/
+**/build/
+out/
+classes/
+dist/
+.work/
+
+# Minecraft development and production profiles
+run/
+run/production-client/
+run/production-client/saves/
+run/production-client/world/
+run/production-client/logs/
+run/production-server/
+run/production-server/world/
+run/production-server/world_nether/
+run/production-server/world_the_end/
+run/production-server/eula.txt
+run/production-server/logs/
+logs/
+
+# IDE and editor state
+.idea/
+*.iml
+.settings/
+.vscode/
+bin/
+
+# JVM diagnostics and recordings
+hs_err_*.log
+replay_*.log
+*.hprof
+*.jfr
+*.jmc
+recordings/
+
+# Machine-local Java and Gradle settings
+.jdk/
+jdk/
+.java-version
+local.properties
+gradle-local.properties
+gradle.properties.local
+
+# The Gradle wrapper JAR is a required, reviewed source input.
+!gradle/wrapper/gradle-wrapper.jar
