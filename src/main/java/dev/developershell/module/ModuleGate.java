@@ -17,7 +17,7 @@ public final class ModuleGate {
 	}
 
 	public static ModuleGate allDisabled() {
-		return allEnabled();
+		return new ModuleGate(EnumSet.noneOf(ModuleId.class));
 	}
 
 	public static ModuleGate of(Set<ModuleId> enabledModules) {
