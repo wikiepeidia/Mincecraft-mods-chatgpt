@@ -411,7 +411,7 @@ function Write-JsonAtomic {
     $temporary = Join-Path $parent ('.' + (Split-Path -Leaf $target) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
     try {
         [IO.File]::WriteAllText($temporary, (($Value | ConvertTo-Json -Depth 20) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-        if (Test-Path -LiteralPath $target -PathType Leaf) { [IO.File]::Replace($temporary, $target, $null, $true) }
+        if (Test-Path -LiteralPath $target -PathType Leaf) { [IO.File]::Replace($temporary, $target, [System.Management.Automation.Language.NullString]::Value, $true) }
         else { [IO.File]::Move($temporary, $target) }
     }
     finally {
@@ -626,7 +626,7 @@ function Set-EvidenceMarkers {
     $temporary = Join-Path $parent ('.foundation-evidence-' + [guid]::NewGuid().ToString('N') + '.tmp')
     try {
         [IO.File]::WriteAllText($temporary, $text.TrimEnd() + "`r`n", [Text.UTF8Encoding]::new($false))
-        if (Test-Path -LiteralPath $target -PathType Leaf) { [IO.File]::Replace($temporary, $target, $null, $true) }
+        if (Test-Path -LiteralPath $target -PathType Leaf) { [IO.File]::Replace($temporary, $target, [System.Management.Automation.Language.NullString]::Value, $true) }
         else { [IO.File]::Move($temporary, $target) }
     }
     finally {
@@ -836,7 +836,7 @@ function Copy-FileAtomically {
     try {
         [IO.File]::Copy($Source, $temporary, $false)
         Assert-Equal (Get-Sha256 $temporary) (Get-Sha256 $Source) 'Atomic copy staging SHA-256'
-        if (Test-Path -LiteralPath $Destination -PathType Leaf) { [IO.File]::Replace($temporary, $Destination, $null, $true) }
+        if (Test-Path -LiteralPath $Destination -PathType Leaf) { [IO.File]::Replace($temporary, $Destination, [System.Management.Automation.Language.NullString]::Value, $true) }
         else { [IO.File]::Move($temporary, $Destination) }
     }
     finally {
