@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 01
 current_phase_name: Java 25 and Fabric 26.2 Foundation
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-08-25T20:14:39.235Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-08-25T20:49:14.386Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 01 execution started
-state_head: 9f76fe58d839e29fcb5c0bdc5a584cfe54d10016
+state_head: 8e8729625704e49e97841c82717e853349a52466
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 ## Current Position
 
 Phase: 01 (Java 25 and Fabric 26.2 Foundation) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 01 execution started
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 01 P01 | 17 min | 2 tasks | 14 files |
 | Phase 01 P02 | 9 min | 1 tasks | 8 files |
+| Phase 01 P03 | 29 min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Ship the Foundation Token as an unconditional built-in registry item backed only by bundled metadata and vanilla paper visuals.
 - [Phase 01]: Stable item registration remains unconditional and independent of ModuleGate; toggles select behavior only. — Preserves registered identity across configuration changes so existing saves remain loadable.
 - [Phase 01]: Freeze eight explicit snake-case serialized module names behind one defensive-copy immutable gate. — Keeps public configuration keys deliberate while preventing callers from mutating enabled state.
+- [Phase 01]: Wrapper build owns the fail-first live registry GameTest; compilation or discovery alone is not proof.
+- [Phase 01]: Production tasks use the ordinary JAR, exact Fabric API, exact Java 25, and isolated profiles without remapJar.
+- [Phase 01]: Direct declarations are audited separately from fixed Loom injections and report-only transitives.
+- [Phase 01]: Plan 04 executes the committed hash-bound verification harness unchanged.
 
 ### Pending Todos
 
@@ -96,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-25T20:14:39.222Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-08-25T20:49:14.373Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

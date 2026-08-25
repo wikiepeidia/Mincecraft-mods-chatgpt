@@ -33,7 +33,7 @@ Developer's Hell moves through six runnable MVP boundaries: first prove the exac
   3. The same distribution bytes reach a playable client world and ready/clean-stop dedicated-server state without client-only classloading failures, with pre/post hashes and zero residual firewall group members proven.
   4. A world remains loadable when module toggles change because every stable content and payload ID is registered independently of enabled behavior.
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -46,7 +46,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — Add probe-bound non-shipping GameTest, production/audit tasks, and commit the clean-checkout/distribution/two-rule interactive harness.
+- [x] 01-03-PLAN.md — Add probe-bound non-shipping GameTest, production/audit tasks, and commit the clean-checkout/distribution/two-rule interactive harness.
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -142,7 +142,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Java 25 and Fabric 26.2 Foundation | 2/4 | In Progress|  |
+| 1. Java 25 and Fabric 26.2 Foundation | 3/4 | In Progress|  |
 | 2. Persistent Lecture Vertical Slice | 0/TBD | Not started | - |
 | 3. Contract-to-Diploma Boss Campaign | 0/TBD | Not started | - |
 | 4. Developer-Tool Sandbox Loops | 0/TBD | Not started | - |

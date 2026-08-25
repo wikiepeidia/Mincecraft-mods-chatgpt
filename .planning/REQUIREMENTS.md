@@ -10,7 +10,7 @@
 - [ ] **FND-01**: A player can install one Developer's Hell JAR with the documented Fabric 26.2 prerequisites and enter a world while the machine is offline.
 - [ ] **FND-02**: A contributor can build the production JAR from a fresh checkout through the committed Gradle wrapper and a frozen Java 25/Fabric 26.2 dependency tuple.
 - [ ] **FND-03**: The production mod can launch both a client world and a dedicated server without client-only classloading failures.
-- [ ] **FND-04**: All stable items, entities, effects, payloads, and other content IDs remain registered regardless of module-toggle values so existing saves remain loadable.
+- [x] **FND-04**: All stable items, entities, effects, payloads, and other content IDs remain registered regardless of module-toggle values so existing saves remain loadable.
 - [ ] **FND-05**: The mod validates configuration at startup, reports actionable errors, and defaults destructive or scheduled chaos to opt-in behavior.
 - [ ] **FND-06**: Versioned campaign, encounter, reward, and module state survives save, quit, reload, death, and chunk unload without duplication or regression.
 - [ ] **FND-07**: Automated unit tests and Fabric GameTests cover state transitions, bounds, persistence, and at least one real encounter lifecycle before release.
@@ -148,7 +148,7 @@
 | FND-01 | Phase 1 | Pending |
 | FND-02 | Phase 1 | Pending |
 | FND-03 | Phase 1 | Pending |
-| FND-04 | Phase 1 | Pending |
+| FND-04 | Phase 1 | Complete |
 | FND-05 | Phase 2 | Pending |
 | FND-06 | Phase 2 | Pending |
 | FND-07 | Phase 2 | Pending |
@@ -197,6 +197,7 @@
 | REL-05 | Phase 6 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 50 total
 - Mapped to phases: 50
 - Unmapped: 0 ✓
