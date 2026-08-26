@@ -5,6 +5,7 @@ import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.AttendanceSheetItem;
+import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.registry.ModItems;
 import java.util.Objects;
 import java.util.Optional;
@@ -16,6 +17,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
@@ -28,6 +30,7 @@ import net.minecraft.world.level.Level;
  */
 public final class RewardService {
 	private static final String VICTORY_KEY = "message.developers_hell.reward.victory";
+	private static final String REMOTE_READY_KEY = "message.developers_hell.remote.ready";
 	private static boolean sheetLifecycleRegistered;
 
 	/**
@@ -163,6 +166,98 @@ public final class RewardService {
 		};
 	}
 
+	/**
+	 * Rebuilds Minecraft's transient cooldown projection from the durable logical-server deadline.
+	 * One native cooldown group covers every matching Remote stack without duplicate packets.
+	 *
+	 * @return the clamped native duration applied, or {@code 0} when no projection is required
+	 */
+	public static int restoreRemoteCooldown(ServerPlayer owner) {
+		Objects.requireNonNull(owner, "owner");
+		ServerLevel level = owner.level();
+		if (!level.getServer().isSameThread()) {
+			return 0;
+		}
+		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, owner.getUUID());
+		Optional<ItemStack> remote = firstRemoteStack(owner);
+		if (stateView.isEmpty() || !stateView.get().remoteIssued() || remote.isEmpty()) {
+			return 0;
+		}
+		int remainingTicks = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
+				stateView.get().remoteCooldownUntilGameTime(),
+				level.getGameTime()
+		);
+		if (remainingTicks <= 0) {
+			return 0;
+		}
+		owner.getCooldowns().addCooldown(remote.get(), remainingTicks);
+		return remainingTicks;
+	}
+
+	/**
+	 * Commits and presents one Remote-ready edge only when item presence and action-bar priority
+	 * permit it. The reducer's exact deadline marker makes repeated ticks replay-safe.
+	 */
+	public static boolean reconcileRemoteReady(
+			ServerPlayer owner,
+			boolean criticalActionBarActive
+	) {
+		Objects.requireNonNull(owner, "owner");
+		ServerLevel level = owner.level();
+		if (!level.getServer().isSameThread()) {
+			return false;
+		}
+		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, owner.getUUID());
+		if (stateView.isEmpty()) {
+			return false;
+		}
+		PlayerCampaignState state = stateView.get();
+		long observedGameTime = level.getGameTime();
+		if (!InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(
+				state.remoteCooldownUntilGameTime(),
+				state.remoteReadyNoticeForDeadlineGameTime(),
+				observedGameTime
+		)) {
+			return false;
+		}
+		if (readyCueDecision(firstRemoteStack(owner).isPresent(), criticalActionBarActive)
+				!= ReadyCueDecision.PRESENT) {
+			return false;
+		}
+
+		long deadlineGameTime = state.remoteCooldownUntilGameTime();
+		boolean[] presented = {false};
+		CampaignTransition transition = CampaignService.apply(
+				level,
+				new CampaignEvent.RemoteReadyNotice(
+						owner.getUUID(),
+						deadlineGameTime,
+						observedGameTime
+				),
+				intent -> {
+					if (intent instanceof CampaignTransition.EffectIntent.NotifyRemoteReady ready
+							&& ready.ownerUuid().equals(owner.getUUID())
+							&& ready.deadlineGameTime() == deadlineGameTime) {
+						owner.sendOverlayMessage(Component.translatable(REMOTE_READY_KEY));
+						owner.playSound(SoundEvents.EXPERIENCE_ORB_PICKUP, 0.65F, 1.35F);
+						presented[0] = true;
+					}
+				}
+		);
+		return transition.accepted() && presented[0];
+	}
+
+	/** Pure arbitration used by unit tests and the server-owned ready projection. */
+	public static ReadyCueDecision readyCueDecision(
+			boolean remotePresent,
+			boolean criticalActionBarActive
+	) {
+		if (!remotePresent) {
+			return ReadyCueDecision.ITEM_ABSENT;
+		}
+		return criticalActionBarActive ? ReadyCueDecision.DEFERRED : ReadyCueDecision.PRESENT;
+	}
+
 	/** Rejects stale disk copies and restores owner targeting when a current Sheet entity loads. */
 	public static synchronized void registerSheetLifecycle() {
 		if (sheetLifecycleRegistered) {
@@ -277,6 +372,16 @@ public final class RewardService {
 		return false;
 	}
 
+	private static Optional<ItemStack> firstRemoteStack(ServerPlayer owner) {
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = owner.getInventory().getItem(slot);
+			if (!stack.isEmpty() && stack.getItem() == ModItems.INFINITE_SLIDES_REMOTE) {
+				return Optional.of(stack);
+			}
+		}
+		return Optional.empty();
+	}
+
 	private static boolean allowSheetLoad(
 			Entity entity,
 			ServerLevel level,
@@ -319,6 +424,12 @@ public final class RewardService {
 		SHEET_RECOVERED,
 		SHEET_FALLBACK_RECOVERED,
 		MATERIALIZATION_FAILED
+	}
+
+	public enum ReadyCueDecision {
+		ITEM_ABSENT,
+		DEFERRED,
+		PRESENT
 	}
 
 	private enum Projection {

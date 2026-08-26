@@ -8,6 +8,7 @@ import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureGeometry;
 import dev.developershell.lecture.LectureStateMachine;
+import dev.developershell.lecture.RewardService;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItemIds;
 import dev.developershell.registry.ModItems;
@@ -20,7 +21,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
-import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
@@ -28,7 +28,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
-import net.minecraft.network.PacketFlow;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.server.MinecraftServer;
@@ -153,7 +153,10 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			clearArena(level, desk, FACING);
 		});
 		context.runAfterDelay(40L, () -> {
-			RecordingServerPlayer respawned = detachedPlayer(level, ownerUuid, "remote-respawn");
+			close(connection);
+			ConnectedPlayer respawnConnection = createSurvivalPlayer(
+					context, ownerUuid, "remote-respawn");
+			RecordingServerPlayer respawned = respawnConnection.player();
 			respawned.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
 			respawned.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
 			ServerLivingEntityEvents.AFTER_DEATH.invoker().afterDeath(owner, owner.damageSources().generic());
@@ -163,106 +166,103 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			context.assertTrue(respawnRemainder > 0 && respawnRemainder < InfiniteSlidesRemoteItem.COOLDOWN_TICKS,
 					"server ticks, not wall time, reduce the respawn remainder");
 			context.assertValueEqual(respawned.trackingCooldowns().startedDurations(),
-					List.of(respawnRemainder, respawnRemainder),
-					"respawn restores the clamped remainder to every matching stack");
+					List.of(respawnRemainder),
+					"respawn starts one cooldown-group projection without duplicate packets");
+			context.assertTrue(
+					respawned.getCooldowns().isOnCooldown(respawned.getItemInHand(InteractionHand.MAIN_HAND))
+							&& respawned.getCooldowns().isOnCooldown(
+									respawned.getItemInHand(InteractionHand.OFF_HAND)),
+					"the one native cooldown group covers every matching respawn stack"
+			);
 			context.assertTrue(respawned.recordedOverlayKeys().isEmpty(),
 					"respawn restoration emits no repeated chat or action-bar line");
 
-			RecordingServerPlayer rejoined = detachedPlayer(level, ownerUuid, "remote-rejoin");
+			close(respawnConnection);
+			ConnectedPlayer rejoinConnection = createSurvivalPlayer(context, ownerUuid, "remote-rejoin");
+			RecordingServerPlayer rejoined = rejoinConnection.player();
 			rejoined.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
 			rejoined.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
 			ServerPlayerEvents.JOIN.invoker().onJoin(rejoined);
 			int joinRemainder = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
 					deadline, level.getGameTime());
 			context.assertValueEqual(rejoined.trackingCooldowns().startedDurations(),
-					List.of(joinRemainder, joinRemainder),
-					"save/join normalization rebuilds every overlay from the same persisted deadline");
+					List.of(joinRemainder),
+					"save/join normalization rebuilds one native cooldown group from the persisted deadline");
+			context.assertTrue(
+					rejoined.getCooldowns().isOnCooldown(rejoined.getItemInHand(InteractionHand.MAIN_HAND))
+							&& rejoined.getCooldowns().isOnCooldown(
+									rejoined.getItemInHand(InteractionHand.OFF_HAND)),
+					"the joined player's matching stacks share the restored native overlay"
+			);
 			context.assertTrue(rejoined.recordedOverlayKeys().isEmpty()
 					&& rejoined.recordedSystemKeys().isEmpty(),
 					"join restoration stays silent");
 			context.assertValueEqual(state(level, ownerUuid), coolingDown,
 					"death, respawn, and join preserve the durable deadline and ready marker");
+			close(rejoinConnection);
 			context.succeed();
 		});
 	}
 
-	@GameTest(maxTicks = 180, padding = 24)
+	@GameTest(maxTicks = 460, padding = 24)
 	public void readyEdgeWaitsForPresentRemoteAndCriticalInstructionThenEmitsOnce(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(RELATIVE_DESK);
 		UUID ownerUuid = invocationOwnerUuid(owner(1803), desk, level.getGameTime());
-		ConnectedPlayer connection = null;
-		UUID criticalEncounter = invocationOwnerUuid(owner(1893), desk, level.getGameTime());
-		try {
-			buildArena(level, desk, FACING);
-			connection = createSurvivalPlayer(context, ownerUuid, "remote-ready");
-			RecordingServerPlayer owner = connection.player();
-			completeRealEncounter(context, owner, desk, FACING);
-			ItemStack remote = moveRemoteToHand(context, owner);
-			owner.clearFeedback();
-			context.assertValueEqual(useRemote(level, owner), InteractionResult.SUCCESS_SERVER,
-					"ready fixture starts through ordinary production use");
-			long deadline = state(level, ownerUuid).remoteCooldownUntilGameTime();
-			owner.getCooldowns().removeCooldown(owner.getCooldowns().getCooldownGroup(remote));
+		buildArena(level, desk, FACING);
+		ConnectedPlayer connection = createSurvivalPlayer(context, ownerUuid, "remote-ready");
+		RecordingServerPlayer owner = connection.player();
+		completeRealEncounter(context, owner, desk, FACING);
+		moveRemoteToHand(context, owner);
+		owner.clearFeedback();
+		context.assertValueEqual(useRemote(level, owner), InteractionResult.SUCCESS_SERVER,
+				"ready fixture starts through ordinary production use");
+		long deadline = state(level, ownerUuid).remoteCooldownUntilGameTime();
+		owner.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		owner.clearFeedback();
 
-			owner.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
-			owner.clearFeedback();
-			context.assertValueEqual(
-					LectureEncounterManager.tickRemoteReady(level.getServer(), deadline), 0,
-					"an absent Remote keeps the ready edge silent and pending"
-			);
+		context.runBeforeTestEnd(() -> {
+			close(connection);
+			clearArena(level, desk, FACING);
+		});
+		context.runAfterDelay(405L, () -> {
+			context.assertTrue(level.getGameTime() >= deadline,
+					"the production logical-server clock reaches the saved deadline");
 			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), 0L,
-					"item absence does not consume the persisted ready edge");
+					"an absent Remote keeps the elapsed ready edge pending");
+			context.assertTrue(owner.recordedOverlayKeys().isEmpty() && owner.readySounds() == 0,
+					"item absence emits no ambient feedback");
 
 			owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
-			UUID criticalProfessor = invocationOwnerUuid(owner(1894), desk, level.getGameTime());
-			context.assertTrue(LectureEncounterManager.start(
-					level,
-					owner,
-					new CriticalRuntimeProgress(
-							ownerUuid, desk, FACING, desk.relative(FACING.getOpposite(), 2),
-							criticalEncounter, criticalProfessor
-					)
-			), "the priority fixture starts one real manager presentation");
-			context.assertTrue(LectureEncounterManager.hasCriticalActionInstruction(owner),
-					"the live Slide Deck instruction reserves the owner action bar");
-			owner.clearFeedback();
-			context.assertValueEqual(
-					LectureEncounterManager.tickRemoteReady(level.getServer(), deadline), 0,
-					"a critical boss instruction defers the ready cue"
-			);
+			context.assertFalse(RewardService.reconcileRemoteReady(owner, true),
+					"critical action-bar priority defers the elapsed ready edge");
 			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), 0L,
-					"boss deferral leaves the deadline edge unconsumed");
+					"critical deferral leaves the exact deadline edge unconsumed");
 			context.assertTrue(owner.recordedOverlayKeys().isEmpty() && owner.readySounds() == 0,
-					"boss deferral cannot overwrite the critical action bar or play its cue");
-
-			LectureEncounterManager.cleanup(criticalEncounter);
-			context.assertFalse(LectureEncounterManager.hasCriticalActionInstruction(owner),
-					"cleanup releases the action-bar priority reservation");
-			context.assertValueEqual(
-					LectureEncounterManager.tickRemoteReady(level.getServer(), deadline), 1,
-					"the deferred ready edge emits after the critical instruction ends"
-			);
+					"critical deferral cannot overwrite the action bar or play its cue");
+			owner.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		});
+		context.runAfterDelay(408L, () -> {
+			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), 0L,
+					"an absent Remote keeps the deferred deadline edge pending across production ticks");
+			context.assertTrue(owner.recordedOverlayKeys().isEmpty() && owner.readySounds() == 0,
+					"the deferred edge stays silent until presentation is safe and possible");
+			owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+		});
+		context.runAfterDelay(412L, () -> {
 			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), deadline,
-					"ready identity is persisted for the exact cooldown deadline");
+					"the next production tick persists the exact deferred edge");
 			context.assertValueEqual(owner.recordedOverlayKeys(), List.of(READY_KEY),
 					"the owner sees one localized ready line");
 			context.assertValueEqual(owner.readySounds(), 1, "the owner hears one short ready cue");
-
-			context.assertValueEqual(
-					LectureEncounterManager.tickRemoteReady(level.getServer(), deadline + 1L), 0,
-					"later ticks cannot replay the persisted edge"
-			);
+		});
+		context.runAfterDelay(416L, () -> {
 			context.assertValueEqual(owner.recordedOverlayKeys(), List.of(READY_KEY),
-					"the ready line never becomes per-tick spam");
-			context.assertValueEqual(owner.readySounds(), 1, "the ready sound never becomes per-tick spam");
+					"later production ticks cannot replay the persisted edge");
+			context.assertValueEqual(owner.readySounds(), 1,
+					"the ready sound never becomes per-tick spam");
 			context.succeed();
-		}
-		finally {
-			LectureEncounterManager.cleanup(criticalEncounter);
-			close(connection);
-			clearArena(level, desk, FACING);
-		}
+		});
 	}
 
 	private static void completeRealEncounter(
@@ -277,6 +277,8 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 		context.assertTrue(contract.isEmpty(), "accepted Contract is consumed after durable start");
 		PlayerCampaignState active = state(owner.level(), owner.getUUID());
 		UUID encounterUuid = active.encounterUuid();
+		context.assertTrue(LectureEncounterManager.hasCriticalActionInstruction(owner),
+				"the real ACTIVE encounter reserves its critical owner action bar");
 		ModEntities.ProfessorEntity professor = LectureEncounterManager.professor(encounterUuid)
 				.orElseThrow(() -> context.assertionException("missing Remote-path Professor"));
 
@@ -335,7 +337,8 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 	}
 
 	private static InteractionResult useRemote(ServerLevel level, ServerPlayer owner) {
-		return UseItemCallback.EVENT.invoker().interact(owner, level, InteractionHand.MAIN_HAND);
+		ItemStack stack = owner.getItemInHand(InteractionHand.MAIN_HAND);
+		return owner.gameMode.useItem(owner, level, stack, InteractionHand.MAIN_HAND);
 	}
 
 	private static PlayerCampaignState state(ServerLevel level, UUID ownerUuid) {
@@ -411,15 +414,6 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			cleanup.run();
 			throw failure;
 		}
-	}
-
-	private static RecordingServerPlayer detachedPlayer(ServerLevel level, UUID uuid, String name) {
-		GameProfile profile = new GameProfile(uuid, name);
-		CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
-		RecordingServerPlayer player = new RecordingServerPlayer(
-				level.getServer(), level, cookie.gameProfile(), cookie.clientInformation());
-		player.setGameMode(GameType.SURVIVAL);
-		return player;
 	}
 
 	private static void buildArena(ServerLevel level, BlockPos desk, Direction facing) {
@@ -556,35 +550,6 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 		@Override
 		public void close() {
 			cleanup.run();
-		}
-	}
-
-	private record CriticalRuntimeProgress(
-			UUID ownerUuid,
-			BlockPos deskPos,
-			Direction deskFacing,
-			BlockPos retryPos,
-			UUID encounterUuid,
-			UUID professorUuid
-	) implements CampaignSavedData.PlayerProgress {
-		@Override
-		public PlayerCampaignState.LectureStatus status() {
-			return PlayerCampaignState.LectureStatus.ACTIVE;
-		}
-
-		@Override
-		public int attemptCount() {
-			return 2;
-		}
-
-		@Override
-		public boolean sheetEntitled() {
-			return true;
-		}
-
-		@Override
-		public boolean remoteIssued() {
-			return true;
 		}
 	}
 

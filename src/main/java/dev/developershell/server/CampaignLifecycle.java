@@ -6,6 +6,7 @@ import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.entity.ProfessorInfiniteSlidesEntity;
 import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.lecture.RewardService;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,8 +49,10 @@ public final class CampaignLifecycle {
 				onPlayerTerminal(player, CampaignEvent.TerminalReason.DEATH);
 			}
 		});
-		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
-				onPlayerTerminal(newPlayer, CampaignEvent.TerminalReason.DEATH));
+		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
+			onPlayerTerminal(newPlayer, CampaignEvent.TerminalReason.DEATH);
+			RewardService.restoreRemoteCooldown(newPlayer);
+		});
 		ServerPlayerEvents.JOIN.register(CampaignLifecycle::onJoin);
 		ServerPlayerEvents.LEAVE.register(player ->
 				onPlayerTerminal(player, CampaignEvent.TerminalReason.DISCONNECT));
@@ -115,9 +118,11 @@ public final class CampaignLifecycle {
 					new CampaignEvent.NormalizeReload(player.getUUID(), encounter.encounterUuid()),
 					player
 			);
-			return;
 		}
-		current.deliverPendingReloadNotice(player);
+		else {
+			current.deliverPendingReloadNotice(player);
+		}
+		RewardService.restoreRemoteCooldown(player);
 	}
 
 	private static boolean onPlayerTerminal(ServerPlayer player, CampaignEvent.TerminalReason reason) {

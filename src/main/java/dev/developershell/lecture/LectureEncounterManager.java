@@ -124,6 +124,9 @@ public final class LectureEncounterManager {
 				tickRuntime(server, runtime, runtime.level.getGameTime());
 			}
 		}
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			RewardService.reconcileRemoteReady(player, hasCriticalActionInstruction(player));
+		}
 	}
 
 	/** Deterministic per-encounter clock seam; production uses each level's game time. */
@@ -211,6 +214,16 @@ public final class LectureEncounterManager {
 	public static synchronized Optional<ServerPlayer> participant(UUID encounterUuid) {
 		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
 		return runtime == null ? Optional.empty() : Optional.of(runtime.owner);
+	}
+
+	/** Any live owner encounter reserves the action bar for its current critical instruction. */
+	public static synchronized boolean hasCriticalActionInstruction(ServerPlayer player) {
+		java.util.Objects.requireNonNull(player, "player");
+		return RUNTIMES.values().stream().anyMatch(runtime ->
+				!runtime.closed
+						&& runtime.level == player.level()
+						&& runtime.owner == player
+		);
 	}
 
 	public static synchronized Optional<RuntimeSnapshot> runtimeSnapshot(UUID encounterUuid) {
