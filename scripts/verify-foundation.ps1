@@ -2026,37 +2026,54 @@ function Wait-ForRuntimeLog {
 
 function Get-ClientProcessInfo {
     param(
-        [Parameter(Mandatory)][int] $RootProcessId,
-        [Parameter(Mandatory)] $Jdk
+        [Parameter(Mandatory)] $Runtime,
+        [Parameter(Mandatory)] $Jdk,
+        [scriptblock] $ValidatedRuntimeTreeProvider
     )
-    if (-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) { Throw-Failure 'CIM process inspection is unavailable' }
-    $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
-    $descendantIds = [System.Collections.Generic.HashSet[int]]::new()
-    [void]$descendantIds.Add($RootProcessId)
-    $changed = $true
-    while ($changed) {
-        $changed = $false
-        foreach ($row in $rows) {
-            if ($descendantIds.Contains([int]$row.ParentProcessId) -and -not $descendantIds.Contains([int]$row.ProcessId)) {
-                [void]$descendantIds.Add([int]$row.ProcessId)
-                $changed = $true
-            }
+    if (-not $ValidatedRuntimeTreeProvider) {
+        $ValidatedRuntimeTreeProvider = {
+            param($OwnedRuntime)
+            @(Get-ValidatedGradleRuntimeProcessTree -Runtime $OwnedRuntime)
         }
     }
-    $candidates = @($rows | Where-Object {
-        $descendantIds.Contains([int]$_.ProcessId) -and
-        [int]$_.ProcessId -ne $RootProcessId -and
-        [string]$_.CommandLine -match '(?i)(KnotClient|net\.minecraft\.client\.main\.Main)' -and
-        -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)
+    $snapshot = @(& $ValidatedRuntimeTreeProvider $Runtime)
+    $candidates = @($snapshot | Where-Object {
+        [int]$_.Pid -ne [int]$Runtime.RootProcessId -and
+        [string]$_.CommandClass -ceq 'ClientLauncher'
     })
     if ($candidates.Count -eq 0) { return $null }
     if ($candidates.Count -ne 1) { Throw-Failure "Expected one production Minecraft client process, observed $($candidates.Count)" }
-    $executable = Resolve-CanonicalPath -LiteralPath ([string]$candidates[0].ExecutablePath)
+    $candidate = $candidates[0]
+    $executable = Resolve-CanonicalPath -LiteralPath ([string]$candidate.Executable)
     $validExecutables = @((Resolve-CanonicalPath $Jdk.Java),(Resolve-CanonicalPath $Jdk.Javaw))
     if (-not @($validExecutables | Where-Object { $_.Equals($executable,[StringComparison]::OrdinalIgnoreCase) }).Count) {
         Throw-Failure 'Production Minecraft client executable is outside the exact verified JDK'
     }
-    return [pscustomobject]@{ Pid = [int]$candidates[0].ProcessId; Executable = $executable; CommandLine = [string]$candidates[0].CommandLine }
+    Assert-Equal (Get-GradleJavaCommandClass -CommandLine ([string]$candidate.CommandLine) -TaskName runProductionClient) 'ClientLauncher' 'Production Minecraft client command identity'
+    return [pscustomobject]@{
+        Pid = [int]$candidate.Pid
+        StartTimeUtcTicks = [long]$candidate.StartTimeUtcTicks
+        Executable = $executable
+        CommandLine = [string]$candidate.CommandLine
+    }
+}
+
+function Assert-ClientInfoOwnedByRuntimeSnapshot {
+    param(
+        [Parameter(Mandatory)] $Runtime,
+        [Parameter(Mandatory)] $ClientInfo
+    )
+    $matches = @($Runtime.ProcessTreeSnapshot | Where-Object {
+        [int]$_.Pid -eq [int]$ClientInfo.Pid -and
+        [long]$_.StartTimeUtcTicks -eq [long]$ClientInfo.StartTimeUtcTicks -and
+        [string]$_.CommandClass -ceq 'ClientLauncher' -and
+        [string]$_.Executable -ceq [string]$ClientInfo.Executable -and
+        [string]$_.CommandLine -ceq [string]$ClientInfo.CommandLine
+    })
+    if ($matches.Count -ne 1) {
+        Throw-Failure 'Production Minecraft client candidate is outside the final validated owned runtime snapshot'
+    }
+    return $ClientInfo
 }
 
 function Invoke-ServerSession {
@@ -2174,14 +2191,14 @@ function Wait-ForClientReady {
     if ($hasControlPath -ne $hasSessionId) { Throw-Failure 'Client readiness requires both interactive control path and expected session ID, or neither' }
     $candidate = [pscustomobject]@{ Value = $null }
     $detectClient = {
-        $candidate.Value = Get-ClientProcessInfo -RootProcessId $Runtime.Process.Id -Jdk $Jdk
+        $candidate.Value = Get-ClientProcessInfo -Runtime $Runtime -Jdk $Jdk
         return $null -ne $candidate.Value
     }.GetNewClosure()
     $logText = Wait-ForRuntimeLog -Runtime $Runtime -LogPath $LogPath -RequiredPatterns @(
         '(?i)Developer''s Hell foundation initialized',
         '(?i)(Sound engine started|Created:\s+.*atlas|OpenAL initialized|Narrator library)'
     ) -TimeoutSeconds $TimeoutSeconds -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId -AdditionalCheck $detectClient
-    $detected = $candidate.Value
+    $detected = Assert-ClientInfoOwnedByRuntimeSnapshot -Runtime $Runtime -ClientInfo $candidate.Value
     if (-not $detected -or -not (Get-Process -Id $detected.Pid -ErrorAction SilentlyContinue)) { Throw-Failure 'Ready client PID is not live' }
     if ($logText -match '(?i)(NoClassDefFoundError|ClassNotFoundException|crash report|Failed to start Minecraft)') {
         Throw-Failure 'Production client log contains linkage/crash markers'
@@ -2843,6 +2860,52 @@ exit 0
     }
 }
 
+function Invoke-ClientDiscoverySelfCheck {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-client-discovery-' + [guid]::NewGuid().ToString('N'))
+    $java = Join-Path $root 'java.exe'
+    $javaw = Join-Path $root 'javaw.exe'
+    [void](New-Item -ItemType Directory -Path $root)
+    try {
+        Assert-NoReparsePoint -LiteralPath $root
+        [IO.File]::WriteAllBytes($java,[byte[]]@())
+        [IO.File]::WriteAllBytes($javaw,[byte[]]@())
+        $javaCanonical = Resolve-CanonicalPath -LiteralPath $java
+        $javawCanonical = Resolve-CanonicalPath -LiteralPath $javaw
+        $snapshot = @(
+            [pscustomobject]@{ Pid=4100; ParentPid=0; Depth=0; Executable='cmd.exe'; CommandLine='gradlew.bat runProductionClient'; CommandClass='CmdBootstrap'; StartTimeUtcTicks=100 },
+            [pscustomobject]@{ Pid=4101; ParentPid=4100; Depth=1; Executable=$javaCanonical; CommandLine='org.gradle.wrapper.GradleWrapperMain runProductionClient'; CommandClass='GradleWrapperMain'; StartTimeUtcTicks=101 },
+            [pscustomobject]@{ Pid=4102; ParentPid=4101; Depth=2; Executable=$javaCanonical; CommandLine='org.gradle.launcher.daemon.bootstrap.GradleDaemon'; CommandClass='GradleDaemon'; StartTimeUtcTicks=102 },
+            [pscustomobject]@{ Pid=4103; ParentPid=4102; Depth=3; Executable=$javawCanonical; CommandLine='net.fabricmc.loader.impl.launch.knot.KnotClient'; CommandClass='ClientLauncher'; StartTimeUtcTicks=103 }
+        )
+        $runtime = [pscustomobject]@{ RootProcessId=4100; ProcessTreeSnapshot=@($snapshot) }
+        $jdk = [pscustomobject]@{ Java=$javaCanonical; Javaw=$javawCanonical }
+        $provider = { param($OwnedRuntime) return @($snapshot) }.GetNewClosure()
+        $client = Get-ClientProcessInfo -Runtime $runtime -Jdk $jdk -ValidatedRuntimeTreeProvider $provider
+        Assert-Equal $client.Pid 4103 'Scoped client-discovery PID'
+        Assert-Equal $client.StartTimeUtcTicks 103 'Scoped client-discovery start-time identity'
+        [void](Assert-ClientInfoOwnedByRuntimeSnapshot -Runtime $runtime -ClientInfo $client)
+
+        $outside = [pscustomobject]@{
+            Pid=4999; StartTimeUtcTicks=999; Executable=$javawCanonical;
+            CommandLine='net.fabricmc.loader.impl.launch.knot.KnotClient'
+        }
+        $outsideRejected = $false
+        try { [void](Assert-ClientInfoOwnedByRuntimeSnapshot -Runtime $runtime -ClientInfo $outside) }
+        catch {
+            if ($_.Exception.Message -cne 'Production Minecraft client candidate is outside the final validated owned runtime snapshot') { throw }
+            $outsideRejected = $true
+        }
+        if (-not $outsideRejected) { Throw-Failure 'Scoped client discovery accepted a candidate outside the validated owned runtime snapshot' }
+    }
+    finally {
+        foreach ($file in @($java,$javaw)) { if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force } }
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            if (@(Get-ChildItem -LiteralPath $root -Force).Count -ne 0) { Throw-Failure 'Scoped client-discovery self-check root is not empty' }
+            [IO.Directory]::Delete($root,$false)
+        }
+    }
+}
+
 function Invoke-ReadinessCancellationSelfCheck {
     $root = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-readiness-cancel-' + [guid]::NewGuid().ToString('N'))
     $controlPath = Join-Path $root 'control.json'
@@ -2959,6 +3022,21 @@ function Invoke-SelfCheckMode {
     }
     if ($cleanupFunction.Groups['body'].Value -match '\.Process\.Kill\(') { Throw-Failure 'Scoped cleanup kills only the wrapper and can strand descendants' }
     if ($source -match '(?i)(Stop-Process\s+-Name\s+java|Get-Process\s+(?:-Name\s+)?java)') { Throw-Failure 'Broad Java process cleanup pattern found' }
+    if ($source -match '(?m)^\s*(?:\$[A-Za-z0-9_]+\s*=\s*)?(?:@\()?Get-CimInstance\s+Win32_Process(?![^\r\n]*-Filter\s+)') {
+        Throw-Failure 'Unfiltered host-wide CIM process inventory found'
+    }
+    $clientDiscoveryFunction = [regex]::Match($source, '(?s)function Get-ClientProcessInfo\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Assert-ClientInfoOwnedByRuntimeSnapshot')
+    if (-not $clientDiscoveryFunction.Success -or $clientDiscoveryFunction.Groups['body'].Value -notmatch [regex]::Escape('Get-ValidatedGradleRuntimeProcessTree -Runtime')) {
+        Throw-Failure 'Client discovery no longer consumes the validated owned runtime tree'
+    }
+    if ($clientDiscoveryFunction.Groups['body'].Value -match 'Get-CimInstance|Win32_Process') {
+        Throw-Failure 'Client discovery bypasses the validated owned runtime snapshot'
+    }
+    $clientReadyFunction = [regex]::Match($source, '(?s)function Wait-ForClientReady\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Stop-RuntimeAfterFailure')
+    if (-not $clientReadyFunction.Success -or $clientReadyFunction.Groups['body'].Value -notmatch [regex]::Escape('Assert-ClientInfoOwnedByRuntimeSnapshot -Runtime $Runtime -ClientInfo $candidate.Value')) {
+        Throw-Failure 'Ready client is no longer rebound to the final validated owned runtime snapshot'
+    }
+    Invoke-ClientDiscoverySelfCheck
     $boundedCapture = [regex]::Match($source, '(?s)function Invoke-BoundedCapture\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Invoke-NativeCapture')
     foreach ($token in @('Assert-ScopedProcessInspectionAvailable','RootStartTimeUtcTicks','ExpectedRootExecutable','RootCommandLineAnchors','Merge-ValidatedRuntimeProcessTreeSnapshot','ElapsedMilliseconds','Stop-ValidatedGradleRuntimeTree','scoped process-tree cleanup failed','Dispose()')) {
         if (-not $boundedCapture.Success -or $boundedCapture.Groups['body'].Value -notmatch [regex]::Escape($token)) { Throw-Failure "Bounded capture contract token missing: $token" }
