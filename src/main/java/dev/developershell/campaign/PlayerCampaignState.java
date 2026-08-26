@@ -1,5 +1,6 @@
 package dev.developershell.campaign;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +28,8 @@ public record PlayerCampaignState(
 		boolean sheetEntitled,
 		boolean remoteIssued,
 		boolean retakeEntitled,
+		UUID retakeEncounterUuid,
+		UUID retakeFallbackReservationUuid,
 		UUID retakeFallbackEntityUuid,
 		long remoteCooldownUntilGameTime,
 		long sheetRecoverySequence,
@@ -50,8 +53,19 @@ public record PlayerCampaignState(
 				|| attemptCount != activeEncounterRef.attemptNumber())) {
 			throw new IllegalArgumentException("active encounter identity must match owner and attempt");
 		}
-		if (!retakeEntitled && retakeFallbackEntityUuid != null) {
-			throw new IllegalArgumentException("Retake fallback requires a Retake entitlement");
+		if (!retakeEntitled && (retakeEncounterUuid != null
+				|| retakeFallbackReservationUuid != null
+				|| retakeFallbackEntityUuid != null)) {
+			throw new IllegalArgumentException("Retake identity and fallbacks require a Retake entitlement");
+		}
+		if (retakeEntitled && retakeEncounterUuid == null) {
+			throw new IllegalArgumentException("Retake entitlement requires its failed encounter UUID");
+		}
+		if (retakeEntitled && attemptCount < 1) {
+			throw new IllegalArgumentException("Retake entitlement requires a positive failed attempt");
+		}
+		if (retakeFallbackReservationUuid != null && retakeFallbackEntityUuid != null) {
+			throw new IllegalArgumentException("Retake fallback cannot be reserved and materialized at once");
 		}
 		if (remoteCooldownUntilGameTime < 0L) {
 			throw new IllegalArgumentException("Remote cooldown deadline must be non-negative");
@@ -63,6 +77,50 @@ public record PlayerCampaignState(
 				|| remoteReadyNoticeForDeadlineGameTime > remoteCooldownUntilGameTime) {
 			throw new IllegalArgumentException("Remote ready notice must identify a committed cooldown deadline");
 		}
+	}
+
+	/**
+	 * Schema-v1 compatibility constructor retained for the frozen Plan 14 call surface.
+	 * New monotonic replay markers default to their never-issued value.
+	 */
+	public PlayerCampaignState(
+			UUID ownerUuid,
+			CampaignChapter chapter,
+			LectureStatus status,
+			int attemptCount,
+			String deskDimension,
+			BlockPos deskPos,
+			Direction deskFacing,
+			BlockPos retryPos,
+			EncounterRef activeEncounterRef,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			UUID retakeFallbackEntityUuid,
+			long remoteCooldownUntilGameTime,
+			long sheetRecoverySequence,
+			long remoteReadyNoticeForDeadlineGameTime
+	) {
+		this(
+				ownerUuid,
+				chapter,
+				status,
+				attemptCount,
+				deskDimension,
+				deskPos,
+				deskFacing,
+				retryPos,
+				activeEncounterRef,
+				sheetEntitled,
+				remoteIssued,
+				retakeEntitled,
+				retakeEntitled ? legacyRetakeEncounterUuid(ownerUuid, deskPos, attemptCount) : null,
+				null,
+				retakeFallbackEntityUuid,
+				remoteCooldownUntilGameTime,
+				sheetRecoverySequence,
+				remoteReadyNoticeForDeadlineGameTime
+		);
 	}
 
 	/**
@@ -103,6 +161,20 @@ public record PlayerCampaignState(
 				0L,
 				0L
 		);
+	}
+
+	public Optional<RetakeKey> retakeKey() {
+		return retakeEntitled
+				? Optional.of(new RetakeKey(ownerUuid, retakeEncounterUuid))
+				: Optional.empty();
+	}
+
+	static UUID legacyRetakeEncounterUuid(UUID ownerUuid, BlockPos deskPos, int attemptCount) {
+		Objects.requireNonNull(ownerUuid, "ownerUuid");
+		Objects.requireNonNull(deskPos, "deskPos");
+		String value = "encounter:" + ownerUuid + ":" + deskPos.getX() + ":" + deskPos.getY()
+				+ ":" + deskPos.getZ() + ":" + attemptCount;
+		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
 	}
 
 	public Optional<EncounterRef> activeEncounter() {
@@ -190,6 +262,14 @@ public record PlayerCampaignState(
 			if (attemptNumber < 1) {
 				throw new IllegalArgumentException("attemptNumber must be positive");
 			}
+		}
+	}
+
+	/** Durable logical Retake identity, independent of inventory or entity representation. */
+	public record RetakeKey(UUID ownerUuid, UUID failedEncounterUuid) {
+		public RetakeKey {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(failedEncounterUuid, "failedEncounterUuid");
 		}
 	}
 }

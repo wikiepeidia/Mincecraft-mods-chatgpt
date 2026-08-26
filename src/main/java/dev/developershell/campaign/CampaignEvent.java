@@ -25,7 +25,8 @@ public sealed interface CampaignEvent permits
 			Direction deskFacing,
 			BlockPos retryPos,
 			UUID encounterUuid,
-			UUID professorUuid
+			UUID professorUuid,
+			PlayerCampaignState.RetakeKey expectedRetakeKey
 	) implements CampaignEvent {
 		public Start {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
@@ -40,6 +41,31 @@ public sealed interface CampaignEvent permits
 			retryPos = Objects.requireNonNull(retryPos, "retryPos").immutable();
 			Objects.requireNonNull(encounterUuid, "encounterUuid");
 			Objects.requireNonNull(professorUuid, "professorUuid");
+			if (expectedRetakeKey != null && !ownerUuid.equals(expectedRetakeKey.ownerUuid())) {
+				throw new IllegalArgumentException("Retake key owner must match start owner");
+			}
+		}
+
+		/** Compatibility constructor for an initial Contract start. */
+		public Start(
+				UUID ownerUuid,
+				String deskDimension,
+				BlockPos deskPos,
+				Direction deskFacing,
+				BlockPos retryPos,
+				UUID encounterUuid,
+				UUID professorUuid
+		) {
+			this(
+					ownerUuid,
+					deskDimension,
+					deskPos,
+					deskFacing,
+					retryPos,
+					encounterUuid,
+					professorUuid,
+					null
+			);
 		}
 	}
 
@@ -65,22 +91,35 @@ public sealed interface CampaignEvent permits
 		}
 	}
 
-	record ReconcileRetake(UUID ownerUuid, UUID fallbackEntityUuid) implements CampaignEvent {
+	record ReconcileRetake(
+			UUID ownerUuid,
+			PlayerCampaignState.RetakeKey retakeKey,
+			UUID fallbackEntityUuid
+	) implements CampaignEvent {
 		public ReconcileRetake {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(retakeKey, "retakeKey");
 			Objects.requireNonNull(fallbackEntityUuid, "fallbackEntityUuid");
+			if (!ownerUuid.equals(retakeKey.ownerUuid())) {
+				throw new IllegalArgumentException("Retake key owner must match event owner");
+			}
 		}
 	}
 
 	record RetakeFallback(
 			UUID ownerUuid,
+			PlayerCampaignState.RetakeKey retakeKey,
 			UUID fallbackEntityUuid,
 			FallbackOperation operation
 	) implements CampaignEvent {
 		public RetakeFallback {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(retakeKey, "retakeKey");
 			Objects.requireNonNull(fallbackEntityUuid, "fallbackEntityUuid");
 			Objects.requireNonNull(operation, "operation");
+			if (!ownerUuid.equals(retakeKey.ownerUuid())) {
+				throw new IllegalArgumentException("Retake key owner must match event owner");
+			}
 		}
 	}
 
@@ -141,7 +180,10 @@ public sealed interface CampaignEvent permits
 	}
 
 	enum FallbackOperation {
-		LOST("lost");
+		MATERIALIZED("materialized"),
+		MATERIALIZATION_FAILED("materialization_failed"),
+		LOST("lost"),
+		CLEARED("cleared");
 
 		private final String serializedName;
 

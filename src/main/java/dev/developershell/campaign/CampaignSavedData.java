@@ -59,6 +59,10 @@ public final class CampaignSavedData extends SavedData {
 					Codec.BOOL.fieldOf("sheet_entitled").forGetter(DurableFields::sheetEntitled),
 					Codec.BOOL.fieldOf("remote_issued").forGetter(DurableFields::remoteIssued),
 					Codec.BOOL.optionalFieldOf("retake_entitled", false).forGetter(DurableFields::retakeEntitled),
+					UUIDUtil.CODEC.optionalFieldOf("retake_encounter_uuid")
+							.forGetter(DurableFields::retakeEncounterUuid),
+					UUIDUtil.CODEC.optionalFieldOf("retake_fallback_reservation_uuid")
+							.forGetter(DurableFields::retakeFallbackReservationUuid),
 					UUIDUtil.CODEC.optionalFieldOf("retake_fallback_entity_uuid")
 							.forGetter(DurableFields::retakeFallbackEntityUuid),
 					Codec.LONG.optionalFieldOf("remote_cooldown_until_game_time", 0L)
@@ -200,6 +204,15 @@ public final class CampaignSavedData extends SavedData {
 		}
 
 		try {
+			UUID retakeEncounterUuid = durable.retakeEncounterUuid().orElseGet(() ->
+					durable.retakeEntitled()
+							? PlayerCampaignState.legacyRetakeEncounterUuid(
+									identity.ownerUuid(),
+									identity.deskPos(),
+									identity.attemptCount()
+							)
+							: null
+			);
 			PlayerCampaignState.EncounterRef encounter = hasEncounter
 					? new PlayerCampaignState.EncounterRef(
 							identity.ownerUuid(),
@@ -221,6 +234,8 @@ public final class CampaignSavedData extends SavedData {
 					durable.sheetEntitled(),
 					durable.remoteIssued(),
 					durable.retakeEntitled(),
+					retakeEncounterUuid,
+					durable.retakeFallbackReservationUuid().orElse(null),
 					durable.retakeFallbackEntityUuid().orElse(null),
 					durable.remoteCooldownUntilGameTime(),
 					durable.sheetRecoverySequence(),
@@ -253,6 +268,8 @@ public final class CampaignSavedData extends SavedData {
 						state.sheetEntitled(),
 						state.remoteIssued(),
 						state.retakeEntitled(),
+						Optional.ofNullable(state.retakeEncounterUuid()),
+						Optional.ofNullable(state.retakeFallbackReservationUuid()),
 						Optional.ofNullable(state.retakeFallbackEntityUuid()),
 						state.remoteCooldownUntilGameTime(),
 						state.sheetRecoverySequence(),
@@ -361,6 +378,8 @@ public final class CampaignSavedData extends SavedData {
 			boolean sheetEntitled,
 			boolean remoteIssued,
 			boolean retakeEntitled,
+			Optional<UUID> retakeEncounterUuid,
+			Optional<UUID> retakeFallbackReservationUuid,
 			Optional<UUID> retakeFallbackEntityUuid,
 			long remoteCooldownUntilGameTime,
 			long sheetRecoverySequence,

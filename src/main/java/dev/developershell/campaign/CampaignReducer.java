@@ -58,12 +58,33 @@ public final class CampaignReducer {
 			CampaignEvent.Start event
 	) {
 		PlayerCampaignState previous = currentState.orElse(null);
-		if (previous != null && previous.status() != PlayerCampaignState.LectureStatus.READY
-				&& previous.status() != PlayerCampaignState.LectureStatus.RETAKE_READY) {
-			return CampaignTransition.noOp(currentState, "start_not_ready");
+		if (previous == null) {
+			if (event.expectedRetakeKey() != null) {
+				return CampaignTransition.noOp(currentState, "wrong_retake");
+			}
 		}
-		if (previous != null && previous.activeEncounterRef() != null) {
-			return CampaignTransition.noOp(currentState, "start_not_ready");
+		else {
+			if (previous.activeEncounterRef() != null
+					|| (previous.status() != PlayerCampaignState.LectureStatus.READY
+						&& previous.status() != PlayerCampaignState.LectureStatus.RETAKE_READY)) {
+				return CampaignTransition.noOp(currentState, "start_not_ready");
+			}
+			if (previous.status() == PlayerCampaignState.LectureStatus.RETAKE_READY) {
+				if (event.expectedRetakeKey() == null) {
+					return CampaignTransition.noOp(currentState, "missing_retake_key");
+				}
+				if (!previous.retakeKey().filter(event.expectedRetakeKey()::equals).isPresent()) {
+					return CampaignTransition.noOp(currentState, "wrong_retake");
+				}
+				if (!previous.deskDimension().equals(event.deskDimension())
+						|| !previous.deskPos().equals(event.deskPos())
+						|| previous.deskFacing() != event.deskFacing()) {
+					return CampaignTransition.noOp(currentState, "wrong_retake_desk");
+				}
+			}
+			else if (event.expectedRetakeKey() != null) {
+				return CampaignTransition.noOp(currentState, "wrong_retake");
+			}
 		}
 
 		int nextAttempt = previous == null ? 1 : Math.addExact(previous.attemptCount(), 1);
@@ -86,6 +107,8 @@ public final class CampaignReducer {
 				previous != null && previous.sheetEntitled(),
 				previous != null && previous.remoteIssued(),
 				false,
+				null,
+				null,
 				null,
 				previous == null ? 0L : previous.remoteCooldownUntilGameTime(),
 				previous == null ? 0L : previous.sheetRecoverySequence(),
@@ -111,7 +134,9 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				true,
-				state.retakeFallbackEntityUuid(),
+				event.encounterUuid(),
+				null,
+				null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
 				state.remoteReadyNoticeForDeadlineGameTime()
@@ -141,7 +166,9 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				true,
-				state.retakeFallbackEntityUuid(),
+				event.encounterUuid(),
+				null,
+				null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
 				state.remoteReadyNoticeForDeadlineGameTime()
@@ -173,6 +200,8 @@ public final class CampaignReducer {
 				true,
 				false,
 				null,
+				null,
+				null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
 				state.remoteReadyNoticeForDeadlineGameTime()
@@ -192,7 +221,10 @@ public final class CampaignReducer {
 		if (state.status() != PlayerCampaignState.LectureStatus.RETAKE_READY || !state.retakeEntitled()) {
 			return noOp(state, "retake_not_entitled");
 		}
-		if (state.retakeFallbackEntityUuid() != null) {
+		if (!state.retakeKey().filter(event.retakeKey()::equals).isPresent()) {
+			return noOp(state, "wrong_retake");
+		}
+		if (state.retakeFallbackReservationUuid() != null || state.retakeFallbackEntityUuid() != null) {
 			return noOp(state, "retake_representation_exists");
 		}
 		PlayerCampaignState next = copy(
@@ -203,7 +235,9 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				true,
+				state.retakeEncounterUuid(),
 				event.fallbackEntityUuid(),
+				null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
 				state.remoteReadyNoticeForDeadlineGameTime()
@@ -222,9 +256,18 @@ public final class CampaignReducer {
 		if (!state.retakeEntitled()) {
 			return noOp(state, "retake_not_entitled");
 		}
-		if (!Objects.equals(state.retakeFallbackEntityUuid(), event.fallbackEntityUuid())) {
+		if (!state.retakeKey().filter(event.retakeKey()::equals).isPresent()) {
+			return noOp(state, "wrong_retake");
+		}
+
+		boolean reserved = Objects.equals(state.retakeFallbackReservationUuid(), event.fallbackEntityUuid());
+		boolean materialized = Objects.equals(state.retakeFallbackEntityUuid(), event.fallbackEntityUuid());
+		if ((event.operation() == CampaignEvent.FallbackOperation.MATERIALIZED
+				|| event.operation() == CampaignEvent.FallbackOperation.MATERIALIZATION_FAILED)
+				? !reserved : !materialized) {
 			return noOp(state, "wrong_fallback");
 		}
+		boolean committing = event.operation() == CampaignEvent.FallbackOperation.MATERIALIZED;
 		PlayerCampaignState next = copy(
 				state,
 				state.chapter(),
@@ -233,16 +276,23 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				true,
+				state.retakeEncounterUuid(),
 				null,
+				committing ? event.fallbackEntityUuid() : null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
 				state.remoteReadyNoticeForDeadlineGameTime()
 		);
-		return CampaignTransition.accepted(
-				next,
-				"retake_fallback_" + event.operation().serializedName(),
-				new EffectIntent.ReconcileRetake(state.ownerUuid())
-		);
+		return committing
+				? CampaignTransition.accepted(
+						next,
+						"retake_fallback_" + event.operation().serializedName()
+				)
+				: CampaignTransition.accepted(
+						next,
+						"retake_fallback_" + event.operation().serializedName(),
+						new EffectIntent.ReconcileRetake(state.ownerUuid())
+				);
 	}
 
 	private static CampaignTransition reduceSheetRecovery(
@@ -267,6 +317,8 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
 				state.retakeFallbackEntityUuid(),
 				state.remoteCooldownUntilGameTime(),
 				nextSequence,
@@ -301,6 +353,8 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
 				state.retakeFallbackEntityUuid(),
 				event.cooldownDeadlineGameTime(),
 				state.sheetRecoverySequence(),
@@ -338,6 +392,8 @@ public final class CampaignReducer {
 				state.sheetEntitled(),
 				state.remoteIssued(),
 				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
 				state.retakeFallbackEntityUuid(),
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
@@ -372,6 +428,8 @@ public final class CampaignReducer {
 			boolean sheetEntitled,
 			boolean remoteIssued,
 			boolean retakeEntitled,
+			java.util.UUID retakeEncounterUuid,
+			java.util.UUID fallbackReservationUuid,
 			java.util.UUID fallbackUuid,
 			long remoteCooldownUntilGameTime,
 			long sheetRecoverySequence,
@@ -390,6 +448,8 @@ public final class CampaignReducer {
 				sheetEntitled,
 				remoteIssued,
 				retakeEntitled,
+				retakeEncounterUuid,
+				fallbackReservationUuid,
 				fallbackUuid,
 				remoteCooldownUntilGameTime,
 				sheetRecoverySequence,
