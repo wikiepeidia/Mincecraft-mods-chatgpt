@@ -51,14 +51,19 @@ public final class DevelopersHellRuntime {
 		Objects.requireNonNull(loadResult, "loadResult");
 		DevHellConfig config = loadResult.config();
 		DevHellConfig.LectureTuning tuning = config.lecture();
-		LectureRules rules = new LectureRules(
+		LectureRules rules = LectureRules.configured(
 				tuning.slideDeckTelegraphTicks(),
 				tuning.vulnerabilityTicks(),
 				tuning.actionBarUpdateTicks(),
 				tuning.particleRefreshTicks(),
 				tuning.particlesPerRefresh(),
 				tuning.maxParticleBurstsPerEncounter(),
-				tuning.maxTransitionSoundsPerEncounter()
+				tuning.maxTransitionSoundsPerEncounter(),
+				tuning.professorHealth(),
+				tuning.missDamage(),
+				tuning.maxAdds(),
+				tuning.quizTelegraphTicks(),
+				tuning.attendanceTelegraphTicks()
 		);
 		CampaignServiceAdapter campaignService = new CampaignServiceAdapter(config.campaignEnabled());
 		LifecycleAdapter lifecycle = new LifecycleAdapter();
@@ -68,7 +73,7 @@ public final class DevelopersHellRuntime {
 				rules,
 				campaignService,
 				lifecycle,
-				new LectureManagerAdapter(rules)
+				new LectureManagerAdapter(rules, config.reducedEffects())
 		);
 	}
 
@@ -250,17 +255,19 @@ public final class DevelopersHellRuntime {
 	/** One-shot rule binding and tick adapter over the retained encounter manager. */
 	public static final class LectureManagerAdapter {
 		private final LectureRules rules;
+		private final boolean reducedEffects;
 		private volatile boolean initialized;
 
-		private LectureManagerAdapter(LectureRules rules) {
+		private LectureManagerAdapter(LectureRules rules, boolean reducedEffects) {
 			this.rules = Objects.requireNonNull(rules, "rules");
+			this.reducedEffects = reducedEffects;
 		}
 
 		public synchronized void initialize() {
 			if (initialized) {
 				throw new IllegalStateException("Lecture manager already initialized for this runtime");
 			}
-			LectureEncounterManager.initialize(rules, CampaignLifecycle::onRuntimeExit);
+			LectureEncounterManager.initialize(rules, reducedEffects, CampaignLifecycle::onRuntimeExit);
 			initialized = true;
 		}
 
@@ -273,6 +280,10 @@ public final class DevelopersHellRuntime {
 
 		public LectureRules rules() {
 			return rules;
+		}
+
+		public boolean reducedEffects() {
+			return reducedEffects;
 		}
 	}
 }
