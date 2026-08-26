@@ -45,8 +45,10 @@ import net.minecraft.world.phys.Vec3;
 public final class LectureLifecycleGameTests implements CustomTestMethodInvoker {
 	private static final UUID EXIT_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000501");
 	private static final UUID RELOAD_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000502");
+	private static final UUID STOP_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000503");
 	private static final String RELOAD_KEY = "message.developers_hell.lecture.reload";
 	private static final String RETAKE_KEY = "message.developers_hell.lecture.retake";
+	private static final String SERVER_STOP_KEY = "message.developers_hell.lecture.failure.server_stop";
 
 	@GameTest(padding = 24)
 	public void deathEscapeTimeoutDimensionDisconnectAbortAndUnloadConvergeExactlyOnce(
@@ -235,6 +237,51 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 				connection.close();
 			}
 			cleanupOwnerRuntimes(level.getServer(), RELOAD_OWNER_UUID);
+			clearArena(level, desk, facing);
+		}
+	}
+
+	@GameTest(padding = 24)
+	public void serverStopHandlerConvergesExactlyOnceWithoutStoppingGameTestServer(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		MinecraftServer server = level.getServer();
+		BlockPos desk = context.absolutePos(new BlockPos(12, 2, 4));
+		Direction facing = Direction.SOUTH;
+		buildArena(level, desk, facing);
+		List<BlockState> blocksBefore = snapshotArena(level, desk, facing);
+		ConnectedPlayer connection = null;
+
+		try {
+			connection = createSurvivalPlayer(context, STOP_OWNER_UUID, "lifecycle-stop", new BlockPos(12, 2, 2));
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState active = startAttempt(context, level, owner, desk, facing);
+			owner.clearRecordedSystemMessages();
+
+			context.assertValueEqual(CampaignLifecycle.onServerStopping(server), 1,
+					"in-process stop handler accepts one active encounter");
+			assertConverged(context, level, active, blocksBefore, desk, facing, "server stop");
+			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(SERVER_STOP_KEY, RETAKE_KEY),
+					"stop handler reports one safe Retake message group");
+			PlayerCampaignState stopped = CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow();
+
+			context.assertValueEqual(CampaignLifecycle.onServerStopping(server), 0,
+					"replayed in-process stop handler accepts no encounter");
+			context.assertValueEqual(CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow(), stopped,
+					"replayed stop handler changes no durable state");
+			context.assertFalse(LectureEncounterManager.presentation(active.encounterUuid()).isPresent(),
+					"replayed stop handler cannot recreate presentation");
+			context.assertValueEqual(snapshotArena(level, desk, facing), blocksBefore,
+					"replayed stop handler preserves arena blocks");
+
+			connection.close();
+			connection = null;
+			context.succeed();
+		}
+		finally {
+			if (connection != null) {
+				connection.close();
+			}
+			cleanupOwnerRuntimes(server, STOP_OWNER_UUID);
 			clearArena(level, desk, facing);
 		}
 	}
