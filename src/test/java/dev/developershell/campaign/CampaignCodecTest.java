@@ -101,7 +101,7 @@ final class CampaignCodecTest {
 		assertTrue(decoded.isWritableSchema());
 		assertTrue(migrated.retakeEntitled());
 		assertEquals(OWNER, migrated.retakeKey().orElseThrow().ownerUuid());
-		assertEquals(3, migrated.retakeKey().orElseThrow().attemptNumber());
+		assertEquals(3, migrated.attemptCount());
 		assertEquals(FALLBACK, migrated.retakeFallbackEntityUuid());
 		assertTrue(encode(decoded).getAsJsonObject().getAsJsonArray("players").get(0).getAsJsonObject()
 				.has("retake_encounter_uuid"));

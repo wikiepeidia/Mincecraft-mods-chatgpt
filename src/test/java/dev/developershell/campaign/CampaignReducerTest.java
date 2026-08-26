@@ -108,7 +108,7 @@ final class CampaignReducerTest {
 		assertAccepted(terminalFirst, "terminal_death");
 		PlayerCampaignState terminalState = terminalFirst.nextState().orElseThrow();
 		assertEquals(
-				new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 4),
+				new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER),
 				terminalState.retakeKey().orElseThrow()
 		);
 		assertNoOp(CampaignReducer.reduce(terminalFirst.nextState(), terminal), terminalState, "no_active_encounter");
@@ -156,7 +156,7 @@ final class CampaignReducerTest {
 			assertEquals(null, failed.activeEncounterRef(), reason.serializedName());
 			assertTrue(failed.retakeEntitled(), reason.serializedName());
 			assertEquals(
-					new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 4),
+					new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER),
 					failed.retakeKey().orElseThrow(),
 					reason.serializedName()
 			);
@@ -194,7 +194,7 @@ final class CampaignReducerTest {
 		assertEquals(PlayerCampaignState.LectureStatus.RETAKE_READY, normalized.status());
 		assertEquals(null, normalized.activeEncounterRef());
 		assertTrue(normalized.retakeEntitled());
-		assertEquals(new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 2), normalized.retakeKey().orElseThrow());
+		assertEquals(new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER), normalized.retakeKey().orElseThrow());
 		assertEquals(null, normalized.retakeFallbackReservationUuid());
 		assertEquals(2, normalized.attemptCount());
 		assertEquals(List.of(
@@ -285,7 +285,7 @@ final class CampaignReducerTest {
 						Optional.of(failed),
 						new CampaignEvent.ReconcileRetake(
 								OWNER,
-								new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER, key.attemptNumber()),
+								new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER),
 								FALLBACK
 						)
 				),
@@ -367,7 +367,7 @@ final class CampaignReducerTest {
 				OWNER,
 				OTHER_ENCOUNTER,
 				OTHER_PROFESSOR,
-				new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER, key.attemptNumber())
+				new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER)
 		);
 		assertNoOp(CampaignReducer.reduce(Optional.of(failed), stale), failed, "wrong_retake");
 
