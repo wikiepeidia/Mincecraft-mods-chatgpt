@@ -119,10 +119,14 @@ public final class CampaignService {
 	}
 
 	/**
-	 * Applies a matching victory exactly once. The durable ledger is dirty before cleanup,
-	 * inventory grants, or boss presentation changes.
+	 * Compatibility wrapper that projects the accepted first-reward intent through the existing
+	 * direct inventory path. Plan 17 may consume {@link #commitVictory} instead without losing the
+	 * accepted/no-op result that owns physical reconciliation.
 	 */
 	public static boolean victory(ServerLevel level, UUID ownerUuid, UUID encounterUuid) {
+		java.util.Objects.requireNonNull(level, "level");
+		java.util.Objects.requireNonNull(ownerUuid, "ownerUuid");
+		java.util.Objects.requireNonNull(encounterUuid, "encounterUuid");
 		if (!level.getServer().isSameThread()) {
 			return false;
 		}
@@ -133,11 +137,11 @@ public final class CampaignService {
 			return false;
 		}
 
-		CampaignSavedData data = CampaignSavedData.get(level);
 		ServerPlayer player = participant.get();
-		CampaignTransition transition = apply(
-				data,
-				new CampaignEvent.Victory(ownerUuid, encounterUuid),
+		CampaignTransition transition = commitVictory(
+				level,
+				ownerUuid,
+				encounterUuid,
 				effect -> {
 					if (effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
 						LectureEncounterManager.finishVictory(cleanup.encounterUuid());
@@ -148,10 +152,41 @@ public final class CampaignService {
 					}
 				}
 		);
-		if (!transition.accepted()) {
-			return false;
+		return transition.accepted();
+	}
+
+	/**
+	 * Commits one matching victory and returns its complete accepted/no-op result. The durable
+	 * PASSED, Sheet-entitlement, and Remote-ledger state is dirty before the caller observes any
+	 * cleanup, reward, or presentation intent.
+	 */
+	public static CampaignTransition commitVictory(
+			ServerLevel level,
+			UUID ownerUuid,
+			UUID encounterUuid,
+			Consumer<CampaignTransition.EffectIntent> effectConsumer
+	) {
+		java.util.Objects.requireNonNull(level, "level");
+		java.util.Objects.requireNonNull(ownerUuid, "ownerUuid");
+		java.util.Objects.requireNonNull(encounterUuid, "encounterUuid");
+		java.util.Objects.requireNonNull(effectConsumer, "effectConsumer");
+		if (!level.getServer().isSameThread()) {
+			return CampaignTransition.noOp(Optional.empty(), "wrong_thread");
 		}
-		return true;
+
+		CampaignSavedData data = CampaignSavedData.get(level);
+		Optional<ServerPlayer> participant = LectureEncounterManager.participant(encounterUuid);
+		if (participant.isEmpty()) {
+			return CampaignTransition.noOp(data.player(ownerUuid), "missing_participant");
+		}
+		if (!participant.get().getUUID().equals(ownerUuid) || participant.get().level() != level) {
+			return CampaignTransition.noOp(data.player(ownerUuid), "wrong_participant");
+		}
+		return applyTerminal(
+				data,
+				new CampaignEvent.Victory(ownerUuid, encounterUuid),
+				effectConsumer
+		);
 	}
 
 	/**
@@ -209,6 +244,15 @@ public final class CampaignService {
 		data.setDirty();
 		transition.intents().forEach(effectConsumer);
 		return transition;
+	}
+
+	/** Package-private pure-data seam for exhaustive terminal ordering tests. */
+	static CampaignTransition applyTerminal(
+			CampaignSavedData data,
+			CampaignEvent.EncounterTerminal event,
+			Consumer<CampaignTransition.EffectIntent> effectConsumer
+	) {
+		return apply(data, event, effectConsumer);
 	}
 
 	/**

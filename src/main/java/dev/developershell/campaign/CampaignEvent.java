@@ -8,15 +8,22 @@ import net.minecraft.core.Direction;
 /** Closed, immutable inputs accepted by the campaign reducer. */
 public sealed interface CampaignEvent permits
 		CampaignEvent.Start,
-		CampaignEvent.Terminal,
-		CampaignEvent.NormalizeReload,
-		CampaignEvent.Victory,
+		CampaignEvent.EncounterTerminal,
 		CampaignEvent.ReconcileRetake,
 		CampaignEvent.RetakeFallback,
 		CampaignEvent.RecoverSheet,
 		CampaignEvent.StartRemoteCooldown,
 		CampaignEvent.RemoteReadyNotice {
 	UUID ownerUuid();
+
+	/**
+	 * Closed encounter-ending inputs that compete for the same persisted active reference.
+	 * The reducer admits exactly one matching instance; every later instance observes the
+	 * already-cleared reference and becomes an intent-free no-op.
+	 */
+	sealed interface EncounterTerminal extends CampaignEvent permits Terminal, NormalizeReload, Victory {
+		UUID encounterUuid();
+	}
 
 	record Start(
 			UUID ownerUuid,
@@ -69,7 +76,7 @@ public sealed interface CampaignEvent permits
 		}
 	}
 
-	record Terminal(UUID ownerUuid, UUID encounterUuid, TerminalReason reason) implements CampaignEvent {
+	record Terminal(UUID ownerUuid, UUID encounterUuid, TerminalReason reason) implements EncounterTerminal {
 		public Terminal {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
 			Objects.requireNonNull(encounterUuid, "encounterUuid");
@@ -77,14 +84,14 @@ public sealed interface CampaignEvent permits
 		}
 	}
 
-	record NormalizeReload(UUID ownerUuid, UUID encounterUuid) implements CampaignEvent {
+	record NormalizeReload(UUID ownerUuid, UUID encounterUuid) implements EncounterTerminal {
 		public NormalizeReload {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
 			Objects.requireNonNull(encounterUuid, "encounterUuid");
 		}
 	}
 
-	record Victory(UUID ownerUuid, UUID encounterUuid) implements CampaignEvent {
+	record Victory(UUID ownerUuid, UUID encounterUuid) implements EncounterTerminal {
 		public Victory {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
 			Objects.requireNonNull(encounterUuid, "encounterUuid");

@@ -26,14 +26,8 @@ public final class CampaignReducer {
 		}
 
 		PlayerCampaignState state = currentState.get();
-		if (event instanceof CampaignEvent.Terminal terminal) {
-			return reduceTerminal(state, terminal);
-		}
-		if (event instanceof CampaignEvent.NormalizeReload normalizeReload) {
-			return reduceReload(state, normalizeReload);
-		}
-		if (event instanceof CampaignEvent.Victory victory) {
-			return reduceVictory(state, victory);
+		if (event instanceof CampaignEvent.EncounterTerminal terminal) {
+			return reduceEncounterTerminal(state, terminal);
 		}
 		if (event instanceof CampaignEvent.ReconcileRetake reconcileRetake) {
 			return reduceRetakeReconciliation(state, reconcileRetake);
@@ -117,15 +111,26 @@ public final class CampaignReducer {
 		return CampaignTransition.accepted(next, "start_accepted", new EffectIntent.StartEncounter(encounter));
 	}
 
-	private static CampaignTransition reduceTerminal(
+	private static CampaignTransition reduceEncounterTerminal(
 			PlayerCampaignState state,
-			CampaignEvent.Terminal event
+			CampaignEvent.EncounterTerminal event
 	) {
-		Optional<String> mismatch = activeMismatch(state, event.encounterUuid());
+		Optional<String> mismatch = activeMismatch(state, event);
 		if (mismatch.isPresent()) {
 			return noOp(state, mismatch.get());
 		}
 
+		return switch (event) {
+			case CampaignEvent.Terminal terminal -> acceptTerminal(state, terminal);
+			case CampaignEvent.NormalizeReload reload -> acceptReload(state, reload);
+			case CampaignEvent.Victory victory -> acceptVictory(state, victory);
+		};
+	}
+
+	private static CampaignTransition acceptTerminal(
+			PlayerCampaignState state,
+			CampaignEvent.Terminal event
+	) {
 		PlayerCampaignState next = copy(
 				state,
 				state.chapter(),
@@ -149,15 +154,10 @@ public final class CampaignReducer {
 		);
 	}
 
-	private static CampaignTransition reduceReload(
+	private static CampaignTransition acceptReload(
 			PlayerCampaignState state,
 			CampaignEvent.NormalizeReload event
 	) {
-		Optional<String> mismatch = activeMismatch(state, event.encounterUuid());
-		if (mismatch.isPresent()) {
-			return noOp(state, mismatch.get());
-		}
-
 		PlayerCampaignState next = copy(
 				state,
 				state.chapter(),
@@ -181,15 +181,10 @@ public final class CampaignReducer {
 		);
 	}
 
-	private static CampaignTransition reduceVictory(
+	private static CampaignTransition acceptVictory(
 			PlayerCampaignState state,
 			CampaignEvent.Victory event
 	) {
-		Optional<String> mismatch = activeMismatch(state, event.encounterUuid());
-		if (mismatch.isPresent()) {
-			return noOp(state, mismatch.get());
-		}
-
 		boolean firstRemote = !state.remoteIssued();
 		PlayerCampaignState next = copy(
 				state,
@@ -406,11 +401,14 @@ public final class CampaignReducer {
 		);
 	}
 
-	private static Optional<String> activeMismatch(PlayerCampaignState state, java.util.UUID encounterUuid) {
+	private static Optional<String> activeMismatch(
+			PlayerCampaignState state,
+			CampaignEvent.EncounterTerminal event
+	) {
 		if (state.activeEncounterRef() == null || state.status() != PlayerCampaignState.LectureStatus.ACTIVE) {
 			return Optional.of("no_active_encounter");
 		}
-		if (!state.activeEncounterRef().encounterUuid().equals(encounterUuid)) {
+		if (!state.matchesActiveEncounter(event.ownerUuid(), event.encounterUuid())) {
 			return Optional.of("wrong_encounter");
 		}
 		return Optional.empty();
