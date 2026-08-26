@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 9
-total_count: 9
-last_updated: 2026-08-26T19:58:24.758Z
+fixed_count: 12
+total_count: 12
+last_updated: 2026-08-26T20:34:38.897Z
 ---
 
 # Broken Windows Ledger
@@ -24,6 +24,9 @@ last_updated: 2026-08-26T19:58:24.758Z
 | 7 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java |  | Routed accepted Contract geometry through CampaignService and DevelopersHellRuntime to eliminate duplicate validation and preserve state-first atomic starts | fixed |  | 2026-08-26T19:58:18.510Z | 2026-08-26T19:58:24.067Z |
 | 8 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java |  | Retained the legacy server-side start signature as a thin adapter to the sole ArenaValidator for lifecycle GameTest compatibility | fixed |  | 2026-08-26T19:58:18.859Z | 2026-08-26T19:58:24.406Z |
 | 9 | 02 | deviation | src/main/java/dev/developershell/lecture/ArenaValidator.java |  | Added explicit entity occupancy to Professor spawn-capacity preflight because block collision alone permits overlapping spawns | fixed |  | 2026-08-26T19:58:19.238Z | 2026-08-26T19:58:24.758Z |
+| 10 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignSavedData.java |  | Persisted optional schema-v1 failed encounter and fallback reservation UUIDs for reload-safe exactly-one Retake authority | fixed |  | 2026-08-26T20:34:29.591Z | 2026-08-26T20:34:37.748Z |
+| 11 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Routed persistent lifecycle GameTest retries from Contract setup through keyed RetakeService after the clean gate exposed the stale test contract | fixed |  | 2026-08-26T20:34:30.170Z | 2026-08-26T20:34:38.436Z |
+| 12 | 02 | deviation | src/main/java/dev/developershell/lecture/RetakeService.java |  | Compensated failed retry runtime starts and cleaned reserved or post-spawn fallback crash windows state-first | fixed |  | 2026-08-26T20:34:30.623Z | 2026-08-26T20:34:38.897Z |
 
 ````json
 [
@@ -134,6 +137,42 @@ last_updated: 2026-08-26T19:58:24.758Z
     "reason": "",
     "recorded_at": "2026-08-26T19:58:19.238Z",
     "resolved_at": "2026-08-26T19:58:24.758Z"
+  },
+  {
+    "id": 10,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/campaign/CampaignSavedData.java",
+    "line": null,
+    "description": "Persisted optional schema-v1 failed encounter and fallback reservation UUIDs for reload-safe exactly-one Retake authority",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T20:34:29.591Z",
+    "resolved_at": "2026-08-26T20:34:37.748Z"
+  },
+  {
+    "id": 11,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java",
+    "line": null,
+    "description": "Routed persistent lifecycle GameTest retries from Contract setup through keyed RetakeService after the clean gate exposed the stale test contract",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T20:34:30.170Z",
+    "resolved_at": "2026-08-26T20:34:38.436Z"
+  },
+  {
+    "id": 12,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/lecture/RetakeService.java",
+    "line": null,
+    "description": "Compensated failed retry runtime starts and cleaned reserved or post-spawn fallback crash windows state-first",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T20:34:30.623Z",
+    "resolved_at": "2026-08-26T20:34:38.897Z"
   }
 ]
 ````
