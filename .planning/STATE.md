@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-15-PLAN.md
-last_updated: "2026-08-26T17:39:57.931Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-08-26T18:09:02.690Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 81fd7adaa6bddb4ce799106137909bb587fa31c1
+state_head: 943c94db314f66f844cfeb4c330b2f2906cd3b38
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 7
+  completed_plans: 8
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 4 of 18
+Plan: 5 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -65,6 +65,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P01 | 20min | 1 tasks | 12 files |
 | Phase 02 P14 | 14min | 1 tasks | 7 files |
 | Phase 02 P15 | 8min | 1 tasks | 6 files |
+| Phase 02 P02 | 22 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-14: Professor damage requires matching attacker, live runtime participant, saved owner, and active encounter before CampaignService may commit rewards.
 - [Phase 02]: Plan 02-15: Capture one validated Standard LectureRules value per runtime so cadence and cue ceilings cannot change during an encounter.
 - [Phase 02]: Plan 02-15: Keep gameplay and presentation decisions on the logical server; the client only binds the stable Professor to VindicatorRenderer.
+- [Phase 02]: Accept only one complete strict schema-v1 document; any validation failure activates complete immutable defaults without rewriting rejected bytes.
+- [Phase 02]: Bridge retained static campaign and lecture utilities with scoped runtime adapters that drive the real Contract and tick paths.
+- [Phase 02]: Keep /devhell status read-only and reserve game-master-gated mutation children for their owning recovery plan.
 
 ### Pending Todos
 
@@ -105,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T17:39:57.794Z
-Stopped at: Completed 02-15-PLAN.md
+Last session: 2026-08-26T18:09:02.576Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
