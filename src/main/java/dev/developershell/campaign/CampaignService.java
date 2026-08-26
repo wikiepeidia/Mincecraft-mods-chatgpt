@@ -4,6 +4,7 @@ import dev.developershell.lecture.ArenaRejection;
 import dev.developershell.lecture.ArenaValidationResult;
 import dev.developershell.lecture.ArenaValidator;
 import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.registry.ModItems;
 import java.util.Optional;
 import java.util.UUID;
@@ -192,6 +193,46 @@ public final class CampaignService {
 			return Optional.empty();
 		}
 		return CampaignSavedData.get(level).player(ownerUuid);
+	}
+
+	/**
+	 * Commits the exact server-time Remote deadline before exposing its bounded effect intent.
+	 * The physical held stack and target scan remain item concerns; this method owns authority,
+	 * persistence ordering, and the single permitted clock.
+	 */
+	public static CampaignTransition commitRemoteCooldown(
+			ServerPlayer player,
+			Consumer<CampaignTransition.EffectIntent> effectConsumer
+	) {
+		java.util.Objects.requireNonNull(player, "player");
+		java.util.Objects.requireNonNull(effectConsumer, "effectConsumer");
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()) {
+			return CampaignTransition.noOp(Optional.empty(), "wrong_thread");
+		}
+
+		CampaignSavedData data = CampaignSavedData.get(level);
+		Optional<PlayerCampaignState> current = data.player(player.getUUID());
+		if (player.isSpectator()) {
+			return CampaignTransition.noOp(current, "spectator");
+		}
+		long observedGameTime = level.getGameTime();
+		long deadlineGameTime;
+		try {
+			deadlineGameTime = InfiniteSlidesRemoteItem.Cooldown.deadline(observedGameTime);
+		}
+		catch (ArithmeticException exception) {
+			return CampaignTransition.noOp(current, "remote_clock_overflow");
+		}
+		return apply(
+				data,
+				new CampaignEvent.StartRemoteCooldown(
+						player.getUUID(),
+						observedGameTime,
+						deadlineGameTime
+				),
+				effectConsumer
+		);
 	}
 
 	static CampaignTransition apply(

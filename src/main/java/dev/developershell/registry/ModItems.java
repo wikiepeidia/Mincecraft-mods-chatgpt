@@ -2,6 +2,7 @@ package dev.developershell.registry;
 
 import dev.developershell.item.CursedInternshipContractItem;
 import dev.developershell.item.AttendanceSheetItem;
+import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.item.RetakeFormItem;
 import java.util.function.Function;
 import net.minecraft.core.Registry;
@@ -28,8 +29,11 @@ public final class ModItems {
 			AttendanceSheetItem::new,
 			new Item.Properties().stacksTo(1)
 	);
-	public static final Item INFINITE_SLIDES_REMOTE =
-			register(ModItemIds.INFINITE_SLIDES_REMOTE, Item::new, new Item.Properties().stacksTo(1));
+	public static final InfiniteSlidesRemoteItem INFINITE_SLIDES_REMOTE = register(
+			ModItemIds.INFINITE_SLIDES_REMOTE,
+			InfiniteSlidesRemoteItem::new,
+			new Item.Properties().stacksTo(1)
+	);
 
 	private static <T extends Item> T register(
 			ResourceKey<Item> key,
@@ -42,6 +46,7 @@ public final class ModItems {
 
 	public static void initialize() {
 		// Class loading performs unconditional stable registration before behavior hooks.
+		INFINITE_SLIDES_REMOTE.registerUseCallback();
 	}
 
 	private ModItems() {

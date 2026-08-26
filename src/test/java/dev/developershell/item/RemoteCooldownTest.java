@@ -22,43 +22,43 @@ final class RemoteCooldownTest {
 	@Test
 	void exactDeadlineAndCeilingSecondsUseServerTickArithmetic() {
 		assertEquals(400, InfiniteSlidesRemoteItem.COOLDOWN_TICKS);
-		assertEquals(400L, InfiniteSlidesRemoteItem.cooldownDeadline(0L));
-		assertEquals(1_634L, InfiniteSlidesRemoteItem.cooldownDeadline(1_234L));
+		assertEquals(400L, InfiniteSlidesRemoteItem.Cooldown.deadline(0L));
+		assertEquals(1_634L, InfiniteSlidesRemoteItem.Cooldown.deadline(1_234L));
 		assertThrows(
 				ArithmeticException.class,
-				() -> InfiniteSlidesRemoteItem.cooldownDeadline(Long.MAX_VALUE - 399L)
+				() -> InfiniteSlidesRemoteItem.Cooldown.deadline(Long.MAX_VALUE - 399L)
 		);
 
 		long deadline = 1_400L;
-		assertEquals(20, InfiniteSlidesRemoteItem.remainingSeconds(deadline, 1_000L));
-		assertEquals(20, InfiniteSlidesRemoteItem.remainingSeconds(deadline, 1_001L));
-		assertEquals(19, InfiniteSlidesRemoteItem.remainingSeconds(deadline, 1_020L));
-		assertEquals(1, InfiniteSlidesRemoteItem.remainingSeconds(deadline, 1_399L));
-		assertEquals(0, InfiniteSlidesRemoteItem.remainingSeconds(deadline, deadline));
-		assertEquals(0, InfiniteSlidesRemoteItem.remainingSeconds(deadline, deadline + 1L));
+		assertEquals(20, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, 1_000L));
+		assertEquals(20, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, 1_001L));
+		assertEquals(19, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, 1_020L));
+		assertEquals(1, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, 1_399L));
+		assertEquals(0, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, deadline));
+		assertEquals(0, InfiniteSlidesRemoteItem.Cooldown.remainingSeconds(deadline, deadline + 1L));
 	}
 
 	@Test
 	void overlayRestoreIsClampedAndReadyNoticeIsOneExactDeadlineEdge() {
-		assertEquals(400, InfiniteSlidesRemoteItem.restoredOverlayTicks(1_500L, 1_000L));
-		assertEquals(399, InfiniteSlidesRemoteItem.restoredOverlayTicks(1_399L, 1_000L));
-		assertEquals(1, InfiniteSlidesRemoteItem.restoredOverlayTicks(1_001L, 1_000L));
-		assertEquals(0, InfiniteSlidesRemoteItem.restoredOverlayTicks(1_000L, 1_000L));
-		assertEquals(0, InfiniteSlidesRemoteItem.restoredOverlayTicks(999L, 1_000L));
+		assertEquals(400, InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(1_500L, 1_000L));
+		assertEquals(399, InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(1_399L, 1_000L));
+		assertEquals(1, InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(1_001L, 1_000L));
+		assertEquals(0, InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(1_000L, 1_000L));
+		assertEquals(0, InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(999L, 1_000L));
 
-		assertFalse(InfiniteSlidesRemoteItem.readyNoticeDue(0L, 0L, 10_000L));
-		assertFalse(InfiniteSlidesRemoteItem.readyNoticeDue(1_400L, 0L, 1_399L));
-		assertTrue(InfiniteSlidesRemoteItem.readyNoticeDue(1_400L, 0L, 1_400L));
-		assertTrue(InfiniteSlidesRemoteItem.readyNoticeDue(1_400L, 1_000L, 1_401L));
-		assertFalse(InfiniteSlidesRemoteItem.readyNoticeDue(1_400L, 1_400L, 1_400L));
-		assertFalse(InfiniteSlidesRemoteItem.readyNoticeDue(1_400L, 1_500L, 1_500L));
+		assertFalse(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(0L, 0L, 10_000L));
+		assertFalse(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(1_400L, 0L, 1_399L));
+		assertTrue(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(1_400L, 0L, 1_400L));
+		assertTrue(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(1_400L, 1_000L, 1_401L));
+		assertFalse(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(1_400L, 1_400L, 1_400L));
+		assertFalse(InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(1_400L, 1_500L, 1_500L));
 	}
 
 	@Test
 	void acceptedDeadlineAndReadyEventsAreOwnerBoundAndReplaySafe() {
 		PlayerCampaignState passed = passedState();
 		long observed = 1_000L;
-		long deadline = InfiniteSlidesRemoteItem.cooldownDeadline(observed);
+		long deadline = InfiniteSlidesRemoteItem.Cooldown.deadline(observed);
 		CampaignEvent.StartRemoteCooldown start =
 				new CampaignEvent.StartRemoteCooldown(OWNER, observed, deadline);
 
