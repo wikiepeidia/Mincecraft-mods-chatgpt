@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-05-PLAN.md
-last_updated: "2026-08-26T19:28:31.135Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-08-26T20:01:12.697Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 6d936e41b42db64663296466c32bb6c3f1be9c2a
+state_head: fe29401b0fb547d265e06bea6c6844baeb0cc4ee
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 12
+  completed_plans: 13
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 9 of 18
+Plan: 10 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -70,6 +70,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P04 | 25min | 2 tasks | 8 files |
 | Phase 02 P16 | 12min | 1 tasks | 5 files |
 | Phase 02 P05 | 22min | 2 tasks | 8 files |
+| Phase 02-persistent-lecture-vertical-slice P06 | 27min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Live runtime exits require exact owner, encounter, Professor UUID, and attempt identity before cleanup.
 - [Phase 02]: Disk-loaded Professors normalize matching ACTIVE progress to safe Retake and never resume combat.
 - [Phase 02]: The real SERVER_STOPPING callback and in-process GameTest share one server-wide state-first handler.
+- [Phase 02]: Plan 02-06: Four-block headroom applies only to the 15x15 combat interior; the full 17x17 boundary remains solid, loaded, and border-safe.
+- [Phase 02]: Plan 02-06: Contract validation produces one immutable Accepted geometry value consumed unchanged by runtime and CampaignService.
+- [Phase 02]: Plan 02-06: Retry scans a duplicate-free behind-and-beside Chebyshev wedge from radius two through five, beginning at L-2F.
+- [Phase 02]: Plan 02-06: Professor spawn capacity includes type availability, border/block collision, and exact-AABB entity occupancy before START persistence.
 
 ### Pending Todos
 
@@ -126,6 +131,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T19:28:31.023Z
-Stopped at: Completed 02-05-PLAN.md
+Last session: 2026-08-26T20:01:12.566Z
+Stopped at: Completed 02-06-PLAN.md
 Resume file: None

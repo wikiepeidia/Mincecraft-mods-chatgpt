@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 6
-total_count: 6
-last_updated: 2026-08-26T19:27:38.589Z
+fixed_count: 9
+total_count: 9
+last_updated: 2026-08-26T19:58:24.758Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,9 @@ last_updated: 2026-08-26T19:27:38.589Z
 | 4 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignSavedData.java | 155 | Preserve mismatched UUID map-key records while marking schema-1 data read-only. | fixed |  | 2026-08-26T18:42:52.733Z | 2026-08-26T18:43:17.572Z |
 | 5 | 02 | deviation | src/main/java/dev/developershell/lecture/LectureEncounterManager.java |  | Scoped the deterministic timeout GameTest seam per encounter to avoid advancing concurrent runtimes | fixed |  | 2026-08-26T19:27:11.372Z | 2026-08-26T19:27:34.311Z |
 | 6 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Delayed the server-wide stop seam test until concurrent runtime tests finish | fixed |  | 2026-08-26T19:27:11.777Z | 2026-08-26T19:27:38.589Z |
+| 7 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java |  | Routed accepted Contract geometry through CampaignService and DevelopersHellRuntime to eliminate duplicate validation and preserve state-first atomic starts | fixed |  | 2026-08-26T19:58:18.510Z | 2026-08-26T19:58:24.067Z |
+| 8 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java |  | Retained the legacy server-side start signature as a thin adapter to the sole ArenaValidator for lifecycle GameTest compatibility | fixed |  | 2026-08-26T19:58:18.859Z | 2026-08-26T19:58:24.406Z |
+| 9 | 02 | deviation | src/main/java/dev/developershell/lecture/ArenaValidator.java |  | Added explicit entity occupancy to Professor spawn-capacity preflight because block collision alone permits overlapping spawns | fixed |  | 2026-08-26T19:58:19.238Z | 2026-08-26T19:58:24.758Z |
 
 ````json
 [
@@ -95,6 +98,42 @@ last_updated: 2026-08-26T19:27:38.589Z
     "reason": "",
     "recorded_at": "2026-08-26T19:27:11.777Z",
     "resolved_at": "2026-08-26T19:27:38.589Z"
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/campaign/CampaignService.java",
+    "line": null,
+    "description": "Routed accepted Contract geometry through CampaignService and DevelopersHellRuntime to eliminate duplicate validation and preserve state-first atomic starts",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T19:58:18.510Z",
+    "resolved_at": "2026-08-26T19:58:24.067Z"
+  },
+  {
+    "id": 8,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/campaign/CampaignService.java",
+    "line": null,
+    "description": "Retained the legacy server-side start signature as a thin adapter to the sole ArenaValidator for lifecycle GameTest compatibility",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T19:58:18.859Z",
+    "resolved_at": "2026-08-26T19:58:24.406Z"
+  },
+  {
+    "id": 9,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/lecture/ArenaValidator.java",
+    "line": null,
+    "description": "Added explicit entity occupancy to Professor spawn-capacity preflight because block collision alone permits overlapping spawns",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T19:58:19.238Z",
+    "resolved_at": "2026-08-26T19:58:24.758Z"
   }
 ]
 ````
