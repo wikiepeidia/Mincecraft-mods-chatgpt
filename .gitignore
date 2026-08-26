@@ -3,7 +3,7 @@
 
 # Log file
 *.log
-
+*.lock
 # BlueJ files
 *.ctxt
 
@@ -71,3 +71,4 @@ gradle.properties.local
 
 # The Gradle wrapper JAR is a required, reviewed source input.
 !gradle/wrapper/gradle-wrapper.jar
+.gsd/dispatch-isolation-sentinel.json
