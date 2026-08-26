@@ -21,11 +21,14 @@ final class CampaignReducerTest {
 	private static final UUID OTHER_OWNER = UUID.fromString("c0de0000-0000-4000-8000-000000000402");
 	private static final UUID ENCOUNTER = UUID.fromString("c0de0000-0000-4000-8000-000000000411");
 	private static final UUID OTHER_ENCOUNTER = UUID.fromString("c0de0000-0000-4000-8000-000000000412");
+	private static final UUID STALE_ENCOUNTER = UUID.fromString("c0de0000-0000-4000-8000-000000000413");
 	private static final UUID PROFESSOR = UUID.fromString("c0de0000-0000-4000-8000-000000000421");
 	private static final UUID OTHER_PROFESSOR = UUID.fromString("c0de0000-0000-4000-8000-000000000422");
 	private static final UUID FALLBACK = UUID.fromString("c0de0000-0000-4000-8000-000000000431");
 	private static final UUID OTHER_FALLBACK = UUID.fromString("c0de0000-0000-4000-8000-000000000432");
+	private static final UUID THIRD_FALLBACK = UUID.fromString("c0de0000-0000-4000-8000-000000000433");
 	private static final BlockPos DESK = new BlockPos(40, 72, -12);
+	private static final BlockPos OTHER_DESK = new BlockPos(41, 72, -12);
 	private static final BlockPos RETRY = new BlockPos(40, 72, -14);
 	private static final long EVENT_ORDER_SEED = 0x02_04_2026L;
 
@@ -58,18 +61,27 @@ final class CampaignReducerTest {
 				false,
 				false,
 				true,
+				ENCOUNTER,
+				null,
 				FALLBACK,
 				900L,
 				2L,
 				800L
 		);
-		CampaignEvent.Start retryStart = startEvent(OWNER, OTHER_ENCOUNTER, OTHER_PROFESSOR);
+		CampaignEvent.Start retryStart = retakeStartEvent(
+				OWNER,
+				OTHER_ENCOUNTER,
+				OTHER_PROFESSOR,
+				retake.retakeKey().orElseThrow()
+		);
 		CampaignTransition retried = CampaignReducer.reduce(Optional.of(retake), retryStart);
 		assertAccepted(retried, "start_accepted");
 		PlayerCampaignState retriedState = retried.nextState().orElseThrow();
 		assertEquals(4, retriedState.attemptCount());
 		assertEquals(new PlayerCampaignState.EncounterRef(OWNER, OTHER_ENCOUNTER, OTHER_PROFESSOR, 4), retriedState.activeEncounterRef());
 		assertFalse(retriedState.retakeEntitled());
+		assertTrue(retriedState.retakeKey().isEmpty());
+		assertEquals(null, retriedState.retakeFallbackReservationUuid());
 		assertEquals(null, retriedState.retakeFallbackEntityUuid());
 		assertEquals(900L, retriedState.remoteCooldownUntilGameTime());
 		assertEquals(2L, retriedState.sheetRecoverySequence());
@@ -80,6 +92,42 @@ final class CampaignReducerTest {
 				retake,
 				"wrong_owner"
 		);
+	}
+
+	@Test
+	void terminalAndReloadCreateOneEncounterBoundEntitlementAcrossEveryReplayOrder() {
+		PlayerCampaignState active = activeState(OWNER, ENCOUNTER, PROFESSOR, 4);
+		CampaignEvent.Terminal terminal = new CampaignEvent.Terminal(
+				OWNER,
+				ENCOUNTER,
+				TerminalReason.DEATH
+		);
+		CampaignEvent.NormalizeReload reload = new CampaignEvent.NormalizeReload(OWNER, ENCOUNTER);
+
+		CampaignTransition terminalFirst = CampaignReducer.reduce(Optional.of(active), terminal);
+		assertAccepted(terminalFirst, "terminal_death");
+		PlayerCampaignState terminalState = terminalFirst.nextState().orElseThrow();
+		assertEquals(
+				new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 4),
+				terminalState.retakeKey().orElseThrow()
+		);
+		assertNoOp(CampaignReducer.reduce(terminalFirst.nextState(), terminal), terminalState, "no_active_encounter");
+		assertNoOp(CampaignReducer.reduce(terminalFirst.nextState(), reload), terminalState, "no_active_encounter");
+		assertNoOp(
+				CampaignReducer.reduce(
+						terminalFirst.nextState(),
+						new CampaignEvent.Terminal(OWNER, STALE_ENCOUNTER, TerminalReason.ENTITY_UNLOAD)
+				),
+				terminalState,
+				"no_active_encounter"
+		);
+
+		CampaignTransition reloadFirst = CampaignReducer.reduce(Optional.of(active), reload);
+		assertAccepted(reloadFirst, "reload_normalized");
+		PlayerCampaignState reloadState = reloadFirst.nextState().orElseThrow();
+		assertEquals(terminalState.retakeKey(), reloadState.retakeKey());
+		assertNoOp(CampaignReducer.reduce(reloadFirst.nextState(), terminal), reloadState, "no_active_encounter");
+		assertMonotonicFieldsEqual(active, reloadState);
 	}
 
 	@Test
@@ -107,6 +155,12 @@ final class CampaignReducerTest {
 			assertEquals(active.chapter(), failed.chapter(), reason.serializedName());
 			assertEquals(null, failed.activeEncounterRef(), reason.serializedName());
 			assertTrue(failed.retakeEntitled(), reason.serializedName());
+			assertEquals(
+					new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 4),
+					failed.retakeKey().orElseThrow(),
+					reason.serializedName()
+			);
+			assertEquals(null, failed.retakeFallbackReservationUuid(), reason.serializedName());
 			assertEquals(active.sheetEntitled(), failed.sheetEntitled(), reason.serializedName());
 			assertEquals(active.remoteIssued(), failed.remoteIssued(), reason.serializedName());
 			assertEquals(active.remoteCooldownUntilGameTime(), failed.remoteCooldownUntilGameTime(), reason.serializedName());
@@ -140,6 +194,8 @@ final class CampaignReducerTest {
 		assertEquals(PlayerCampaignState.LectureStatus.RETAKE_READY, normalized.status());
 		assertEquals(null, normalized.activeEncounterRef());
 		assertTrue(normalized.retakeEntitled());
+		assertEquals(new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER, 2), normalized.retakeKey().orElseThrow());
+		assertEquals(null, normalized.retakeFallbackReservationUuid());
 		assertEquals(2, normalized.attemptCount());
 		assertEquals(List.of(
 				new EffectIntent.CleanupEncounter(OWNER, ENCOUNTER, "reload_normalization"),
@@ -174,6 +230,8 @@ final class CampaignReducerTest {
 		assertTrue(passed.sheetEntitled());
 		assertTrue(passed.remoteIssued());
 		assertFalse(passed.retakeEntitled());
+		assertTrue(passed.retakeKey().isEmpty());
+		assertEquals(null, passed.retakeFallbackReservationUuid());
 		assertEquals(List.of(
 				new EffectIntent.CleanupEncounter(OWNER, ENCOUNTER, "victory"),
 				new EffectIntent.GrantFirstRewards(OWNER)
@@ -210,32 +268,58 @@ final class CampaignReducerTest {
 	@Test
 	void retakeFallbackReservationAndLossAreReplaySafe() {
 		PlayerCampaignState failed = failedState(OWNER, 3, null);
-		CampaignEvent.ReconcileRetake reconcile = new CampaignEvent.ReconcileRetake(OWNER, FALLBACK);
+		PlayerCampaignState.RetakeKey key = failed.retakeKey().orElseThrow();
+		CampaignEvent.ReconcileRetake reconcile = new CampaignEvent.ReconcileRetake(OWNER, key, FALLBACK);
 
 		CampaignTransition reserved = CampaignReducer.reduce(Optional.of(failed), reconcile);
 		assertAccepted(reserved, "retake_fallback_reserved");
-		PlayerCampaignState withFallback = reserved.nextState().orElseThrow();
-		assertEquals(FALLBACK, withFallback.retakeFallbackEntityUuid());
+		PlayerCampaignState withReservation = reserved.nextState().orElseThrow();
+		assertEquals(FALLBACK, withReservation.retakeFallbackReservationUuid());
+		assertEquals(null, withReservation.retakeFallbackEntityUuid());
 		assertEquals(List.of(new EffectIntent.MaterializeRetakeFallback(OWNER, FALLBACK)), reserved.intents());
-		assertMonotonicFieldsEqual(failed, withFallback);
+		assertMonotonicFieldsEqual(failed, withReservation);
 
-		assertNoOp(CampaignReducer.reduce(reserved.nextState(), reconcile), withFallback, "retake_representation_exists");
+		assertNoOp(CampaignReducer.reduce(reserved.nextState(), reconcile), withReservation, "retake_representation_exists");
 		assertNoOp(
-				CampaignReducer.reduce(Optional.of(failed), new CampaignEvent.ReconcileRetake(OTHER_OWNER, FALLBACK)),
+				CampaignReducer.reduce(
+						Optional.of(failed),
+						new CampaignEvent.ReconcileRetake(
+								OWNER,
+								new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER, key.attemptNumber()),
+								FALLBACK
+						)
+				),
 				failed,
-				"wrong_owner"
+				"wrong_retake"
 		);
+
+		CampaignEvent.RetakeFallback materialized = new CampaignEvent.RetakeFallback(
+				OWNER,
+				key,
+				FALLBACK,
+				FallbackOperation.MATERIALIZED
+		);
+		CampaignTransition committed = CampaignReducer.reduce(Optional.of(withReservation), materialized);
+		assertAccepted(committed, "retake_fallback_materialized");
+		PlayerCampaignState withFallback = committed.nextState().orElseThrow();
+		assertEquals(null, withFallback.retakeFallbackReservationUuid());
+		assertEquals(FALLBACK, withFallback.retakeFallbackEntityUuid());
+		assertTrue(committed.intents().isEmpty());
+		assertNoOp(CampaignReducer.reduce(committed.nextState(), materialized), withFallback, "wrong_fallback");
 
 		CampaignEvent.RetakeFallback lost = new CampaignEvent.RetakeFallback(
 				OWNER,
+				key,
 				FALLBACK,
 				FallbackOperation.LOST
 		);
 		CampaignTransition cleared = CampaignReducer.reduce(Optional.of(withFallback), lost);
 		assertAccepted(cleared, "retake_fallback_lost");
 		PlayerCampaignState recoverable = cleared.nextState().orElseThrow();
+		assertEquals(null, recoverable.retakeFallbackReservationUuid());
 		assertEquals(null, recoverable.retakeFallbackEntityUuid());
 		assertTrue(recoverable.retakeEntitled());
+		assertEquals(key, recoverable.retakeKey().orElseThrow());
 		assertEquals(List.of(new EffectIntent.ReconcileRetake(OWNER)), cleared.intents());
 		assertMonotonicFieldsEqual(withFallback, recoverable);
 
@@ -243,11 +327,87 @@ final class CampaignReducerTest {
 		assertNoOp(
 				CampaignReducer.reduce(Optional.of(withFallback), new CampaignEvent.RetakeFallback(
 						OWNER,
+						key,
 						OTHER_FALLBACK,
 						FallbackOperation.LOST
 				)),
 				withFallback,
 				"wrong_fallback"
+		);
+
+		CampaignTransition replacementReserved = CampaignReducer.reduce(
+				cleared.nextState(),
+				new CampaignEvent.ReconcileRetake(OWNER, key, OTHER_FALLBACK)
+		);
+		assertAccepted(replacementReserved, "retake_fallback_reserved");
+		PlayerCampaignState replacement = replacementReserved.nextState().orElseThrow();
+		assertEquals(OTHER_FALLBACK, replacement.retakeFallbackReservationUuid());
+		assertNoOp(CampaignReducer.reduce(Optional.of(replacement), lost), replacement, "wrong_fallback");
+
+		CampaignTransition failedMaterialization = CampaignReducer.reduce(
+				Optional.of(replacement),
+				new CampaignEvent.RetakeFallback(
+						OWNER,
+						key,
+						OTHER_FALLBACK,
+						FallbackOperation.MATERIALIZATION_FAILED
+				)
+		);
+		assertAccepted(failedMaterialization, "retake_fallback_materialization_failed");
+		assertEquals(null, failedMaterialization.nextState().orElseThrow().retakeFallbackReservationUuid());
+		assertEquals(List.of(new EffectIntent.ReconcileRetake(OWNER)), failedMaterialization.intents());
+	}
+
+	@Test
+	void retryRequiresCurrentEntitlementAndMatchingDeskBeforeAtomicStart() {
+		PlayerCampaignState failed = failedState(OWNER, 6, ENCOUNTER, FALLBACK);
+		PlayerCampaignState.RetakeKey key = failed.retakeKey().orElseThrow();
+
+		CampaignEvent.Start stale = retakeStartEvent(
+				OWNER,
+				OTHER_ENCOUNTER,
+				OTHER_PROFESSOR,
+				new PlayerCampaignState.RetakeKey(OWNER, STALE_ENCOUNTER, key.attemptNumber())
+		);
+		assertNoOp(CampaignReducer.reduce(Optional.of(failed), stale), failed, "wrong_retake");
+
+		CampaignEvent.Start wrongDesk = new CampaignEvent.Start(
+				OWNER,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				OTHER_DESK,
+				Direction.NORTH,
+				RETRY,
+				OTHER_ENCOUNTER,
+				OTHER_PROFESSOR,
+				key
+		);
+		assertNoOp(CampaignReducer.reduce(Optional.of(failed), wrongDesk), failed, "wrong_retake_desk");
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(failed), startEvent(OWNER, OTHER_ENCOUNTER, OTHER_PROFESSOR)),
+				failed,
+				"missing_retake_key"
+		);
+
+		CampaignTransition accepted = CampaignReducer.reduce(
+				Optional.of(failed),
+				retakeStartEvent(OWNER, OTHER_ENCOUNTER, OTHER_PROFESSOR, key)
+		);
+		assertAccepted(accepted, "start_accepted");
+		PlayerCampaignState active = accepted.nextState().orElseThrow();
+		assertEquals(7, active.attemptCount());
+		assertEquals(PlayerCampaignState.LectureStatus.ACTIVE, active.status());
+		assertTrue(active.retakeKey().isEmpty());
+		assertEquals(null, active.retakeFallbackReservationUuid());
+		assertEquals(null, active.retakeFallbackEntityUuid());
+		assertMonotonicFieldsEqual(failed, active);
+		assertNoOp(CampaignReducer.reduce(accepted.nextState(), stale), active, "start_not_ready");
+		assertNoOp(
+				CampaignReducer.reduce(
+						accepted.nextState(),
+						new CampaignEvent.RetakeFallback(OWNER, key, FALLBACK, FallbackOperation.LOST)
+				),
+				active,
+				"retake_not_entitled"
 		);
 	}
 
@@ -372,6 +532,24 @@ final class CampaignReducerTest {
 		);
 	}
 
+	private static CampaignEvent.Start retakeStartEvent(
+			UUID ownerUuid,
+			UUID encounterUuid,
+			UUID professorUuid,
+			PlayerCampaignState.RetakeKey retakeKey
+	) {
+		return new CampaignEvent.Start(
+				ownerUuid,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				encounterUuid,
+				professorUuid,
+				retakeKey
+		);
+	}
+
 	private static PlayerCampaignState activeState(UUID ownerUuid, UUID encounterUuid, UUID professorUuid, int attempt) {
 		return state(
 				ownerUuid,
@@ -383,6 +561,8 @@ final class CampaignReducerTest {
 				false,
 				false,
 				null,
+				null,
+				null,
 				900L,
 				2L,
 				800L
@@ -390,6 +570,15 @@ final class CampaignReducerTest {
 	}
 
 	private static PlayerCampaignState failedState(UUID ownerUuid, int attempt, UUID fallbackUuid) {
+		return failedState(ownerUuid, attempt, ENCOUNTER, fallbackUuid);
+	}
+
+	private static PlayerCampaignState failedState(
+			UUID ownerUuid,
+			int attempt,
+			UUID failedEncounterUuid,
+			UUID fallbackUuid
+	) {
 		return state(
 				ownerUuid,
 				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
@@ -399,6 +588,8 @@ final class CampaignReducerTest {
 				false,
 				false,
 				true,
+				failedEncounterUuid,
+				null,
 				fallbackUuid,
 				900L,
 				2L,
@@ -423,6 +614,8 @@ final class CampaignReducerTest {
 				true,
 				false,
 				null,
+				null,
+				null,
 				cooldownDeadline,
 				sheetRecoverySequence,
 				readyNoticeDeadline
@@ -438,6 +631,8 @@ final class CampaignReducerTest {
 			boolean sheetEntitled,
 			boolean remoteIssued,
 			boolean retakeEntitled,
+			UUID retakeEncounterUuid,
+			UUID fallbackReservationUuid,
 			UUID fallbackUuid,
 			long cooldownDeadline,
 			long sheetRecoverySequence,
@@ -456,6 +651,8 @@ final class CampaignReducerTest {
 				sheetEntitled,
 				remoteIssued,
 				retakeEntitled,
+				retakeEncounterUuid,
+				fallbackReservationUuid,
 				fallbackUuid,
 				cooldownDeadline,
 				sheetRecoverySequence,

@@ -42,6 +42,8 @@ final class CampaignCodecTest {
 				true,
 				true,
 				true,
+				ENCOUNTER,
+				null,
 				FALLBACK,
 				9_000L,
 				6L,
@@ -55,6 +57,8 @@ final class CampaignCodecTest {
 		assertEquals(encodeUuid(OWNER), encodedPlayer.get("map_key_uuid"));
 		assertEquals("lecture_passed", encodedPlayer.get("chapter").getAsString());
 		assertEquals("passed", encodedPlayer.get("lecture_status").getAsString());
+		assertEquals(encodeUuid(ENCOUNTER), encodedPlayer.get("retake_encounter_uuid"));
+		assertFalse(encodedPlayer.has("retake_fallback_reservation_uuid"));
 		assertEquals(6L, encodedPlayer.get("sheet_recovery_sequence").getAsLong());
 		assertEquals(8_000L, encodedPlayer.get("remote_ready_notice_for_deadline_game_time").getAsLong());
 
@@ -64,6 +68,43 @@ final class CampaignCodecTest {
 		assertTrue(decoded.hasValidOwnerKeys());
 		assertEquals(state, decoded.player(OWNER).orElseThrow());
 		assertEquals(root, encode(decoded));
+	}
+
+	@Test
+	void legacySchemaOneRetakeBackfillsOnlyMissingOptionalIdentity() {
+		PlayerCampaignState state = new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.RETAKE_READY,
+				3,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				false,
+				false,
+				true,
+				ENCOUNTER,
+				null,
+				FALLBACK,
+				0L,
+				0L,
+				0L
+		);
+		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, state))).getAsJsonObject();
+		JsonObject encodedPlayer = root.getAsJsonArray("players").get(0).getAsJsonObject();
+		encodedPlayer.remove("retake_encounter_uuid");
+
+		CampaignSavedData decoded = decode(root);
+		PlayerCampaignState migrated = decoded.player(OWNER).orElseThrow();
+		assertTrue(decoded.isWritableSchema());
+		assertTrue(migrated.retakeEntitled());
+		assertEquals(OWNER, migrated.retakeKey().orElseThrow().ownerUuid());
+		assertEquals(3, migrated.retakeKey().orElseThrow().attemptNumber());
+		assertEquals(FALLBACK, migrated.retakeFallbackEntityUuid());
+		assertTrue(encode(decoded).getAsJsonObject().getAsJsonArray("players").get(0).getAsJsonObject()
+				.has("retake_encounter_uuid"));
 	}
 
 	@Test
