@@ -172,6 +172,16 @@ public final class CampaignService {
 		return apply(CampaignSavedData.get(level), event, effectConsumer);
 	}
 
+	/** Read-only state view for bounded server-side adapters such as Retake reconciliation. */
+	public static Optional<PlayerCampaignState> snapshot(ServerLevel level, UUID ownerUuid) {
+		java.util.Objects.requireNonNull(level, "level");
+		java.util.Objects.requireNonNull(ownerUuid, "ownerUuid");
+		if (!level.getServer().isSameThread()) {
+			return Optional.empty();
+		}
+		return CampaignSavedData.get(level).player(ownerUuid);
+	}
+
 	static CampaignTransition apply(
 			CampaignSavedData data,
 			CampaignEvent event,
