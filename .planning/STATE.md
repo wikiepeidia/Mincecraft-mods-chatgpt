@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-17-PLAN.md
-last_updated: "2026-08-26T22:40:12.548Z"
+stopped_at: Completed 02-12-PLAN.md
+last_updated: "2026-08-26T22:57:59.928Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 2b123321e947e87862cbe106c20335647e055909
+state_head: 3e8889c5c3490a4c3604d63c68255aeed736cad6
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 19
+  completed_plans: 20
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 16 of 18
+Plan: 17 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -77,6 +77,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02-persistent-lecture-vertical-slice P10 | 29min | 2 tasks | 12 files |
 | Phase 02-persistent-lecture-vertical-slice P11 | 9min | 1 tasks | 4 files |
 | Phase 02 P17 | 24min | 1 tasks | 10 files |
+| Phase 02 P12 | 14min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Keep CampaignService.victory callable for source compatibility but deprecate it as a false-returning no-op with no persistence or effects.
 - [Phase 02]: Bind every Attendance Sheet to owner UUID and sheetRecoverySequence, incrementing that persisted generation before restoring a missing Sheet.
 - [Phase 02]: Preserve Retake priority at the Desk and reuse campaign schema 1 rather than adding a physical-item ledger.
+- [Phase 02]: Plan 02-12: Reuse the frozen optional schema-v1 Remote deadline and notice fields/events; no persistence widening or version bump.
+- [Phase 02]: Plan 02-12: Route held Remote use through Fabric UseItemCallback before vanilla cooldown rejection while leaving the client PASS-only and the persisted server deadline authoritative.
+- [Phase 02]: Plan 02-12: Dispatch the capped six-block/six-target slide only from the accepted post-setDirty cooldown intent.
 
 ### Pending Todos
 
@@ -157,6 +161,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T22:40:12.392Z
-Stopped at: Completed 02-17-PLAN.md
+Last session: 2026-08-26T22:57:59.800Z
+Stopped at: Completed 02-12-PLAN.md
 Resume file: None

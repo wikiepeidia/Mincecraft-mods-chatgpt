@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 16
-total_count: 16
-last_updated: 2026-08-26T22:39:28.514Z
+fixed_count: 18
+total_count: 18
+last_updated: 2026-08-26T22:59:27.950Z
 ---
 
 # Broken Windows Ledger
@@ -31,6 +31,8 @@ last_updated: 2026-08-26T22:39:28.514Z
 | 14 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Approved retained lifecycle expectations include issued copy only when reconciliation materializes a Form | fixed |  | 2026-08-26T21:04:59.387Z | 2026-08-26T21:05:24.751Z |
 | 15 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java | 128 | Deauthorized the carried legacy entity and compatibility reward paths so only the manager accepted persisted transition reaches RewardService | fixed |  | 2026-08-26T22:39:23.172Z | 2026-08-26T22:39:28.191Z |
 | 16 | 02 | deviation | src/gametest/java/dev/developershell/gametest/RewardGameTests.java | 554 | Made nullable campaign preservation assertions null-safe after the clean transformed gate exposed the test helper dereference | fixed |  | 2026-08-26T22:39:23.504Z | 2026-08-26T22:39:28.514Z |
+| 17 | 02 | deviation | src/main/java/dev/developershell/item/InfiniteSlidesRemoteItem.java |  | Resolved native cooldown short-circuit with a guarded pre-vanilla Fabric use callback. | fixed |  | 2026-08-26T22:58:17.641Z | 2026-08-26T22:59:27.025Z |
+| 18 | 02 | deviation | src/main/java/dev/developershell/item/InfiniteSlidesRemoteItem.java |  | Isolated cooldown arithmetic from Loader JUnit item-registry bootstrap. | fixed |  | 2026-08-26T22:58:17.943Z | 2026-08-26T22:59:27.950Z |
 
 ````json
 [
@@ -225,6 +227,30 @@ last_updated: 2026-08-26T22:39:28.514Z
     "reason": "",
     "recorded_at": "2026-08-26T22:39:23.504Z",
     "resolved_at": "2026-08-26T22:39:28.514Z"
+  },
+  {
+    "id": 17,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/item/InfiniteSlidesRemoteItem.java",
+    "line": null,
+    "description": "Resolved native cooldown short-circuit with a guarded pre-vanilla Fabric use callback.",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T22:58:17.641Z",
+    "resolved_at": "2026-08-26T22:59:27.025Z"
+  },
+  {
+    "id": 18,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/item/InfiniteSlidesRemoteItem.java",
+    "line": null,
+    "description": "Isolated cooldown arithmetic from Loader JUnit item-registry bootstrap.",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T22:58:17.943Z",
+    "resolved_at": "2026-08-26T22:59:27.950Z"
   }
 ]
 ````
