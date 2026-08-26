@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 current_phase: 01
 current_phase_name: Java 25 and Fabric 26.2 Foundation
-status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-08-25T20:49:14.386Z"
+status: verifying
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-08-26T12:08:17.516Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 01 execution started
-state_head: 8e8729625704e49e97841c82717e853349a52466
+state_head: 840763b22573f1f411ccd160d4df7b10516ccbbe
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 Phase: 01 (Java 25 and Fabric 26.2 Foundation) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-26 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P01 | 17 min | 2 tasks | 14 files |
 | Phase 01 P02 | 9 min | 1 tasks | 8 files |
 | Phase 01 P03 | 29 min | 1 tasks | 6 files |
+| Phase 01 P04 | 15h | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Recent decisions affecting current work:
 - [Phase 01]: Production tasks use the ordinary JAR, exact Fabric API, exact Java 25, and isolated profiles without remapJar.
 - [Phase 01]: Direct declarations are audited separately from fixed Loom injections and report-only transitives.
 - [Phase 01]: Plan 04 executes the committed hash-bound verification harness unchanged.
+- [Phase 01]: The release handoff remains one ordinary JAR whose online, same-cache-offline, retained-distribution, and runtime-copy SHA-256 values are identical.
+- [Phase 01]: The Foundation Token vanilla paper/map-style icon is accepted as the Phase 1 MVP appearance; bespoke art is later cosmetic polish.
+- [Phase 01]: System Temurin 25 is available for local convenience, while reproducible builds remain bound to checksum-pinned Temurin 25.0.4+7 under .work.
 
 ### Pending Todos
 
@@ -88,8 +92,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: Java 25 and the exact Fabric 26.2/Loader/API/Loom/Gradle tuple still require local compile proof; the researched workstation previously reported Java 21.
-- [Phase 1]: Freeze a verified Loom build rather than carrying an unresolved moving snapshot.
 - [Phase 5]: Every advertised entity/trait pairing and its disable/restore policy needs explicit GameTest proof.
 - [Phase 6]: Public naming, parody copy, performance caps, and generated-asset provenance remain release gates.
 
@@ -101,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-25T20:49:14.373Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-08-26T12:08:17.502Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None
