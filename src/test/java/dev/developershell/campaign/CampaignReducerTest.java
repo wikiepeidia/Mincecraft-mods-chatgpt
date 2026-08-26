@@ -8,10 +8,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.developershell.campaign.CampaignEvent.FallbackOperation;
 import dev.developershell.campaign.CampaignEvent.TerminalReason;
 import dev.developershell.campaign.CampaignTransition.EffectIntent;
+import dev.developershell.lecture.ArenaValidationResult;
+import dev.developershell.lecture.LectureGeometry;
+import dev.developershell.lecture.RetakeService;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import org.junit.jupiter.api.Test;
@@ -420,6 +426,126 @@ final class CampaignReducerTest {
 	}
 
 	@Test
+	void retakeServicePrefersInventoryAndClearsDuplicateFallbackStateFirst() {
+		PlayerCampaignState failed = failedState(OWNER, 3, FALLBACK);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.inventoryForm = true;
+		representations.fallbacks.add(FALLBACK);
+		RetakeService service = new RetakeService(campaign, representations, () -> OTHER_FALLBACK);
+
+		assertEquals(RetakeService.Outcome.ALREADY_PRESENT, service.reconcile(OWNER));
+		PlayerCampaignState reconciled = campaign.state(OWNER).orElseThrow();
+		assertTrue(reconciled.retakeEntitled());
+		assertEquals(null, reconciled.retakeFallbackEntityUuid());
+		assertTrue(representations.inventoryForm);
+		assertFalse(representations.fallbacks.contains(FALLBACK));
+		assertTrue(campaign.log.indexOf("apply:cleared") < campaign.log.indexOf("discard:state_first=true"));
+
+		int writes = campaign.applyCount;
+		assertEquals(RetakeService.Outcome.ALREADY_PRESENT, service.recover(OWNER));
+		assertEquals(writes, campaign.applyCount);
+		assertEquals(0, representations.insertAttempts);
+	}
+
+	@Test
+	void retakeServiceReservesBeforeFallbackAndRecoversMaterializationFailure() {
+		PlayerCampaignState failed = failedState(OWNER, 3, null);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.insertSucceeds = false;
+		representations.materializeSucceeds = false;
+		List<UUID> fallbackIds = new ArrayList<>(List.of(FALLBACK, OTHER_FALLBACK));
+		RetakeService service = new RetakeService(campaign, representations, () -> fallbackIds.remove(0));
+
+		assertEquals(RetakeService.Outcome.MATERIALIZATION_FAILED, service.reconcile(OWNER));
+		PlayerCampaignState recoverable = campaign.state(OWNER).orElseThrow();
+		assertTrue(recoverable.retakeEntitled());
+		assertEquals(null, recoverable.retakeFallbackReservationUuid());
+		assertEquals(null, recoverable.retakeFallbackEntityUuid());
+		assertTrue(campaign.log.indexOf("apply:reserve") < campaign.log.indexOf("materialize:reserved=true"));
+		assertTrue(campaign.log.indexOf("materialize:reserved=true") < campaign.log.indexOf("apply:materialization_failed"));
+
+		representations.materializeSucceeds = true;
+		assertEquals(RetakeService.Outcome.FALLBACK_ISSUED, service.recover(OWNER));
+		PlayerCampaignState represented = campaign.state(OWNER).orElseThrow();
+		assertEquals(null, represented.retakeFallbackReservationUuid());
+		assertEquals(OTHER_FALLBACK, represented.retakeFallbackEntityUuid());
+		assertEquals(Set.of(OTHER_FALLBACK), representations.fallbacks);
+		assertEquals(RetakeService.Outcome.ALREADY_PRESENT, service.reconcile(OWNER));
+		assertEquals(2, representations.insertAttempts);
+		assertEquals(2, representations.materializeAttempts);
+	}
+
+	@Test
+	void retakeServiceReplacesOneLostFallbackWithoutChangingProgression() {
+		PlayerCampaignState failed = failedState(OWNER, 5, FALLBACK);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.insertSucceeds = true;
+		RetakeService service = new RetakeService(campaign, representations, () -> OTHER_FALLBACK);
+
+		assertEquals(RetakeService.Outcome.INVENTORY_ISSUED, service.recover(OWNER));
+		PlayerCampaignState recovered = campaign.state(OWNER).orElseThrow();
+		assertMonotonicFieldsEqual(failed, recovered);
+		assertTrue(recovered.retakeEntitled());
+		assertEquals(null, recovered.retakeFallbackEntityUuid());
+		assertTrue(representations.inventoryForm);
+		assertTrue(campaign.log.indexOf("apply:lost") < campaign.log.indexOf("insert:state_entitled=true"));
+
+		int writes = campaign.applyCount;
+		assertEquals(RetakeService.Outcome.ALREADY_PRESENT, service.recover(OWNER));
+		assertEquals(writes, campaign.applyCount);
+		assertEquals(1, representations.insertAttempts);
+	}
+
+	@Test
+	void retakeServicePersistsAcceptedStartBeforePhysicalClearAndRejectsWithoutEffects() {
+		PlayerCampaignState failed = failedState(OWNER, 6, FALLBACK);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.inventoryForm = true;
+		representations.fallbacks.add(FALLBACK);
+		RetakeService service = new RetakeService(campaign, representations, () -> OTHER_FALLBACK);
+		List<EffectIntent> runtimeIntents = new ArrayList<>();
+
+		assertEquals(
+				RetakeService.Outcome.RETRY_REJECTED,
+				service.startRetake(
+						OWNER,
+						acceptedArena(OTHER_DESK),
+						OTHER_ENCOUNTER,
+						OTHER_PROFESSOR,
+						runtimeIntents::add
+				)
+		);
+		assertTrue(runtimeIntents.isEmpty());
+		assertTrue(representations.inventoryForm);
+		assertTrue(representations.fallbacks.contains(FALLBACK));
+		assertEquals(failed, campaign.state(OWNER).orElseThrow());
+
+		assertEquals(
+				RetakeService.Outcome.RETRY_ACCEPTED,
+				service.startRetake(
+						OWNER,
+						acceptedArena(DESK),
+						OTHER_ENCOUNTER,
+						OTHER_PROFESSOR,
+						runtimeIntents::add
+				)
+		);
+		PlayerCampaignState active = campaign.state(OWNER).orElseThrow();
+		assertEquals(PlayerCampaignState.LectureStatus.ACTIVE, active.status());
+		assertEquals(7, active.attemptCount());
+		assertFalse(active.retakeEntitled());
+		assertEquals(List.of(new EffectIntent.StartEncounter(active.activeEncounterRef())), runtimeIntents);
+		assertFalse(representations.inventoryForm);
+		assertFalse(representations.fallbacks.contains(FALLBACK));
+		assertTrue(campaign.log.indexOf("effect:start:persisted=true") < campaign.log.indexOf("consume:state_active=true"));
+		assertTrue(campaign.log.indexOf("effect:start:persisted=true") < campaign.log.indexOf("discard:state_first=true"));
+	}
+
+	@Test
 	void sheetRecoveryUsesMonotonicSequenceToSuppressReplays() {
 		PlayerCampaignState passed = passedState(OWNER, 4, 1_200L, 4L, 1_000L);
 		CampaignEvent.RecoverSheet recover = new CampaignEvent.RecoverSheet(OWNER, 4L);
@@ -538,6 +664,123 @@ final class CampaignReducerTest {
 				encounterUuid,
 				professorUuid
 		);
+	}
+
+	private static ArenaValidationResult.Accepted acceptedArena(BlockPos deskPos) {
+		LectureGeometry.Layout layout = LectureGeometry.layout(deskPos, Direction.NORTH);
+		return new ArenaValidationResult.Accepted(layout, layout.retryCandidates().get(0));
+	}
+
+	private static final class TestCampaignPort implements RetakeService.CampaignPort {
+		private final CampaignSavedData data;
+		private final List<String> log = new ArrayList<>();
+		private int applyCount;
+
+		private TestCampaignPort(PlayerCampaignState initialState) {
+			data = CampaignSavedData.createForTesting(java.util.Map.of(initialState.ownerUuid(), initialState));
+		}
+
+		@Override
+		public Optional<PlayerCampaignState> state(UUID ownerUuid) {
+			return data.player(ownerUuid);
+		}
+
+		@Override
+		public CampaignTransition apply(CampaignEvent event, Consumer<EffectIntent> effectConsumer) {
+			applyCount++;
+			if (event instanceof CampaignEvent.ReconcileRetake) {
+				log.add("apply:reserve");
+			}
+			else if (event instanceof CampaignEvent.RetakeFallback fallback) {
+				log.add("apply:" + fallback.operation().serializedName());
+			}
+			else if (event instanceof CampaignEvent.Start) {
+				log.add("apply:start");
+			}
+			return CampaignService.apply(data, event, intent -> {
+				if (intent instanceof EffectIntent.StartEncounter) {
+					boolean persisted = data.player(event.ownerUuid())
+							.map(state -> state.status() == PlayerCampaignState.LectureStatus.ACTIVE
+									&& !state.retakeEntitled())
+							.orElse(false);
+					log.add("effect:start:persisted=" + persisted);
+				}
+				effectConsumer.accept(intent);
+			});
+		}
+	}
+
+	private static final class TestRepresentationPort implements RetakeService.RepresentationPort {
+		private final TestCampaignPort campaign;
+		private final Set<UUID> fallbacks = new HashSet<>();
+		private boolean inventoryForm;
+		private boolean insertSucceeds;
+		private boolean materializeSucceeds;
+		private int insertAttempts;
+		private int materializeAttempts;
+
+		private TestRepresentationPort(TestCampaignPort campaign) {
+			this.campaign = campaign;
+		}
+
+		@Override
+		public boolean hasInventoryForm(PlayerCampaignState.RetakeKey key) {
+			return inventoryForm;
+		}
+
+		@Override
+		public boolean hasFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			return fallbacks.contains(fallbackEntityUuid);
+		}
+
+		@Override
+		public boolean tryInsertInventoryForm(PlayerCampaignState.RetakeKey key) {
+			insertAttempts++;
+			boolean entitled = campaign.state(key.ownerUuid()).flatMap(PlayerCampaignState::retakeKey)
+					.filter(key::equals).isPresent();
+			campaign.log.add("insert:state_entitled=" + entitled);
+			if (insertSucceeds) {
+				inventoryForm = true;
+			}
+			return insertSucceeds;
+		}
+
+		@Override
+		public boolean materializeFallback(
+				PlayerCampaignState.RetakeKey key,
+				UUID fallbackEntityUuid,
+				BlockPos retryPos
+		) {
+			materializeAttempts++;
+			boolean reserved = campaign.state(key.ownerUuid())
+					.map(state -> fallbackEntityUuid.equals(state.retakeFallbackReservationUuid()))
+					.orElse(false);
+			campaign.log.add("materialize:reserved=" + reserved);
+			if (materializeSucceeds) {
+				fallbacks.add(fallbackEntityUuid);
+			}
+			return materializeSucceeds;
+		}
+
+		@Override
+		public void consumeInventoryForm(PlayerCampaignState.RetakeKey key) {
+			boolean active = campaign.state(key.ownerUuid())
+					.map(state -> state.status() == PlayerCampaignState.LectureStatus.ACTIVE
+							&& !state.retakeEntitled())
+					.orElse(false);
+			campaign.log.add("consume:state_active=" + active);
+			inventoryForm = false;
+		}
+
+		@Override
+		public void discardFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			boolean stateFirst = campaign.state(key.ownerUuid())
+					.map(state -> !fallbackEntityUuid.equals(state.retakeFallbackEntityUuid())
+							&& !fallbackEntityUuid.equals(state.retakeFallbackReservationUuid()))
+					.orElse(true);
+			campaign.log.add("discard:state_first=" + stateFirst);
+			fallbacks.remove(fallbackEntityUuid);
+		}
 	}
 
 	private static CampaignEvent.Start retakeStartEvent(
