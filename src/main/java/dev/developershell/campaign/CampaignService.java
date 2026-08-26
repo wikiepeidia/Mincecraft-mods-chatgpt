@@ -88,6 +88,35 @@ public final class CampaignService {
 		return true;
 	}
 
+	/**
+	 * Admits Professor damage only while entity, runtime participant, attacker, and durable
+	 * encounter identity all describe the same active owner window.
+	 */
+	public static boolean canDamageProfessor(
+			ServerLevel level,
+			UUID ownerUuid,
+			UUID encounterUuid,
+			UUID attackerUuid
+	) {
+		if (!level.getServer().isSameThread()
+				|| ownerUuid == null
+				|| encounterUuid == null
+				|| !ownerUuid.equals(attackerUuid)) {
+			return false;
+		}
+		Optional<ServerPlayer> participant = LectureEncounterManager.participant(encounterUuid);
+		if (participant.isEmpty()
+				|| !participant.get().getUUID().equals(ownerUuid)
+				|| participant.get().level() != level) {
+			return false;
+		}
+		CampaignSavedData data = CampaignSavedData.get(level);
+		return data.isWritableSchema()
+				&& data.player(ownerUuid)
+						.map(state -> state.matchesActiveEncounter(ownerUuid, encounterUuid))
+						.orElse(false);
+	}
+
 	private static Optional<BlockPos> validateArena(ServerLevel level, BlockPos deskPos, Direction deskFacing) {
 		if (!level.dimension().equals(Level.OVERWORLD) || !deskFacing.getAxis().isHorizontal()) {
 			return Optional.empty();
