@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-08-PLAN.md
-last_updated: "2026-08-26T21:05:50.079Z"
+stopped_at: Completed 02-09-PLAN.md
+last_updated: "2026-08-26T21:26:13.608Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 2ddf393c2557a3115d02cc6c13425722629b3cf7
+state_head: 9ddd8798df91c3ec8b5bb23b48be28ce0abc7f6d
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 15
+  completed_plans: 16
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 12 of 18
+Plan: 13 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -73,6 +73,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02-persistent-lecture-vertical-slice P06 | 27min | 2 tasks | 11 files |
 | Phase 02-persistent-lecture-vertical-slice P07 | 32min | 2 tasks | 9 files |
 | Phase 02 P08 | 23min | 2 tasks | 11 files |
+| Phase 02-persistent-lecture-vertical-slice P09 | 16min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -122,6 +123,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-08: Encode the exact owner plus failed-encounter RetakeKey in vanilla CUSTOM_DATA; physical Forms never manufacture authority.
 - [Phase 02]: Plan 02-08: Reject stale fallback chunk copies and clear only matching reserved/materialized UUIDs before replacement.
 - [Phase 02]: Plan 02-08: Revalidate owner, saved Desk, state, and complete arena; persist and start the retry before consuming the Form.
+- [Phase 02]: Plan 02-09: Preserve the seven-argument LectureRules construction surface while exposing exact Standard combat tuning through compatible methods.
+- [Phase 02]: Plan 02-09: Derive all combat choices solely from encounter UUID, attempt, act, cycle, and quiz index while keeping reduced effects semantic-free.
+- [Phase 02]: Plan 02-09: Keep CampaignService as the sole victory transaction and conjunct its authority with current manager participant, owner, window, and act-floor admission.
 
 ### Pending Todos
 
@@ -140,6 +144,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T21:05:49.976Z
-Stopped at: Completed 02-08-PLAN.md
+Last session: 2026-08-26T21:26:13.492Z
+Stopped at: Completed 02-09-PLAN.md
 Resume file: None
