@@ -11,7 +11,7 @@ Developer's Hell moves through six runnable MVP boundaries: first prove the exac
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Java 25 and Fabric 26.2 Foundation** - Produce and prove the exact, side-safe, offline-buildable mod artifact before gameplay breadth.
+- [x] **Phase 1: Java 25 and Fabric 26.2 Foundation** - Produce and prove the exact, side-safe, offline-buildable mod artifact before gameplay breadth. (completed 2026-08-26)
 - [ ] **Phase 2: Persistent Lecture Vertical Slice** - Deliver the complete Contract-to-Lecture loop with save-safe failure, retry, cleanup, and exactly-once reward behavior.
 - [ ] **Phase 3: Contract-to-Diploma Boss Campaign** - Complete the Jury, Chairman, sponsor transformation, Codex finale, rewards, and replay path on the proven encounter framework.
 - [ ] **Phase 4: Developer-Tool Sandbox Loops** - Add the six bounded Python, terminal, Git, totem, duck, and deadline comedy loops.
@@ -33,7 +33,7 @@ Developer's Hell moves through six runnable MVP boundaries: first prove the exac
   3. The same distribution bytes reach a playable client world and ready/clean-stop dedicated-server state without client-only classloading failures, with pre/post hashes and zero residual firewall group members proven.
   4. A world remains loadable when module toggles change because every stable content and payload ID is registered independently of enabled behavior.
 
-**Plans:** 4/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -142,7 +142,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Java 25 and Fabric 26.2 Foundation | 4/4 | In Progress|  |
+| 1. Java 25 and Fabric 26.2 Foundation | 4/4 | Complete    | 2026-08-26 |
 | 2. Persistent Lecture Vertical Slice | 0/TBD | Not started | - |
 | 3. Contract-to-Diploma Boss Campaign | 0/TBD | Not started | - |
 | 4. Developer-Tool Sandbox Loops | 0/TBD | Not started | - |

@@ -1,44 +1,44 @@
 ---
 gsd_state_version: 1.0
-current_phase: 01
-current_phase_name: Java 25 and Fabric 26.2 Foundation
-status: verifying
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-08-26T12:08:17.516Z"
+current_phase: 2
+current_phase_name: Persistent Lecture Vertical Slice
+status: planning
+stopped_at: Phase 1 complete, ready to plan Phase 2
+last_updated: "2026-08-26T14:13:33.331Z"
 last_activity: 2026-08-26
-last_activity_desc: Phase 01 execution started
-state_head: 840763b22573f1f411ccd160d4df7b10516ccbbe
+last_activity_desc: Phase 1 complete, transitioned to Phase 2
+state_head: 24777079d4486ab76766dd02ace2a7661bd35e2f
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
   completed_plans: 4
-  percent: 0
+  percent: 17
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-25)
+See: .planning/PROJECT.md (updated 2026-08-26)
 
 **Core value:** Deliver a genuinely funny, replayable boss-rush experience whose university and developer jokes become visible Minecraft mechanics rather than merely renamed items or text references.
-**Current focus:** Phase 01 — Java 25 and Fabric 26.2 Foundation
+**Current focus:** Phase 2 — Persistent Lecture Vertical Slice
 
 ## Current Position
 
-Phase: 01 (Java 25 and Fabric 26.2 Foundation) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-08-26 — Phase 01 execution started
+Phase: 2 — Persistent Lecture Vertical Slice
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-26 — Phase 1 complete, transitioned to Phase 2
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████████████████████] 4/4 plans (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 4
 - Average duration: -
 - Total execution time: 0.0 hours
 
@@ -46,7 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 1 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -70,21 +70,11 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Roadmap]: Protect the runnable four-boss Contract-to-Diploma path before optional breadth.
 - [Roadmap]: Prove persistence, cleanup, retry, and exactly-once rewards with the complete Lecture vertical slice before adding later bosses.
-- [Roadmap]: Keep Metadata Roulette isolated behind curated reversible Trait Cards after the lower-risk developer-tool modules.
-- [Phase 01]: Use the exact Fabric 26.2 tuple: Temurin 25.0.4+7, Loader 0.19.3, Fabric API 0.158.0+26.2, Loom 1.17.19, and Gradle 9.5.1.
-- [Phase 01]: Keep common and client entrypoints physically split, with the client initializer intentionally behavior-free until client systems are introduced.
-- [Phase 01]: Ship the Foundation Token as an unconditional built-in registry item backed only by bundled metadata and vanilla paper visuals.
-- [Phase 01]: Stable item registration remains unconditional and independent of ModuleGate; toggles select behavior only. — Preserves registered identity across configuration changes so existing saves remain loadable.
-- [Phase 01]: Freeze eight explicit snake-case serialized module names behind one defensive-copy immutable gate. — Keeps public configuration keys deliberate while preventing callers from mutating enabled state.
-- [Phase 01]: Wrapper build owns the fail-first live registry GameTest; compilation or discovery alone is not proof.
-- [Phase 01]: Production tasks use the ordinary JAR, exact Fabric API, exact Java 25, and isolated profiles without remapJar.
-- [Phase 01]: Direct declarations are audited separately from fixed Loom injections and report-only transitives.
-- [Phase 01]: Plan 04 executes the committed hash-bound verification harness unchanged.
-- [Phase 01]: The release handoff remains one ordinary JAR whose online, same-cache-offline, retained-distribution, and runtime-copy SHA-256 values are identical.
-- [Phase 01]: The Foundation Token vanilla paper/map-style icon is accepted as the Phase 1 MVP appearance; bespoke art is later cosmetic polish.
-- [Phase 01]: System Temurin 25 is available for local convenience, while reproducible builds remain bound to checksum-pinned Temurin 25.0.4+7 under .work.
+- [Phase 01]: Keep the exact Fabric 26.2 tuple: checksum-pinned Temurin 25.0.4+7, Loader 0.19.3, Fabric API 0.158.0+26.2, Loom 1.17.19, and Gradle 9.5.1.
+- [Phase 01]: Stable content registration is unconditional and independent of the eight immutable behavior gates so later toggle changes cannot remove saved IDs.
+- [Phase 01]: Preserve the one ordinary JAR and fail-closed offline/runtime proof contract; online, same-cache-offline, distribution, and runtime-copy SHA-256 values remain identical.
+- [Phase 01]: The vanilla paper/map-style Foundation Token appearance is accepted MVP cosmetic debt; bespoke art remains later release polish.
 
 ### Pending Todos
 
@@ -103,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T12:08:17.502Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-08-26T14:14:19.787Z
+Stopped at: Phase 1 complete, ready to plan Phase 2
 Resume file: None

@@ -14,11 +14,10 @@ Deliver a genuinely funny, replayable boss-rush experience whose university and 
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ Ship one installable Fabric mod JAR for Minecraft Java 26.2 that works without ChatGPT, an API key, or any network service. — Phase 1
 
 ### Active
 
-- [ ] Ship one installable Fabric mod JAR for Minecraft Java 26.2 that works without ChatGPT, an API key, or any network service.
 - [ ] Provide a chaptered Developer's Hell campaign initiated by a Cursed Unpaid Internship Contract and completed by earning a Definitely Legitimate Diploma.
 - [ ] Implement substantial, multi-phase boss encounters for Professor Infinite Slides, a hostile Jury Gauntlet, Prof. Dr. Rejectus Maximus as the Chairman Boss, and Codex Overdraft: The 300K-Token Abomination.
 - [ ] Make The Rich ChatGPT a radiant ChatGPT 5.6 Sol-inspired sponsor and narrator who helps the player before its token balance reaches zero and it transforms into the final boss.
@@ -65,15 +64,16 @@ Deliver a genuinely funny, replayable boss-rush experience whose university and 
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Name the project Developer's Hell | Captures the combined university, internship, developer-tooling, and AI-credit premise | — Pending |
-| Target Minecraft Java 26.2 with Fabric and JDK 25 | 26.2 is stable while 26.3 is still in snapshots; Fabric has current official 26.2 tooling and documentation | — Pending |
+| Name the project Developer's Hell | Captures the combined university, internship, developer-tooling, and AI-credit premise | Confirmed in Phase 1 Loader metadata and the installable JAR |
+| Target Minecraft Java 26.2 with Fabric and JDK 25 | 26.2 is stable while 26.3 is still in snapshots; Fabric has current official 26.2 tooling and documentation | Validated in Phase 1 with Loader 0.19.3, Fabric API 0.158.0+26.2, Loom 1.17.19, Gradle 9.5.1, and checksum-pinned Temurin 25.0.4+7 |
 | Package eight modules in one configurable anthology JAR | Shares infrastructure and testing effort while providing the requested breadth | — Pending |
 | Build a chaptered boss campaign plus optional sandbox chaos | Gives the jokes a memorable progression while preserving replayability after completion | — Pending |
 | Make The Rich ChatGPT an ally who becomes the final boss | Creates a coherent arc from AI sponsorship and token excess to zero-credit hallucination catastrophe | — Pending |
-| Keep all runtime content offline | Ensures the mod survives the temporary ChatGPT credit window | — Pending |
+| Keep all runtime content offline | Ensures the mod survives the temporary ChatGPT credit window | Phase 1 source/dependency/archive audits and OS-isolated client/server proof passed; later phases must preserve this boundary |
 | Use curated trait shuffling instead of raw metadata swapping | Preserves surprising cross-mob behavior without predictable crashes from incompatible schemas | — Pending |
 | Fictionalize institutions and make shout-outs configurable | Keeps the public repository funny without exposing or targeting real people or organizations | — Pending |
 | Use generated original art with pixel cleanup when custom textures add value | The creator has no time to author textures, while bespoke visuals are important to the boss spectacle | — Pending |
+| Accept the vanilla paper/map Foundation Token appearance for the foundation MVP | Functional registry, translation, install, and offline proof matter before bespoke item polish | Accepted by the creator in Phase 1; original art remains release-phase cosmetic work |
 
 ## Evolution
 
@@ -93,4 +93,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-25 after initialization*
+*Last updated: 2026-08-26 after Phase 1*
