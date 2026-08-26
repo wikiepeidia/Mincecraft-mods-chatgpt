@@ -1,6 +1,10 @@
 package dev.developershell.campaign;
 
+import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
+import com.mojang.serialization.Dynamic;
+import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import dev.developershell.DevelopersHell;
 import java.nio.charset.StandardCharsets;
@@ -23,97 +27,80 @@ import net.minecraft.world.level.saveddata.SavedDataType;
 public final class CampaignSavedData extends SavedData {
 	public static final int SCHEMA_VERSION = 1;
 
-	private static final Codec<PlayerCampaignState.LectureStatus> STATUS_CODEC = Codec.STRING.xmap(
-			PlayerCampaignState.LectureStatus::fromSerializedName,
+	private static final Codec<PlayerCampaignState.LectureStatus> STATUS_CODEC = Codec.STRING.comapFlatMap(
+			value -> decodeName("lecture status", value, PlayerCampaignState.LectureStatus::fromSerializedName),
 			PlayerCampaignState.LectureStatus::serializedName
 	);
-	private static final Codec<PlayerCampaignState.CampaignChapter> CHAPTER_CODEC = Codec.STRING.xmap(
-			PlayerCampaignState.CampaignChapter::fromSerializedName,
+	private static final Codec<PlayerCampaignState.CampaignChapter> CHAPTER_CODEC = Codec.STRING.comapFlatMap(
+			value -> decodeName("campaign chapter", value, PlayerCampaignState.CampaignChapter::fromSerializedName),
 			PlayerCampaignState.CampaignChapter::serializedName
 	);
 
-	/**
-	 * The explicit map key preserves the existing list payload while letting schema 1 reject an
-	 * encoded key that does not match the state's owner. All Plan 01 field names remain unchanged,
-	 * and newly frozen fields are optional so existing tracer saves decode safely.
-	 */
-	private static final Codec<EncodedPlayer> PLAYER_CODEC = RecordCodecBuilder.create(instance -> instance.group(
-			UUIDUtil.CODEC.optionalFieldOf("map_key_uuid").forGetter(player -> Optional.of(player.mapKeyUuid())),
-			UUIDUtil.CODEC.fieldOf("owner_uuid").forGetter(player -> player.state().ownerUuid()),
-			CHAPTER_CODEC.optionalFieldOf("chapter").forGetter(player -> Optional.of(player.state().chapter())),
-			STATUS_CODEC.fieldOf("lecture_status").forGetter(player -> player.state().status()),
-			Codec.INT.fieldOf("attempt_count").forGetter(player -> player.state().attemptCount()),
-			Codec.STRING.optionalFieldOf("desk_dimension", PlayerCampaignState.OVERWORLD_DIMENSION)
-					.forGetter(player -> player.state().deskDimension()),
-			BlockPos.CODEC.fieldOf("desk_pos").forGetter(player -> player.state().deskPos()),
-			Direction.CODEC.fieldOf("desk_facing").forGetter(player -> player.state().deskFacing()),
-			BlockPos.CODEC.fieldOf("retry_pos").forGetter(player -> player.state().retryPos()),
-			UUIDUtil.CODEC.optionalFieldOf("encounter_uuid")
-					.forGetter(player -> Optional.ofNullable(player.state().encounterUuid())),
-			UUIDUtil.CODEC.optionalFieldOf("professor_uuid")
-					.forGetter(player -> Optional.ofNullable(player.state().professorUuid())),
-			Codec.BOOL.fieldOf("sheet_entitled").forGetter(player -> player.state().sheetEntitled()),
-			Codec.BOOL.fieldOf("remote_issued").forGetter(player -> player.state().remoteIssued()),
-			Codec.BOOL.optionalFieldOf("retake_entitled", false)
-					.forGetter(player -> player.state().retakeEntitled()),
-			UUIDUtil.CODEC.optionalFieldOf("retake_fallback_entity_uuid")
-					.forGetter(player -> Optional.ofNullable(player.state().retakeFallbackEntityUuid())),
-			Codec.LONG.optionalFieldOf("remote_cooldown_until_game_time", 0L)
-					.forGetter(player -> player.state().remoteCooldownUntilGameTime())
-	).apply(instance, (
-			mapKeyUuid,
-			ownerUuid,
-			chapter,
-			status,
-			attemptCount,
-			deskDimension,
-			deskPos,
-			deskFacing,
-			retryPos,
-			encounterUuid,
-			professorUuid,
-			sheetEntitled,
-			remoteIssued,
-			retakeEntitled,
-			retakeFallbackEntityUuid,
-			remoteCooldownUntilGameTime
-	) -> {
-		PlayerCampaignState.EncounterRef activeEncounter = encounterUuid.isPresent() && professorUuid.isPresent()
-				? new PlayerCampaignState.EncounterRef(
-						ownerUuid,
-						encounterUuid.get(),
-						professorUuid.get(),
-						attemptCount
-				)
-				: null;
-		PlayerCampaignState.CampaignChapter decodedChapter = chapter.orElseGet(() ->
-				status == PlayerCampaignState.LectureStatus.PASSED
-						? PlayerCampaignState.CampaignChapter.LECTURE_PASSED
-						: PlayerCampaignState.CampaignChapter.PRE_LECTURE
-		);
-		PlayerCampaignState state = new PlayerCampaignState(
-				ownerUuid,
-				decodedChapter,
-				status,
-				attemptCount,
-				deskDimension,
-				deskPos,
-				deskFacing,
-				retryPos,
-				activeEncounter,
-				sheetEntitled,
-				remoteIssued,
-				retakeEntitled,
-				retakeFallbackEntityUuid.orElse(null),
-				remoteCooldownUntilGameTime
-		);
-		return new EncodedPlayer(mapKeyUuid.orElse(ownerUuid), state);
-	}));
+	/* MapCodec groups keep schema-v1 fields flat while avoiding RecordCodecBuilder's 16-field ceiling. */
+	private static final MapCodec<IdentityFields> IDENTITY_FIELDS_CODEC = RecordCodecBuilder.mapCodec(instance ->
+			instance.group(
+					UUIDUtil.CODEC.optionalFieldOf("map_key_uuid").forGetter(IdentityFields::mapKeyUuid),
+					UUIDUtil.CODEC.fieldOf("owner_uuid").forGetter(IdentityFields::ownerUuid),
+					CHAPTER_CODEC.optionalFieldOf("chapter").forGetter(IdentityFields::chapter),
+					STATUS_CODEC.fieldOf("lecture_status").forGetter(IdentityFields::status),
+					Codec.INT.fieldOf("attempt_count").forGetter(IdentityFields::attemptCount),
+					Codec.STRING.optionalFieldOf("desk_dimension", PlayerCampaignState.OVERWORLD_DIMENSION)
+							.forGetter(IdentityFields::deskDimension),
+					BlockPos.CODEC.fieldOf("desk_pos").forGetter(IdentityFields::deskPos),
+					Direction.CODEC.fieldOf("desk_facing").forGetter(IdentityFields::deskFacing),
+					BlockPos.CODEC.fieldOf("retry_pos").forGetter(IdentityFields::retryPos)
+			).apply(instance, IdentityFields::new)
+	);
 
-	private static final Codec<CampaignSavedData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-			Codec.INT.fieldOf("schema").forGetter(CampaignSavedData::schemaVersion),
-			PLAYER_CODEC.listOf().fieldOf("players").forGetter(CampaignSavedData::encodedPlayers)
-	).apply(instance, CampaignSavedData::decode));
+	private static final MapCodec<DurableFields> DURABLE_FIELDS_CODEC = RecordCodecBuilder.mapCodec(instance ->
+			instance.group(
+					UUIDUtil.CODEC.optionalFieldOf("encounter_uuid").forGetter(DurableFields::encounterUuid),
+					UUIDUtil.CODEC.optionalFieldOf("professor_uuid").forGetter(DurableFields::professorUuid),
+					Codec.BOOL.fieldOf("sheet_entitled").forGetter(DurableFields::sheetEntitled),
+					Codec.BOOL.fieldOf("remote_issued").forGetter(DurableFields::remoteIssued),
+					Codec.BOOL.optionalFieldOf("retake_entitled", false).forGetter(DurableFields::retakeEntitled),
+					UUIDUtil.CODEC.optionalFieldOf("retake_fallback_entity_uuid")
+							.forGetter(DurableFields::retakeFallbackEntityUuid),
+					Codec.LONG.optionalFieldOf("remote_cooldown_until_game_time", 0L)
+							.forGetter(DurableFields::remoteCooldownUntilGameTime),
+					Codec.LONG.optionalFieldOf("sheet_recovery_sequence", 0L)
+							.forGetter(DurableFields::sheetRecoverySequence),
+					Codec.LONG.optionalFieldOf("remote_ready_notice_for_deadline_game_time", 0L)
+							.forGetter(DurableFields::remoteReadyNoticeForDeadlineGameTime)
+			).apply(instance, DurableFields::new)
+	);
+
+	private static final Codec<RawPlayer> RAW_PLAYER_CODEC = RecordCodecBuilder.create(instance -> instance.group(
+			IDENTITY_FIELDS_CODEC.forGetter(RawPlayer::identity),
+			DURABLE_FIELDS_CODEC.forGetter(RawPlayer::durable)
+	).apply(instance, RawPlayer::new));
+
+	private static final Codec<EncodedPlayer> PLAYER_CODEC = RAW_PLAYER_CODEC.comapFlatMap(
+			CampaignSavedData::decodePlayer,
+			CampaignSavedData::encodePlayer
+	);
+
+	private static final Codec<CampaignSavedData> SCHEMA_ONE_CODEC = RecordCodecBuilder.create(instance ->
+			instance.group(
+					Codec.intRange(SCHEMA_VERSION, SCHEMA_VERSION).fieldOf("schema")
+							.forGetter(CampaignSavedData::schemaVersion),
+					PLAYER_CODEC.listOf().fieldOf("players").forGetter(CampaignSavedData::encodedPlayers)
+			).apply(instance, CampaignSavedData::decodeSchemaOne)
+	);
+
+	/**
+	 * The fallback side deliberately succeeds for unknown or malformed documents. SavedDataStorage
+	 * therefore returns a visible read-only value instead of silently replacing user data with a
+	 * fresh schema-1 object. Its original Dynamic is retained byte-for-byte at the data-model level.
+	 */
+	private static final Codec<Either<CampaignSavedData, Dynamic<?>>> ENVELOPE_CODEC = Codec.either(
+			SCHEMA_ONE_CODEC,
+			Codec.PASSTHROUGH
+	);
+	private static final Codec<CampaignSavedData> CODEC = ENVELOPE_CODEC.xmap(
+			either -> either.map(data -> data, CampaignSavedData::readOnlyRaw),
+			data -> data.rawDocument == null ? Either.left(data) : Either.right(data.rawDocument)
+	);
 
 	public static final SavedDataType<CampaignSavedData> TYPE = new SavedDataType<>(
 			DevelopersHell.id("campaign"),
@@ -125,35 +112,166 @@ public final class CampaignSavedData extends SavedData {
 	private final int schemaVersion;
 	private final Map<UUID, PlayerCampaignState> players;
 	private final boolean ownerKeysValid;
+	private final ReadDisposition readDisposition;
+	private final Dynamic<?> rawDocument;
 
 	private CampaignSavedData(
 			int schemaVersion,
 			Map<UUID, PlayerCampaignState> players,
-			boolean ownerKeysValid
+			boolean ownerKeysValid,
+			ReadDisposition readDisposition,
+			Dynamic<?> rawDocument
 	) {
 		this.schemaVersion = schemaVersion;
 		this.players = new LinkedHashMap<>(players);
 		this.ownerKeysValid = ownerKeysValid;
+		this.readDisposition = Objects.requireNonNull(readDisposition, "readDisposition");
+		this.rawDocument = rawDocument;
 	}
 
 	private static CampaignSavedData empty() {
-		return new CampaignSavedData(SCHEMA_VERSION, Map.of(), true);
+		return new CampaignSavedData(SCHEMA_VERSION, Map.of(), true, ReadDisposition.WRITABLE, null);
 	}
 
-	private static CampaignSavedData decode(int schemaVersion, List<EncodedPlayer> encodedPlayers) {
+	static CampaignSavedData createForTesting(Map<UUID, PlayerCampaignState> players) {
+		Objects.requireNonNull(players, "players");
+		boolean valid = players.entrySet().stream()
+				.allMatch(entry -> entry.getKey().equals(entry.getValue().ownerUuid()));
+		return new CampaignSavedData(
+				SCHEMA_VERSION,
+				players,
+				valid,
+				valid ? ReadDisposition.WRITABLE : ReadDisposition.INVALID_OWNER_KEYS,
+				null
+		);
+	}
+
+	private static CampaignSavedData decodeSchemaOne(int schemaVersion, List<EncodedPlayer> encodedPlayers) {
 		Map<UUID, PlayerCampaignState> players = new LinkedHashMap<>();
-		boolean ownerKeysValid = true;
+		boolean valid = true;
 		for (EncodedPlayer encodedPlayer : encodedPlayers) {
 			UUID mapKeyUuid = encodedPlayer.mapKeyUuid();
 			PlayerCampaignState state = encodedPlayer.state();
-			if (!mapKeyUuid.equals(state.ownerUuid())) {
-				ownerKeysValid = false;
-			}
-			if (players.putIfAbsent(mapKeyUuid, state) != null) {
-				ownerKeysValid = false;
+			boolean duplicateKey = players.putIfAbsent(mapKeyUuid, state) != null;
+			if (!mapKeyUuid.equals(state.ownerUuid()) || duplicateKey) {
+				valid = false;
 			}
 		}
-		return new CampaignSavedData(schemaVersion, players, ownerKeysValid);
+		return new CampaignSavedData(
+				schemaVersion,
+				players,
+				valid,
+				valid ? ReadDisposition.WRITABLE : ReadDisposition.INVALID_OWNER_KEYS,
+				null
+		);
+	}
+
+	private static CampaignSavedData readOnlyRaw(Dynamic<?> rawDocument) {
+		int discoveredSchema = rawDocument.get("schema").asInt(-1);
+		ReadDisposition disposition = discoveredSchema > SCHEMA_VERSION
+				? ReadDisposition.FUTURE_SCHEMA
+				: ReadDisposition.CORRUPT_DATA;
+		return new CampaignSavedData(discoveredSchema, Map.of(), true, disposition, rawDocument);
+	}
+
+	private static DataResult<EncodedPlayer> decodePlayer(RawPlayer raw) {
+		IdentityFields identity = raw.identity();
+		DurableFields durable = raw.durable();
+		boolean hasEncounter = durable.encounterUuid().isPresent();
+		boolean hasProfessor = durable.professorUuid().isPresent();
+		if (hasEncounter != hasProfessor) {
+			return DataResult.error(() -> "encounter_uuid and professor_uuid must be present together");
+		}
+		if (identity.status() == PlayerCampaignState.LectureStatus.ACTIVE && !hasEncounter) {
+			return DataResult.error(() -> "active lecture state requires encounter identity");
+		}
+		if (identity.status() != PlayerCampaignState.LectureStatus.ACTIVE && hasEncounter) {
+			return DataResult.error(() -> "inactive lecture state must not retain encounter identity");
+		}
+
+		PlayerCampaignState.CampaignChapter chapter = identity.chapter().orElseGet(() ->
+				identity.status() == PlayerCampaignState.LectureStatus.PASSED
+						? PlayerCampaignState.CampaignChapter.LECTURE_PASSED
+						: PlayerCampaignState.CampaignChapter.PRE_LECTURE
+		);
+		if ((identity.status() == PlayerCampaignState.LectureStatus.PASSED)
+				!= (chapter == PlayerCampaignState.CampaignChapter.LECTURE_PASSED)) {
+			return DataResult.error(() -> "campaign chapter and lecture status disagree");
+		}
+
+		try {
+			PlayerCampaignState.EncounterRef encounter = hasEncounter
+					? new PlayerCampaignState.EncounterRef(
+							identity.ownerUuid(),
+							durable.encounterUuid().orElseThrow(),
+							durable.professorUuid().orElseThrow(),
+							identity.attemptCount()
+					)
+					: null;
+			PlayerCampaignState state = new PlayerCampaignState(
+					identity.ownerUuid(),
+					chapter,
+					identity.status(),
+					identity.attemptCount(),
+					identity.deskDimension(),
+					identity.deskPos(),
+					identity.deskFacing(),
+					identity.retryPos(),
+					encounter,
+					durable.sheetEntitled(),
+					durable.remoteIssued(),
+					durable.retakeEntitled(),
+					durable.retakeFallbackEntityUuid().orElse(null),
+					durable.remoteCooldownUntilGameTime(),
+					durable.sheetRecoverySequence(),
+					durable.remoteReadyNoticeForDeadlineGameTime()
+			);
+			return DataResult.success(new EncodedPlayer(identity.mapKeyUuid().orElse(identity.ownerUuid()), state));
+		}
+		catch (IllegalArgumentException exception) {
+			return DataResult.error(exception::getMessage);
+		}
+	}
+
+	private static RawPlayer encodePlayer(EncodedPlayer encodedPlayer) {
+		PlayerCampaignState state = encodedPlayer.state();
+		return new RawPlayer(
+				new IdentityFields(
+						Optional.of(encodedPlayer.mapKeyUuid()),
+						state.ownerUuid(),
+						Optional.of(state.chapter()),
+						state.status(),
+						state.attemptCount(),
+						state.deskDimension(),
+						state.deskPos(),
+						state.deskFacing(),
+						state.retryPos()
+				),
+				new DurableFields(
+						Optional.ofNullable(state.encounterUuid()),
+						Optional.ofNullable(state.professorUuid()),
+						state.sheetEntitled(),
+						state.remoteIssued(),
+						state.retakeEntitled(),
+						Optional.ofNullable(state.retakeFallbackEntityUuid()),
+						state.remoteCooldownUntilGameTime(),
+						state.sheetRecoverySequence(),
+						state.remoteReadyNoticeForDeadlineGameTime()
+				)
+		);
+	}
+
+	private static <T> DataResult<T> decodeName(
+			String field,
+			String value,
+			java.util.function.Function<String, T> decoder
+	) {
+		try {
+			return DataResult.success(decoder.apply(value));
+		}
+		catch (IllegalArgumentException exception) {
+			return DataResult.error(() -> "Unknown " + field + ": " + value);
+		}
 	}
 
 	public static CampaignSavedData get(ServerLevel level) {
@@ -168,6 +286,10 @@ public final class CampaignSavedData extends SavedData {
 		return Optional.ofNullable(players.get(ownerUuid));
 	}
 
+	public synchronized Optional<PlayerCampaignState> playerByMapKey(UUID mapKeyUuid) {
+		return Optional.ofNullable(players.get(mapKeyUuid));
+	}
+
 	public int schemaVersion() {
 		return schemaVersion;
 	}
@@ -176,112 +298,77 @@ public final class CampaignSavedData extends SavedData {
 		return ownerKeysValid;
 	}
 
+	public ReadDisposition readDisposition() {
+		return readDisposition;
+	}
+
 	public boolean isWritableSchema() {
-		return schemaVersion == SCHEMA_VERSION && ownerKeysValid;
+		return readDisposition == ReadDisposition.WRITABLE
+				&& schemaVersion == SCHEMA_VERSION
+				&& ownerKeysValid;
 	}
 
-	/**
-	 * Atomically accepts one owner/desk start and returns the state needed to materialize it.
-	 * The caller must mark this SavedData dirty before applying any side effects.
-	 */
-	public synchronized Optional<StartCommit> beginEncounter(
+	synchronized boolean replace(PlayerCampaignState nextState) {
+		Objects.requireNonNull(nextState, "nextState");
+		if (!isWritableSchema()) {
+			return false;
+		}
+		players.put(nextState.ownerUuid(), nextState);
+		return true;
+	}
+
+	synchronized boolean hasActiveDeskForOther(
 			UUID ownerUuid,
-			BlockPos deskPos,
-			Direction deskFacing,
-			BlockPos retryPos
+			String deskDimension,
+			BlockPos deskPos
 	) {
-		if (!isWritableSchema()) {
-			return Optional.empty();
-		}
-		PlayerCampaignState previous = players.get(ownerUuid);
-		if (previous != null && (previous.status() == PlayerCampaignState.LectureStatus.ACTIVE
-				|| previous.status() == PlayerCampaignState.LectureStatus.PASSED)) {
-			return Optional.empty();
-		}
-		boolean deskBusy = players.values().stream()
-				.anyMatch(progress -> progress.status() == PlayerCampaignState.LectureStatus.ACTIVE
-						&& progress.deskPos().equals(deskPos));
-		if (deskBusy) {
-			return Optional.empty();
-		}
-
-		int attemptCount = previous == null ? 1 : previous.attemptCount() + 1;
-		UUID encounterUuid = deterministicUuid("encounter", ownerUuid, deskPos, attemptCount);
-		UUID professorUuid = deterministicUuid("professor", ownerUuid, deskPos, attemptCount);
-		PlayerCampaignState current = new PlayerCampaignState(
-				ownerUuid,
-				previous == null ? PlayerCampaignState.CampaignChapter.PRE_LECTURE : previous.chapter(),
-				PlayerCampaignState.LectureStatus.ACTIVE,
-				attemptCount,
-				PlayerCampaignState.OVERWORLD_DIMENSION,
-				deskPos,
-				deskFacing,
-				retryPos,
-				new PlayerCampaignState.EncounterRef(ownerUuid, encounterUuid, professorUuid, attemptCount),
-				previous != null && previous.sheetEntitled(),
-				previous != null && previous.remoteIssued(),
-				false,
-				null,
-				previous == null ? 0L : previous.remoteCooldownUntilGameTime()
+		return players.values().stream().anyMatch(state ->
+				!state.ownerUuid().equals(ownerUuid)
+						&& state.status() == PlayerCampaignState.LectureStatus.ACTIVE
+						&& state.deskDimension().equals(deskDimension)
+						&& state.deskPos().equals(deskPos)
 		);
-		players.put(ownerUuid, current);
-		return Optional.of(new StartCommit(current, previous));
 	}
 
-	public synchronized boolean rollbackStart(StartCommit commit) {
-		PlayerCampaignState current = players.get(commit.current().ownerUuid());
-		if (current == null || !Objects.equals(current.encounterUuid(), commit.current().encounterUuid())) {
-			return false;
-		}
-		if (commit.previous() == null) {
-			players.remove(current.ownerUuid());
-		}
-		else {
-			players.put(current.ownerUuid(), commit.previous());
-		}
-		return true;
-	}
-
-	/** Commits a matching victory once; all stale, spoofed, and replayed callbacks are no-ops. */
-	public synchronized boolean commitVictory(UUID ownerUuid, UUID encounterUuid) {
-		if (!isWritableSchema()) {
-			return false;
-		}
-		PlayerCampaignState active = players.get(ownerUuid);
-		if (active == null
-				|| active.status() != PlayerCampaignState.LectureStatus.ACTIVE
-				|| !active.matchesActiveEncounter(ownerUuid, encounterUuid)) {
-			return false;
-		}
-		players.put(ownerUuid, new PlayerCampaignState(
-				ownerUuid,
-				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
-				PlayerCampaignState.LectureStatus.PASSED,
-				active.attemptCount(),
-				active.deskDimension(),
-				active.deskPos(),
-				active.deskFacing(),
-				active.retryPos(),
-				null,
-				true,
-				true,
-				false,
-				null,
-				active.remoteCooldownUntilGameTime()
-		));
-		return true;
-	}
-
-	private List<EncodedPlayer> encodedPlayers() {
+	private synchronized List<EncodedPlayer> encodedPlayers() {
 		List<EncodedPlayer> encodedPlayers = new ArrayList<>(players.size());
 		players.forEach((mapKeyUuid, state) -> encodedPlayers.add(new EncodedPlayer(mapKeyUuid, state)));
 		return encodedPlayers;
 	}
 
-	private static UUID deterministicUuid(String kind, UUID ownerUuid, BlockPos deskPos, int attemptCount) {
+	static UUID deterministicUuid(String kind, UUID ownerUuid, BlockPos deskPos, int attemptCount) {
 		String value = kind + ":" + ownerUuid + ":" + deskPos.getX() + ":" + deskPos.getY() + ":"
 				+ deskPos.getZ() + ":" + attemptCount;
 		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
+	}
+
+	private record IdentityFields(
+			Optional<UUID> mapKeyUuid,
+			UUID ownerUuid,
+			Optional<PlayerCampaignState.CampaignChapter> chapter,
+			PlayerCampaignState.LectureStatus status,
+			int attemptCount,
+			String deskDimension,
+			BlockPos deskPos,
+			Direction deskFacing,
+			BlockPos retryPos
+	) {
+	}
+
+	private record DurableFields(
+			Optional<UUID> encounterUuid,
+			Optional<UUID> professorUuid,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			Optional<UUID> retakeFallbackEntityUuid,
+			long remoteCooldownUntilGameTime,
+			long sheetRecoverySequence,
+			long remoteReadyNoticeForDeadlineGameTime
+	) {
+	}
+
+	private record RawPlayer(IdentityFields identity, DurableFields durable) {
 	}
 
 	private record EncodedPlayer(UUID mapKeyUuid, PlayerCampaignState state) {
@@ -291,7 +378,21 @@ public final class CampaignSavedData extends SavedData {
 		}
 	}
 
-	public record StartCommit(PlayerCampaignState current, PlayerCampaignState previous) {
+	public enum ReadDisposition {
+		WRITABLE("writable"),
+		FUTURE_SCHEMA("future_schema"),
+		CORRUPT_DATA("corrupt_data"),
+		INVALID_OWNER_KEYS("invalid_owner_keys");
+
+		private final String serializedName;
+
+		ReadDisposition(String serializedName) {
+			this.serializedName = serializedName;
+		}
+
+		public String serializedName() {
+			return serializedName;
+		}
 	}
 
 	/** Narrow source-compatibility view used by the retained Plan 01 encounter manager. */

@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.UUIDUtil;
 import org.junit.jupiter.api.Test;
 
 final class CampaignCodecTest {
@@ -51,7 +52,7 @@ final class CampaignCodecTest {
 		JsonObject root = encode(original).getAsJsonObject();
 		assertEquals(CampaignSavedData.SCHEMA_VERSION, root.get("schema").getAsInt());
 		JsonObject encodedPlayer = root.getAsJsonArray("players").get(0).getAsJsonObject();
-		assertEquals(OWNER.toString(), encodedPlayer.get("map_key_uuid").getAsString());
+		assertEquals(encodeUuid(OWNER), encodedPlayer.get("map_key_uuid"));
 		assertEquals("lecture_passed", encodedPlayer.get("chapter").getAsString());
 		assertEquals("passed", encodedPlayer.get("lecture_status").getAsString());
 		assertEquals(6L, encodedPlayer.get("sheet_recovery_sequence").getAsLong());
@@ -106,7 +107,7 @@ final class CampaignCodecTest {
 	void mapKeyMismatchIsVisibleAndReadOnly() {
 		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, readyState(OWNER)))).getAsJsonObject();
 		root.getAsJsonArray("players").get(0).getAsJsonObject()
-				.addProperty("map_key_uuid", OTHER_OWNER.toString());
+				.add("map_key_uuid", encodeUuid(OTHER_OWNER));
 
 		CampaignSavedData decoded = decode(root);
 		assertEquals(ReadDisposition.INVALID_OWNER_KEYS, decoded.readDisposition());
@@ -250,5 +251,9 @@ final class CampaignCodecTest {
 
 	private static JsonElement encode(CampaignSavedData data) {
 		return CampaignSavedData.TYPE.codec().encodeStart(JsonOps.INSTANCE, data).getOrThrow();
+	}
+
+	private static JsonElement encodeUuid(UUID uuid) {
+		return UUIDUtil.CODEC.encodeStart(JsonOps.INSTANCE, uuid).getOrThrow();
 	}
 }

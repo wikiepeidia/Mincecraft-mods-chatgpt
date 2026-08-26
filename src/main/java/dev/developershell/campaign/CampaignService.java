@@ -4,6 +4,7 @@ import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.registry.ModItems;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -39,21 +40,50 @@ public final class CampaignService {
 		}
 
 		CampaignSavedData data = CampaignSavedData.get(level);
-		Optional<CampaignSavedData.StartCommit> accepted = data.beginEncounter(
-				player.getUUID(),
-				deskPos,
-				deskFacing,
-				retryPos.get()
-		);
-		if (accepted.isEmpty()) {
+		int nextAttempt;
+		try {
+			nextAttempt = data.player(player.getUUID())
+					.map(state -> Math.addExact(state.attemptCount(), 1))
+					.orElse(1);
+		}
+		catch (ArithmeticException exception) {
 			return false;
 		}
-
-		CampaignSavedData.StartCommit commit = accepted.get();
-		data.setDirty();
-		if (!LectureEncounterManager.start(level, player, commit.current())) {
-			data.rollbackStart(commit);
-			data.setDirty();
+		UUID ownerUuid = player.getUUID();
+		UUID encounterUuid = CampaignSavedData.deterministicUuid("encounter", ownerUuid, deskPos, nextAttempt);
+		UUID professorUuid = CampaignSavedData.deterministicUuid("professor", ownerUuid, deskPos, nextAttempt);
+		CampaignEvent.Start start = new CampaignEvent.Start(
+				ownerUuid,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				deskPos,
+				deskFacing,
+				retryPos.get(),
+				encounterUuid,
+				professorUuid
+		);
+		boolean[] runtimeStarted = {false};
+		CampaignTransition transition = apply(data, start, effect -> {
+			if (effect instanceof CampaignTransition.EffectIntent.StartEncounter) {
+				runtimeStarted[0] = LectureEncounterManager.start(
+						level,
+						player,
+						data.player(ownerUuid).orElseThrow()
+				);
+			}
+		});
+		if (!transition.accepted()) {
+			return false;
+		}
+		if (!runtimeStarted[0]) {
+			apply(
+					data,
+					new CampaignEvent.Terminal(ownerUuid, encounterUuid, CampaignEvent.TerminalReason.ABORT),
+					effect -> {
+						if (effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
+							LectureEncounterManager.cleanup(cleanup.encounterUuid());
+						}
+					}
+			);
 			return false;
 		}
 		contract.shrink(1);
@@ -76,16 +106,71 @@ public final class CampaignService {
 		}
 
 		CampaignSavedData data = CampaignSavedData.get(level);
-		if (!data.commitVictory(ownerUuid, encounterUuid)) {
+		ServerPlayer player = participant.get();
+		CampaignTransition transition = apply(
+				data,
+				new CampaignEvent.Victory(ownerUuid, encounterUuid),
+				effect -> {
+					if (effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
+						LectureEncounterManager.finishVictory(cleanup.encounterUuid());
+					}
+					else if (effect instanceof CampaignTransition.EffectIntent.GrantFirstRewards) {
+						player.getInventory().add(new ItemStack(ModItems.ATTENDANCE_SHEET));
+						player.getInventory().add(new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+					}
+				}
+		);
+		if (!transition.accepted()) {
 			return false;
 		}
-		data.setDirty();
-
-		ServerPlayer player = participant.get();
-		LectureEncounterManager.finishVictory(encounterUuid);
-		player.getInventory().add(new ItemStack(ModItems.ATTENDANCE_SHEET));
-		player.getInventory().add(new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
 		return true;
+	}
+
+	/**
+	 * Sole stateful campaign seam: reduce once, replace the durable record, mark it dirty, and only
+	 * then dispatch immutable effects. Rejected events never write and never dispatch.
+	 */
+	public static CampaignTransition apply(
+			ServerLevel level,
+			CampaignEvent event,
+			Consumer<CampaignTransition.EffectIntent> effectConsumer
+	) {
+		java.util.Objects.requireNonNull(level, "level");
+		java.util.Objects.requireNonNull(event, "event");
+		java.util.Objects.requireNonNull(effectConsumer, "effectConsumer");
+		if (!level.getServer().isSameThread()) {
+			return CampaignTransition.noOp(Optional.empty(), "wrong_thread");
+		}
+		return apply(CampaignSavedData.get(level), event, effectConsumer);
+	}
+
+	static CampaignTransition apply(
+			CampaignSavedData data,
+			CampaignEvent event,
+			Consumer<CampaignTransition.EffectIntent> effectConsumer
+	) {
+		java.util.Objects.requireNonNull(data, "data");
+		java.util.Objects.requireNonNull(event, "event");
+		java.util.Objects.requireNonNull(effectConsumer, "effectConsumer");
+		Optional<PlayerCampaignState> current = data.player(event.ownerUuid());
+		if (!data.isWritableSchema()) {
+			return CampaignTransition.noOp(current, "read_only_data");
+		}
+		if (event instanceof CampaignEvent.Start start
+				&& data.hasActiveDeskForOther(start.ownerUuid(), start.deskDimension(), start.deskPos())) {
+			return CampaignTransition.noOp(current, "desk_occupied");
+		}
+
+		CampaignTransition transition = CampaignReducer.reduce(current, event);
+		if (!transition.accepted()) {
+			return transition;
+		}
+		if (!data.replace(transition.nextState().orElseThrow())) {
+			return CampaignTransition.noOp(current, "persistence_rejected");
+		}
+		data.setDirty();
+		transition.intents().forEach(effectConsumer);
+		return transition;
 	}
 
 	/**
