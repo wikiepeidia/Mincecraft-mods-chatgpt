@@ -1,7 +1,9 @@
 package dev.developershell.command;
 
 import dev.developershell.config.DevHellConfig;
+import dev.developershell.lecture.RetakeService;
 import dev.developershell.module.ModuleId;
+import dev.developershell.server.CampaignLifecycle;
 import dev.developershell.server.DevelopersHellRuntime;
 import java.util.Objects;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -21,6 +23,10 @@ public final class DevHellCommands {
 	private static final String STATUS_METADATA_SCHEDULE_KEY = "command.developers_hell.status.metadata_schedule";
 	private static final String STATUS_DEADLINE_SCHEDULE_KEY = "command.developers_hell.status.deadline_schedule";
 	private static final String STATUS_MODULE_KEY = "command.developers_hell.status.module";
+	private static final String RETAKE_RECOVERED_KEY = "message.developers_hell.retake.recovered";
+	private static final String RETAKE_FALLBACK_KEY = "message.developers_hell.retake.fallback";
+	private static final String RETAKE_ALREADY_KEY = "message.developers_hell.retake.already";
+	private static final String RETAKE_NOTHING_KEY = "message.developers_hell.retake.nothing";
 
 	public static void register(DevelopersHellRuntime runtime) {
 		Objects.requireNonNull(runtime, "runtime");
@@ -30,7 +36,36 @@ public final class DevHellCommands {
 								context.getSource().getPlayerOrException(),
 								runtime
 						)))
+						.then(Commands.literal("abort")
+								.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+								.executes(context -> abort(
+										context.getSource().getPlayerOrException()
+								)))
+						.then(Commands.literal("recover")
+								.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+								.then(Commands.literal("retake").executes(context -> recoverRetake(
+										context.getSource().getPlayerOrException()
+								))))
 		));
+	}
+
+	private static int abort(ServerPlayer player) {
+		return CampaignLifecycle.onAbort(player) ? 1 : 0;
+	}
+
+	private static int recoverRetake(ServerPlayer player) {
+		RetakeService.Outcome outcome = RetakeService.forLevel(player.level()).recover(player.getUUID());
+		String messageKey = switch (outcome) {
+			case INVENTORY_ISSUED -> RETAKE_RECOVERED_KEY;
+			case FALLBACK_ISSUED -> RETAKE_FALLBACK_KEY;
+			case ALREADY_PRESENT -> RETAKE_ALREADY_KEY;
+			default -> RETAKE_NOTHING_KEY;
+		};
+		player.sendSystemMessage(Component.translatable(messageKey));
+		return switch (outcome) {
+			case INVENTORY_ISSUED, FALLBACK_ISSUED, ALREADY_PRESENT -> 1;
+			default -> 0;
+		};
 	}
 
 	private static int showStatus(ServerPlayer player, DevelopersHellRuntime runtime) {

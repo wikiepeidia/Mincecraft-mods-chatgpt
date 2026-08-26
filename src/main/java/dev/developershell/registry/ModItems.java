@@ -1,6 +1,7 @@
 package dev.developershell.registry;
 
 import dev.developershell.item.CursedInternshipContractItem;
+import dev.developershell.item.RetakeFormItem;
 import java.util.function.Function;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -16,8 +17,11 @@ public final class ModItems {
 			CursedInternshipContractItem::new,
 			new Item.Properties().stacksTo(16)
 	);
-	public static final Item RETAKE_FORM =
-			register(ModItemIds.RETAKE_FORM, Item::new, new Item.Properties().stacksTo(1));
+	public static final RetakeFormItem RETAKE_FORM = register(
+			ModItemIds.RETAKE_FORM,
+			RetakeFormItem::new,
+			new Item.Properties().stacksTo(1)
+	);
 	public static final Item ATTENDANCE_SHEET =
 			register(ModItemIds.ATTENDANCE_SHEET, Item::new, new Item.Properties());
 	public static final Item INFINITE_SLIDES_REMOTE =

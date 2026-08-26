@@ -67,6 +67,7 @@
   "message.developers_hell.retake.issued": "Retake Form issued. Use it on the Internship Desk.",
   "message.developers_hell.retake.nothing": "Nothing to retake.",
   "message.developers_hell.retake.recovered": "Retake Form recovered. Use it on the Internship Desk.",
+  "tooltip.developers_hell.retake_form.desk": "Use on your Internship Desk to retry the Lecture.",
   "tooltip.developers_hell.contract.blocks": "No blocks are changed by default.",
   "tooltip.developers_hell.contract.lecture": "Starts Lecture 1: Professor Infinite Slides.",
   "tooltip.developers_hell.contract.lectern": "Use on a lectern facing a clear Overworld area."

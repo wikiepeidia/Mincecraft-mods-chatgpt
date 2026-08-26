@@ -2,6 +2,7 @@ package dev.developershell.server;
 
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.PlayerCampaignState;
+import dev.developershell.item.RetakeFormItem;
 import dev.developershell.lecture.RetakeService;
 import java.util.Optional;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -39,6 +40,9 @@ public final class DeskInteraction {
 			InteractionHand hand,
 			BlockHitResult hit
 	) {
+		if (player.getItemInHand(hand).getItem() instanceof RetakeFormItem retakeForm) {
+			return retakeForm.interactWithBlock(player, level, hand, hit);
+		}
 		if (!player.getItemInHand(hand).isEmpty()) {
 			return InteractionResult.PASS;
 		}

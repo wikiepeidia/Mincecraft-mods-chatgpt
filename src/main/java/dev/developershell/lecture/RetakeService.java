@@ -5,6 +5,7 @@ import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.registry.ModItems;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -197,6 +198,74 @@ public final class RetakeService {
 	}
 
 	/**
+	 * Production retry boundary. The clicked Form, persisted entitlement, accepted arena, and
+	 * owning player must all describe the same attempt before deterministic runtime identities are
+	 * allocated. The lower transaction persists START before this method starts the runtime and
+	 * consumes the Form.
+	 */
+	public Outcome startRetake(
+			ServerPlayer player,
+			ArenaValidationResult.Accepted arena,
+			ItemStack presentedForm
+	) {
+		Objects.requireNonNull(player, "player");
+		Objects.requireNonNull(arena, "arena");
+		Objects.requireNonNull(presentedForm, "presentedForm");
+		ServerLevel level = player.level();
+		if (!level.getServer().isSameThread()
+				|| player.isSpectator()
+				|| (player.getMainHandItem() != presentedForm
+				&& player.getOffhandItem() != presentedForm)) {
+			return Outcome.RETRY_REJECTED;
+		}
+
+		UUID ownerUuid = player.getUUID();
+		Optional<PlayerCampaignState.RetakeKey> presentedKey = formKey(presentedForm);
+		Optional<PlayerCampaignState> current = campaign.state(ownerUuid);
+		if (presentedKey.isEmpty() || current.isEmpty()) {
+			return Outcome.RETRY_REJECTED;
+		}
+		PlayerCampaignState state = current.get();
+		var layout = arena.layout();
+		boolean matchingAuthority = state.status() == PlayerCampaignState.LectureStatus.RETAKE_READY
+				&& state.retakeKey().filter(presentedKey.get()::equals).isPresent()
+				&& presentedKey.get().ownerUuid().equals(ownerUuid)
+				&& state.deskDimension().equals(PlayerCampaignState.OVERWORLD_DIMENSION)
+				&& level.dimension().equals(net.minecraft.world.level.Level.OVERWORLD)
+				&& state.deskPos().equals(layout.deskPos())
+				&& state.deskFacing() == layout.forward()
+				&& state.retryPos().equals(arena.retryPos());
+		if (!matchingAuthority) {
+			return Outcome.RETRY_REJECTED;
+		}
+
+		int nextAttempt;
+		try {
+			nextAttempt = Math.addExact(state.attemptCount(), 1);
+		}
+		catch (ArithmeticException exception) {
+			return Outcome.RETRY_REJECTED;
+		}
+		UUID encounterUuid = deterministicUuid("encounter", ownerUuid, layout.deskPos(), nextAttempt);
+		UUID professorUuid = deterministicUuid("professor", ownerUuid, layout.deskPos(), nextAttempt);
+		if (level.getEntityInAnyDimension(professorUuid) != null
+				|| LectureEncounterManager.runtimeSnapshot(encounterUuid).isPresent()) {
+			return Outcome.RETRY_REJECTED;
+		}
+
+		return startRetake(
+				ownerUuid,
+				arena,
+				encounterUuid,
+				professorUuid,
+				intent -> campaign.state(ownerUuid)
+						.filter(persisted -> persisted.matchesActiveEncounter(ownerUuid, intent.encounter().encounterUuid()))
+						.map(persisted -> LectureEncounterManager.start(level, player, persisted))
+						.orElse(false)
+		);
+	}
+
+	/**
 	 * Starts one retry from an already-accepted arena. The keyed START is persisted before its
 	 * runtime intent is dispatched; only an accepted transition can consume or discard the old
 	 * physical representation.
@@ -310,6 +379,17 @@ public final class RetakeService {
 		if (fallbackPresent && !Objects.equals(fallbackUuid, reservationUuid)) {
 			representations.discardFallback(key, fallbackUuid);
 		}
+	}
+
+	private static UUID deterministicUuid(
+			String kind,
+			UUID ownerUuid,
+			BlockPos deskPos,
+			int attemptCount
+	) {
+		String value = kind + ":" + ownerUuid + ":" + deskPos.getX() + ":" + deskPos.getY()
+				+ ":" + deskPos.getZ() + ":" + attemptCount;
+		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
 	}
 
 	private Outcome ensureRepresentation(UUID ownerUuid) {
