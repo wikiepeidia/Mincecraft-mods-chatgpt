@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-14-PLAN.md
-last_updated: "2026-08-26T17:28:45.689Z"
+stopped_at: Completed 02-15-PLAN.md
+last_updated: "2026-08-26T17:39:57.931Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: b51f12bbcd1a8d5b70dcc78001dced4db6ea0715
+state_head: 81fd7adaa6bddb4ce799106137909bb587fa31c1
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 6
+  completed_plans: 7
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 3 of 18
+Plan: 4 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -64,6 +64,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 01 P04 | 15h | 3 tasks | 4 files |
 | Phase 02 P01 | 20min | 1 tasks | 12 files |
 | Phase 02 P14 | 14min | 1 tasks | 7 files |
+| Phase 02 P15 | 8min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-14: PlayerCampaignState and ProfessorInfiniteSlidesEntity are the sole state-owning final types; existing tracer consumers use zero-state compatibility views.
 - [Phase 02]: Plan 02-14: Schema-v1 optional fields preserve tracer saves, while encoded owner and UUID map-key disagreement makes campaign state read-only.
 - [Phase 02]: Plan 02-14: Professor damage requires matching attacker, live runtime participant, saved owner, and active encounter before CampaignService may commit rewards.
+- [Phase 02]: Plan 02-15: Capture one validated Standard LectureRules value per runtime so cadence and cue ceilings cannot change during an encounter.
+- [Phase 02]: Plan 02-15: Keep gameplay and presentation decisions on the logical server; the client only binds the stable Professor to VindicatorRenderer.
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T17:28:45.477Z
-Stopped at: Completed 02-14-PLAN.md
+Last session: 2026-08-26T17:39:57.794Z
+Stopped at: Completed 02-15-PLAN.md
 Resume file: None
