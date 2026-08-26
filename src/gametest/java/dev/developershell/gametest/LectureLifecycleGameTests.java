@@ -54,6 +54,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 	private static final UUID STOP_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000503");
 	private static final String RELOAD_KEY = "message.developers_hell.lecture.reload";
 	private static final String RETAKE_KEY = "message.developers_hell.lecture.retake";
+	private static final String RETAKE_ISSUED_KEY = "message.developers_hell.retake.issued";
 	private static final String SERVER_STOP_KEY = "message.developers_hell.lecture.failure.server_stop";
 
 	@GameTest(padding = 24)
@@ -194,7 +195,8 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			owner.clearRecordedSystemMessages();
 			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
 			assertConverged(context, level, reload, blocksBefore, desk, facing, "reload");
-			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(RELOAD_KEY, RETAKE_KEY),
+			context.assertValueEqual(owner.recordedSystemMessageKeys(),
+					List.of(RELOAD_KEY, RETAKE_KEY, RETAKE_ISSUED_KEY),
 					"reload shows exactly one safe Retake message group");
 
 			owner.clearRecordedSystemMessages();
@@ -233,7 +235,8 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 					restored, level, EntitySpawnReason.LOAD, true
 			), "matching disk Professor is rejected after startup normalization");
 			assertConverged(context, level, matchingDisk, blocksBefore, desk, facing, "orphan reload");
-			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(RELOAD_KEY, RETAKE_KEY),
+			context.assertValueEqual(owner.recordedSystemMessageKeys(),
+					List.of(RELOAD_KEY, RETAKE_KEY, RETAKE_ISSUED_KEY),
 					"matching disk normalization visibly returns the online owner to Retake");
 
 			connection.close();
@@ -269,7 +272,8 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			context.assertValueEqual(CampaignLifecycle.onServerStopping(server), 1,
 					"in-process stop handler accepts one active encounter");
 			assertConverged(context, level, active, blocksBefore, desk, facing, "server stop");
-			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(SERVER_STOP_KEY, RETAKE_KEY),
+			context.assertValueEqual(owner.recordedSystemMessageKeys(),
+					List.of(SERVER_STOP_KEY, RETAKE_KEY, RETAKE_ISSUED_KEY),
 					"stop handler reports one safe Retake message group");
 			PlayerCampaignState stopped = CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow();
 

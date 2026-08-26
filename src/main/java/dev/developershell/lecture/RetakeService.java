@@ -4,13 +4,23 @@ import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
+import dev.developershell.registry.ModItems;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.CustomData;
 
 /**
  * Sole ordering seam between the durable Retake entitlement and its lossy inventory/entity
@@ -18,8 +28,11 @@ import net.minecraft.server.level.ServerLevel;
  * owns the state-first protocol they must follow.
  */
 public final class RetakeService {
+	private static final String FORM_OWNER_TAG = "developers_hell_retake_owner";
+	private static final String FORM_ENCOUNTER_TAG = "developers_hell_retake_encounter";
 	private static final Consumer<CampaignTransition.EffectIntent> IGNORE_EFFECT = effect -> {
 	};
+	private static boolean fallbackLifecycleRegistered;
 
 	private final CampaignPort campaign;
 	private final RepresentationPort representations;
@@ -56,6 +69,121 @@ public final class RetakeService {
 				return CampaignService.apply(level, event, effectConsumer);
 			}
 		}, representations, fallbackIds);
+	}
+
+	/** Production composition over the real player inventory and owner-targeted ItemEntity. */
+	public static RetakeService forLevel(ServerLevel level) {
+		Objects.requireNonNull(level, "level");
+		return forLevel(level, new MinecraftRepresentationPort(level), UUID::randomUUID);
+	}
+
+	/** Explicit lifecycle effect adapter used only after a persisted ReconcileRetake intent. */
+	public static Outcome reconcile(ServerLevel level, UUID ownerUuid) {
+		return forLevel(Objects.requireNonNull(level, "level"))
+				.reconcile(Objects.requireNonNull(ownerUuid, "ownerUuid"));
+	}
+
+	/**
+	 * Installs one fence for tracked fallback unloads and stale bound entity reloads. Durable
+	 * authority is cleared before a lost entity can be replaced, and an old chunk copy cannot
+	 * later become a second representation.
+	 */
+	public static synchronized void registerFallbackLifecycle() {
+		if (fallbackLifecycleRegistered) {
+			return;
+		}
+		ServerEntityEvents.ALLOW_LOAD.register(RetakeService::allowFallbackLoad);
+		ServerEntityEvents.ENTITY_UNLOAD.register(RetakeService::onFallbackUnload);
+		fallbackLifecycleRegistered = true;
+	}
+
+	/** Reads the fail-closed owner/failed-encounter binding from one production Form stack. */
+	public static Optional<PlayerCampaignState.RetakeKey> formKey(ItemStack stack) {
+		Objects.requireNonNull(stack, "stack");
+		if (stack.isEmpty() || stack.getItem() != ModItems.RETAKE_FORM) {
+			return Optional.empty();
+		}
+		CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+		if (customData == null || customData.isEmpty()) {
+			return Optional.empty();
+		}
+		CompoundTag tag = customData.copyTag();
+		Optional<UUID> ownerUuid = tag.read(FORM_OWNER_TAG, UUIDUtil.CODEC);
+		Optional<UUID> encounterUuid = tag.read(FORM_ENCOUNTER_TAG, UUIDUtil.CODEC);
+		if (ownerUuid.isEmpty() || encounterUuid.isEmpty()) {
+			return Optional.empty();
+		}
+		return Optional.of(new PlayerCampaignState.RetakeKey(ownerUuid.get(), encounterUuid.get()));
+	}
+
+	/** Creates one non-stackable Form bound to the exact durable Retake key. */
+	public static ItemStack boundForm(PlayerCampaignState.RetakeKey key) {
+		Objects.requireNonNull(key, "key");
+		ItemStack stack = new ItemStack(ModItems.RETAKE_FORM);
+		CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+			tag.store(FORM_OWNER_TAG, UUIDUtil.CODEC, key.ownerUuid());
+			tag.store(FORM_ENCOUNTER_TAG, UUIDUtil.CODEC, key.failedEncounterUuid());
+		});
+		return stack;
+	}
+
+	private static boolean allowFallbackLoad(
+			Entity entity,
+			ServerLevel level,
+			net.minecraft.world.entity.EntitySpawnReason spawnReason,
+			boolean loadedFromDisk
+	) {
+		if (!(entity instanceof ItemEntity item)) {
+			return true;
+		}
+		Optional<PlayerCampaignState.RetakeKey> key = formKey(item.getItem());
+		return key.isEmpty() || isTrackedFallback(level, key.get(), item.getUUID());
+	}
+
+	private static void onFallbackUnload(Entity entity, ServerLevel level) {
+		if (!(entity instanceof ItemEntity item)) {
+			return;
+		}
+		Optional<PlayerCampaignState.RetakeKey> keyView = formKey(item.getItem());
+		if (keyView.isEmpty()) {
+			return;
+		}
+		PlayerCampaignState.RetakeKey key = keyView.get();
+		CampaignService.snapshot(level, key.ownerUuid()).ifPresent(state -> {
+			if (state.status() != PlayerCampaignState.LectureStatus.RETAKE_READY
+					|| state.retakeKey().filter(key::equals).isEmpty()) {
+				return;
+			}
+			UUID entityUuid = item.getUUID();
+			CampaignEvent.FallbackOperation operation;
+			if (entityUuid.equals(state.retakeFallbackReservationUuid())) {
+				operation = CampaignEvent.FallbackOperation.MATERIALIZATION_FAILED;
+			}
+			else if (entityUuid.equals(state.retakeFallbackEntityUuid())) {
+				operation = CampaignEvent.FallbackOperation.LOST;
+			}
+			else {
+				return;
+			}
+			CampaignService.apply(
+					level,
+					new CampaignEvent.RetakeFallback(key.ownerUuid(), key, entityUuid, operation),
+					IGNORE_EFFECT
+			);
+		});
+	}
+
+	private static boolean isTrackedFallback(
+			ServerLevel level,
+			PlayerCampaignState.RetakeKey key,
+			UUID fallbackUuid
+	) {
+		return CampaignService.snapshot(level, key.ownerUuid()).filter(state ->
+				state.status() == PlayerCampaignState.LectureStatus.RETAKE_READY
+						&& state.retakeKey().filter(key::equals).isPresent()
+						&& (fallbackUuid.equals(state.retakeFallbackReservationUuid())
+						|| fallbackUuid.equals(state.retakeFallbackEntityUuid()))
+		).isPresent();
 	}
 
 	/** Ensures exactly one recoverable inventory Form or tracked fallback projection. */
@@ -352,6 +480,98 @@ public final class RetakeService {
 		RETRY_ACCEPTED,
 		RETRY_REJECTED,
 		RUNTIME_START_FAILED
+	}
+
+	/** Concrete lossy projection adapter; all durable decisions remain in RetakeService. */
+	private static final class MinecraftRepresentationPort implements RepresentationPort {
+		private final ServerLevel level;
+
+		private MinecraftRepresentationPort(ServerLevel level) {
+			this.level = Objects.requireNonNull(level, "level");
+		}
+
+		@Override
+		public boolean hasInventoryForm(PlayerCampaignState.RetakeKey key) {
+			ServerPlayer owner = owner(key);
+			if (owner == null) {
+				return false;
+			}
+			for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+				if (formKey(owner.getInventory().getItem(slot)).filter(key::equals).isPresent()) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
+		public boolean hasFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			Entity entity = level.getEntityInAnyDimension(fallbackEntityUuid);
+			return entity instanceof ItemEntity item
+					&& !item.isRemoved()
+					&& formKey(item.getItem()).filter(key::equals).isPresent();
+		}
+
+		@Override
+		public boolean tryInsertInventoryForm(PlayerCampaignState.RetakeKey key) {
+			ServerPlayer owner = owner(key);
+			return owner != null && owner.getInventory().add(boundForm(key));
+		}
+
+		@Override
+		public boolean materializeFallback(
+				PlayerCampaignState.RetakeKey key,
+				UUID fallbackEntityUuid,
+				BlockPos retryPos
+		) {
+			if (!isTrackedFallback(level, key, fallbackEntityUuid)
+					|| level.getEntityInAnyDimension(fallbackEntityUuid) != null
+					|| !level.isLoaded(retryPos)
+					|| !level.getWorldBorder().isWithinBounds(retryPos)) {
+				return false;
+			}
+			ItemEntity fallback = new ItemEntity(
+					level,
+					retryPos.getX() + 0.5D,
+					retryPos.getY() + 0.25D,
+					retryPos.getZ() + 0.5D,
+					boundForm(key)
+			);
+			fallback.setUUID(fallbackEntityUuid);
+			fallback.setTarget(key.ownerUuid());
+			fallback.setDefaultPickUpDelay();
+			return level.addFreshEntity(fallback);
+		}
+
+		@Override
+		public void consumeInventoryForm(PlayerCampaignState.RetakeKey key) {
+			ServerPlayer owner = owner(key);
+			if (owner == null) {
+				return;
+			}
+			for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+				ItemStack stack = owner.getInventory().getItem(slot);
+				if (formKey(stack).filter(key::equals).isPresent()) {
+					stack.shrink(1);
+					owner.getInventory().setChanged();
+					return;
+				}
+			}
+		}
+
+		@Override
+		public void discardFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			Entity entity = level.getEntityInAnyDimension(fallbackEntityUuid);
+			if (entity instanceof ItemEntity item
+					&& formKey(item.getItem()).filter(key::equals).isPresent()) {
+				item.discard();
+			}
+		}
+
+		private ServerPlayer owner(PlayerCampaignState.RetakeKey key) {
+			ServerPlayer owner = level.getServer().getPlayerList().getPlayer(key.ownerUuid());
+			return owner != null && owner.level() == level ? owner : null;
+		}
 	}
 
 	/** Runtime materialization result for the already-persisted immutable START intent. */

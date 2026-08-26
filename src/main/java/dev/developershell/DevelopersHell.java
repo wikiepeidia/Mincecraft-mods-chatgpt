@@ -3,9 +3,11 @@ package dev.developershell;
 import dev.developershell.command.DevHellCommands;
 import dev.developershell.config.ConfigIssue;
 import dev.developershell.config.DevHellConfigLoader;
+import dev.developershell.lecture.RetakeService;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import dev.developershell.server.CampaignLifecycle;
+import dev.developershell.server.DeskInteraction;
 import dev.developershell.server.DevelopersHellRuntime;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -45,9 +47,12 @@ public final class DevelopersHell implements ModInitializer {
 			);
 		}
 
+		RetakeService.registerFallbackLifecycle();
+		runtime.lifecycle().bindRetakeReconciler(RetakeService::reconcile);
 		CampaignLifecycle.register(runtime);
 		runtime.lectureManager().initialize();
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
+		DeskInteraction.register();
 		DevHellCommands.register(runtime);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			runtime.lectureManager().tick(server);

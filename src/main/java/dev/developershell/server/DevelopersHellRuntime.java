@@ -9,6 +9,7 @@ import dev.developershell.lecture.ArenaRejection;
 import dev.developershell.lecture.ArenaValidationResult;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureRules;
+import dev.developershell.lecture.RetakeService;
 import dev.developershell.module.ModuleGate;
 import java.util.Objects;
 import java.util.LinkedHashSet;
@@ -106,7 +107,19 @@ public final class DevelopersHellRuntime {
 	public static final class LifecycleAdapter {
 		private static final String RELOAD_KEY = "message.developers_hell.lecture.reload";
 		private static final String RETAKE_KEY = "message.developers_hell.lecture.retake";
+		private static final String RETAKE_ISSUED_KEY = "message.developers_hell.retake.issued";
+		private static final String RETAKE_FALLBACK_KEY = "message.developers_hell.retake.fallback";
 		private final Set<UUID> pendingReloadNotices = new LinkedHashSet<>();
+		private RetakeReconciler retakeReconciler;
+
+		/** Explicit one-time binding keeps lifecycle persistence separate from physical projections. */
+		public synchronized void bindRetakeReconciler(RetakeReconciler reconciler) {
+			Objects.requireNonNull(reconciler, "reconciler");
+			if (retakeReconciler != null && retakeReconciler != reconciler) {
+				throw new IllegalStateException("Retake reconciler already bound to another runtime adapter");
+			}
+			retakeReconciler = reconciler;
+		}
 
 		public boolean submit(ServerLevel level, CampaignEvent event, ServerPlayer feedbackPlayer) {
 			Objects.requireNonNull(level, "level");
@@ -126,6 +139,14 @@ public final class DevelopersHellRuntime {
 			if (!transition.accepted()) {
 				return false;
 			}
+			RetakeService.Outcome retakeOutcome = null;
+			if (reconcileRetake[0]) {
+				RetakeReconciler reconciler = retakeReconciler;
+				if (reconciler == null) {
+					throw new IllegalStateException("Retake reconciler must be bound before lifecycle callbacks");
+				}
+				retakeOutcome = reconciler.reconcile(level, event.ownerUuid());
+			}
 
 			if (event instanceof CampaignEvent.NormalizeReload) {
 				if (feedback == null) {
@@ -140,6 +161,9 @@ public final class DevelopersHellRuntime {
 				if (reconcileRetake[0]) {
 					feedback.sendSystemMessage(Component.translatable(RETAKE_KEY));
 				}
+			}
+			if (feedback != null) {
+				sendMaterializationNotice(feedback, retakeOutcome);
 			}
 			return true;
 		}
@@ -178,6 +202,23 @@ public final class DevelopersHellRuntime {
 		private static void sendReloadNotice(ServerPlayer player) {
 			player.sendSystemMessage(Component.translatable(RELOAD_KEY));
 			player.sendSystemMessage(Component.translatable(RETAKE_KEY));
+		}
+
+		private static void sendMaterializationNotice(
+				ServerPlayer player,
+				RetakeService.Outcome outcome
+		) {
+			if (outcome == RetakeService.Outcome.INVENTORY_ISSUED) {
+				player.sendSystemMessage(Component.translatable(RETAKE_ISSUED_KEY));
+			}
+			else if (outcome == RetakeService.Outcome.FALLBACK_ISSUED) {
+				player.sendSystemMessage(Component.translatable(RETAKE_FALLBACK_KEY));
+			}
+		}
+
+		@FunctionalInterface
+		public interface RetakeReconciler {
+			RetakeService.Outcome reconcile(ServerLevel level, UUID ownerUuid);
 		}
 	}
 

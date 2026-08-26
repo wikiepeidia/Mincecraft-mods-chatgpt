@@ -34,6 +34,7 @@ import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -98,7 +99,9 @@ public final class RetakeGameTests implements CustomTestMethodInvoker {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(RELATIVE_DESK);
 		UUID ownerUuid = invocationOwnerUuid(owner(802), desk, level.getGameTime());
+		UUID intruderUuid = invocationOwnerUuid(owner(804), desk, level.getGameTime());
 		ConnectedPlayer connection = null;
+		ConnectedPlayer intruderConnection = null;
 		try {
 			buildArena(level, desk, FACING);
 			connection = createSurvivalPlayer(context, ownerUuid, "retake-fallback");
@@ -123,6 +126,14 @@ public final class RetakeGameTests implements CustomTestMethodInvoker {
 					"full inventory has no concurrent inventory Form");
 			context.assertTrue(owner.recordedSystemMessageKeys().contains(FALLBACK_KEY),
 					"fallback placement uses localized inventory-full copy");
+			intruderConnection = createSurvivalPlayer(context, intruderUuid, "retake-intruder");
+			RecordingServerPlayer intruder = intruderConnection.player();
+			fallback.playerTouch(intruder);
+			context.assertFalse(fallback.isRemoved(), "owner-targeted fallback rejects another player pickup");
+			context.assertValueEqual(boundFormCount(intruder, key), 0,
+					"another player cannot acquire the owner-bound fallback Form");
+			context.assertValueEqual(state(level, ownerUuid), ready,
+					"wrong-player pickup changes no owner authority");
 
 			ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(fallback, level);
 			PlayerCampaignState lost = state(level, ownerUuid);
@@ -131,6 +142,12 @@ public final class RetakeGameTests implements CustomTestMethodInvoker {
 			ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(fallback, level);
 			context.assertValueEqual(state(level, ownerUuid), lost,
 					"duplicate unload is a durable no-op");
+			ItemEntity staleReload = new ItemEntity(level, fallback.getX(), fallback.getY(), fallback.getZ(),
+					fallback.getItem().copy());
+			staleReload.setUUID(fallbackUuid);
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleReload, level, EntitySpawnReason.LOAD, true
+			), "cleared fallback cannot resurrect from a stale chunk copy");
 			fallback.discard();
 
 			owner.getInventory().setItem(owner.getInventory().getSelectedSlot(), ItemStack.EMPTY);
@@ -148,6 +165,7 @@ public final class RetakeGameTests implements CustomTestMethodInvoker {
 		}
 		finally {
 			cleanupOwner(level, ownerUuid);
+			close(intruderConnection);
 			close(connection);
 			clearArena(level, desk, FACING);
 		}

@@ -62,6 +62,11 @@
   "message.developers_hell.lecture.reload": "Lecture restored as a safe Retake. No in-flight attack was resumed.",
   "message.developers_hell.lecture.retake": "Use the Retake Form on the Internship Desk to retry.",
   "message.developers_hell.lecture.slide_start": "Slide Deck started. Hold the named safe lane until cooldown.",
+  "message.developers_hell.retake.already": "Retake Form already available.",
+  "message.developers_hell.retake.fallback": "Inventory full: Retake Form placed at your retry point.",
+  "message.developers_hell.retake.issued": "Retake Form issued. Use it on the Internship Desk.",
+  "message.developers_hell.retake.nothing": "Nothing to retake.",
+  "message.developers_hell.retake.recovered": "Retake Form recovered. Use it on the Internship Desk.",
   "tooltip.developers_hell.contract.blocks": "No blocks are changed by default.",
   "tooltip.developers_hell.contract.lecture": "Starts Lecture 1: Professor Infinite Slides.",
   "tooltip.developers_hell.contract.lectern": "Use on a lectern facing a clear Overworld area."
