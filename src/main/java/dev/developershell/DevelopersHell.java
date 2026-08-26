@@ -1,9 +1,11 @@
 package dev.developershell;
 
-import dev.developershell.lecture.LectureEncounterManager;
-import dev.developershell.lecture.LectureRules;
+import dev.developershell.command.DevHellCommands;
+import dev.developershell.config.ConfigIssue;
+import dev.developershell.config.DevHellConfigLoader;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
+import dev.developershell.server.DevelopersHellRuntime;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.resources.Identifier;
@@ -22,10 +24,31 @@ public final class DevelopersHell implements ModInitializer {
 	public void onInitialize() {
 		ModItems.initialize();
 		ModEntities.initialize();
-		LectureEncounterManager.initialize(LectureRules.standard());
-		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction();
+
+		DevHellConfigLoader.LoadResult loadResult = DevHellConfigLoader.loadFromConfigDirectory();
+		DevelopersHellRuntime runtime = DevelopersHellRuntime.create(loadResult);
+		LOGGER.info(
+				"Developer's Hell config source={}, campaignEnabled={}, difficulty={}, enabledModules={}/{}",
+				loadResult.sourceStatus().serializedName(),
+				runtime.config().campaignEnabled(),
+				runtime.config().difficulty().serializedName(),
+				runtime.moduleGate().enabledModules().size(),
+				dev.developershell.module.ModuleId.values().length
+		);
+		for (ConfigIssue issue : loadResult.issues()) {
+			LOGGER.warn(
+					"Developer's Hell config issue path={} rejected={} expected={}",
+					issue.path(),
+					issue.rejectedValue(),
+					issue.expected()
+			);
+		}
+
+		runtime.lectureManager().initialize();
+		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
+		DevHellCommands.register(runtime);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
-			LectureEncounterManager.tick(server);
+			runtime.lectureManager().tick(server);
 			if (server.getTickCount() == 1) {
 				LOGGER.info("DEVELOPERS_HELL_SERVER_FIRST_TICK_READY");
 			}

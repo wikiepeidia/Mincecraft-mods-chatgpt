@@ -4,12 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.developershell.lecture.LectureRules;
 import dev.developershell.module.ModuleGate;
 import dev.developershell.module.ModuleId;
 import dev.developershell.registry.ModItemIds;
+import dev.developershell.server.DevelopersHellRuntime;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -348,6 +351,57 @@ final class DevHellConfigTest {
 		assertThrows(UnsupportedOperationException.class,
 				() -> result.issues().add(new ConfigIssue("$", "x", "y")));
 		assertNotSame(source, config.enabledModules());
+	}
+
+	@Test
+	void runtimeCompositionUsesExactAcceptedImmutableSnapshot() {
+		EnumSet<ModuleId> selectedModules = EnumSet.of(ModuleId.GIT_HAPPENS, ModuleId.PYTHON_TOOLS);
+		DevHellConfig.LectureTuning tuning = new DevHellConfig.LectureTuning(
+				240,
+				9,
+				6,
+				140,
+				200,
+				180,
+				120,
+				20,
+				15,
+				10,
+				30,
+				10,
+				7
+		);
+		DevHellConfig config = new DevHellConfig(
+				1,
+				false,
+				DevHellConfig.Difficulty.INTENSE,
+				true,
+				false,
+				true,
+				tuning,
+				selectedModules,
+				DevHellConfig.ScheduleMode.AUTOMATIC,
+				DevHellConfig.ScheduleMode.MANUAL
+		);
+		DevHellConfigLoader.LoadResult loadResult = new DevHellConfigLoader.LoadResult(
+				config,
+				DevHellConfigLoader.SourceStatus.VALID,
+				List.of(),
+				false
+		);
+
+		DevelopersHellRuntime runtime = DevelopersHellRuntime.create(loadResult);
+		selectedModules.clear();
+
+		assertSame(loadResult, runtime.loadResult());
+		assertSame(config, runtime.config());
+		assertFalse(runtime.campaignService().campaignEnabled());
+		assertEquals(Set.of(ModuleId.GIT_HAPPENS, ModuleId.PYTHON_TOOLS), runtime.moduleGate().enabledModules());
+		assertEquals(
+				new LectureRules(140, 120, 20, 15, 10, 30, 10),
+				runtime.lectureRules()
+		);
+		assertSame(runtime.lectureRules(), runtime.lectureManager().rules());
 	}
 
 	@Test

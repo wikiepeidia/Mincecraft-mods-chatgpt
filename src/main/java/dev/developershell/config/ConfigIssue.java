@@ -30,10 +30,8 @@ public record ConfigIssue(String path, String rejectedValue, String expected) {
 				|| lower.contains("secret")
 				|| lower.contains("token")
 				|| lower.contains("credential")
-				|| lower.contains("authorization")
 				|| lower.contains("endpoint")
 				|| lower.contains("http")
-				|| lower.contains("openai")
 				|| lower.contains("budget")
 				|| lower.contains("spend")) {
 			return REDACTED;

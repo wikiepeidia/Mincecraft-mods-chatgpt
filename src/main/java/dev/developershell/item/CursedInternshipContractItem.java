@@ -1,6 +1,7 @@
 package dev.developershell.item;
 
-import dev.developershell.campaign.CampaignService;
+import dev.developershell.server.DevelopersHellRuntime.CampaignServiceAdapter;
+import java.util.Objects;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -19,6 +20,7 @@ import net.minecraft.world.phys.BlockHitResult;
 
 public final class CursedInternshipContractItem extends Item {
 	private boolean interactionRegistered;
+	private volatile CampaignServiceAdapter campaignService;
 
 	public CursedInternshipContractItem(Properties properties) {
 		super(properties);
@@ -28,10 +30,15 @@ public final class CursedInternshipContractItem extends Item {
 	 * Empty lecterns consume vanilla empty-hand handling before Item.useOn. Register the
 	 * Fabric pre-block callback so ordinary Contract use reaches the logical server.
 	 */
-	public synchronized void registerInteraction() {
+	public synchronized void registerInteraction(CampaignServiceAdapter campaignService) {
+		Objects.requireNonNull(campaignService, "campaignService");
 		if (interactionRegistered) {
+			if (this.campaignService != campaignService) {
+				throw new IllegalStateException("Contract interaction already bound to another runtime");
+			}
 			return;
 		}
+		this.campaignService = campaignService;
 		UseBlockCallback.EVENT.register(this::interactWithBlock);
 		interactionRegistered = true;
 	}
@@ -74,8 +81,12 @@ public final class CursedInternshipContractItem extends Item {
 		if (!(level instanceof ServerLevel) || !(player instanceof ServerPlayer serverPlayer)) {
 			return InteractionResult.FAIL;
 		}
+		CampaignServiceAdapter service = campaignService;
+		if (service == null) {
+			return InteractionResult.FAIL;
+		}
 		Direction facing = state.getValue(LecternBlock.FACING);
-		return CampaignService.start(serverPlayer, hit.getBlockPos(), facing, stack)
+		return service.start(serverPlayer, hit.getBlockPos(), facing, stack)
 				? InteractionResult.SUCCESS_SERVER
 				: InteractionResult.FAIL;
 	}
