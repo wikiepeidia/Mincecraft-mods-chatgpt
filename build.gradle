@@ -114,65 +114,87 @@ tasks.register("auditDirectDependencies") {
 			"testImplementation|net.fabricmc:fabric-loader-junit:${project.loader_version}",
 			"productionRuntimeMods|net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 		].sort()
-		def loomOwnedConfigurations = [
-			"cfrDecompilerClasspath", "loaderLibraries", "loomDevelopmentDependencies",
-			"minecraftClientLibraries", "minecraftClientOnlyNamedCompile", "minecraftClientOnlyNamedRuntime",
-			"minecraftCommonNamedCompile", "minecraftCommonNamedRuntime", "minecraftNatives",
-			"minecraftServerLibraries", "vineflowerDecompilerClasspath"
-		] as Set
-		def injectedAnnotations = "org.jetbrains:annotations:26.0.2"
 		def injectedClientOutput = [
 			file("${layout.buildDirectory.get().asFile}/classes/java/client").canonicalPath,
 			file("${layout.buildDirectory.get().asFile}/resources/client").canonicalPath
 		].sort()
+		def expectedProjectTuples = expected.collect {
+			def split = it.indexOf('|')
+			"${it.substring(0, split)}|external-module|${it.substring(split + 1)}|transitive=true|target=|artifacts=|excludes="
+		}.sort()
+		// This count/hash pins the complete Loom 1.17.19 + Minecraft 26.2 injection
+		// multiset after every entry is canonicalized as configuration, public
+		// dependency type, coordinate, classifier, behavior, or exact client output.
+		// It is deliberately not a configuration-name exemption: one added, removed,
+		// moved, duplicated, reclassified, or otherwise changed entry changes the hash.
+		def expectedLoomTupleCount = 145
+		def expectedLoomTupleSha256 = "a3fef1ae5a4b68b3c02af8e92827285f0c859ec0e9df4be85803181eb3cc767b"
 
-		def declared = []
+		def remainingProjectTuples = new ArrayList(expectedProjectTuples)
+		def loomTuples = []
 		configurations.findAll {
-			it.canBeDeclared && !loomOwnedConfigurations.contains(it.name) && !it.dependencies.empty
+			it.canBeDeclared && !it.dependencies.empty
 		}.each { configuration ->
 			configuration.dependencies.each { dependency ->
-				def coordinate = dependency.group && dependency.name && dependency.version
-						? "${dependency.group}:${dependency.name}:${dependency.version}"
-						: null
-				if (configuration.name in ["compileOnly", "testCompileOnly"] && coordinate == injectedAnnotations) {
-					logger.lifecycle("DEVELOPERS_HELL_PLUGIN_INJECTED=${configuration.name}|${coordinate}")
-					return
-				}
-				if (configuration.name == "testImplementation" &&
-						dependency instanceof org.gradle.api.artifacts.FileCollectionDependency) {
+				def tuple
+				if (dependency instanceof org.gradle.api.artifacts.FileCollectionDependency) {
 					def actualFiles = dependency.files.files.collect { it.canonicalPath }.sort()
-					if (actualFiles == injectedClientOutput) {
-						logger.lifecycle("DEVELOPERS_HELL_PLUGIN_INJECTED=testImplementation|client-source-output")
-						return
-					}
+					def fileIdentity = configuration.name == "testImplementation" && actualFiles == injectedClientOutput
+							? "client-source-output"
+							: actualFiles.join(';')
+					tuple = "${configuration.name}|file-collection|${fileIdentity}"
 				}
-				if (!(dependency instanceof org.gradle.api.artifacts.ExternalModuleDependency)) {
+				else if (dependency instanceof org.gradle.api.artifacts.ExternalModuleDependency) {
+					def groupName = dependency.group
+					def moduleName = dependency.name
+					def moduleVersion = dependency.version
+					if (!groupName || !moduleName || !moduleVersion) {
+						throw new GradleException("Direct dependency on ${configuration.name} is missing group, name, or version: ${dependency}")
+					}
+					def dynamicVersion = moduleVersion == '+' ||
+							moduleVersion.endsWith('.+') ||
+							moduleVersion ==~ /(?i)^latest(?:[.-].*)?$/ ||
+							moduleVersion ==~ /(?i).*[-.]snapshot$/ ||
+							moduleVersion.find(/[\[\](){}*,]/) != null
+					if (dynamicVersion || moduleVersion != moduleVersion.trim()) {
+						throw new GradleException("Dynamic, range, latest, or unresolved snapshot dependency is forbidden: ${configuration.name} -> ${dependency}")
+					}
+					def artifacts = dependency.artifacts.collect {
+						"${it.name}:${it.type}:${it.extension}:${it.classifier ?: ''}"
+					}.sort().join(',')
+					def excludes = dependency.excludeRules.collect {
+						"${it.group ?: ''}:${it.module ?: ''}"
+					}.sort().join(',')
+					tuple = "${configuration.name}|external-module|${groupName}:${moduleName}:${moduleVersion}" +
+							"|transitive=${dependency.transitive}|target=${dependency.targetConfiguration ?: ''}|artifacts=${artifacts}|excludes=${excludes}"
+				}
+				else {
 					throw new GradleException("Forbidden non-module direct dependency on ${configuration.name}: ${dependency}")
 				}
 
-				def groupName = dependency.group
-				def moduleName = dependency.name
-				def moduleVersion = dependency.version
-				if (!groupName || !moduleName || !moduleVersion) {
-					throw new GradleException("Direct dependency on ${configuration.name} is missing group, name, or version: ${dependency}")
+				def projectIndex = remainingProjectTuples.indexOf(tuple)
+				if (projectIndex >= 0) {
+					remainingProjectTuples.remove(projectIndex)
 				}
-				def dynamicVersion = moduleVersion == '+' ||
-						moduleVersion.endsWith('.+') ||
-						moduleVersion ==~ /(?i)^latest(?:[.-].*)?$/ ||
-						moduleVersion ==~ /(?i).*[-.]snapshot$/ ||
-						moduleVersion.find(/[\[\](){}*,]/) != null
-				if (dynamicVersion || moduleVersion != moduleVersion.trim()) {
-					throw new GradleException("Dynamic, range, latest, or unresolved snapshot dependency is forbidden: ${configuration.name} -> ${dependency}")
+				else {
+					loomTuples << tuple
 				}
-
-				declared << "${configuration.name}|${groupName}:${moduleName}:${moduleVersion}"
 			}
 		}
 
-		def actual = declared.sort()
-		if (actual != expected) {
-			throw new GradleException("Direct dependency allowlist mismatch. Expected ${expected}; actual ${actual}")
+		if (!remainingProjectTuples.empty) {
+			throw new GradleException("Direct dependency allowlist is missing exact project tuples: ${remainingProjectTuples}")
 		}
+		def canonicalLoomTuples = loomTuples.sort()
+		def tuplePayload = canonicalLoomTuples.join('\n').getBytes(java.nio.charset.StandardCharsets.UTF_8)
+		def actualLoomTupleSha256 = java.security.MessageDigest.getInstance("SHA-256")
+				.digest(tuplePayload).encodeHex().toString()
+		if (canonicalLoomTuples.size() != expectedLoomTupleCount || actualLoomTupleSha256 != expectedLoomTupleSha256) {
+			throw new GradleException("Loom injection tuple mismatch. Expected count/hash ${expectedLoomTupleCount}/${expectedLoomTupleSha256}; " +
+					"actual ${canonicalLoomTuples.size()}/${actualLoomTupleSha256}; exact actual tuples ${canonicalLoomTuples}")
+		}
+		logger.lifecycle("DEVELOPERS_HELL_PLUGIN_INJECTIONS=${canonicalLoomTuples.size()}|sha256=${actualLoomTupleSha256}")
+		def actual = expected
 
 		def installationPaths = System.getProperty("org.gradle.java.installations.paths", "")
 		def installations = installationPaths.split(java.util.regex.Pattern.quote(File.pathSeparator))
