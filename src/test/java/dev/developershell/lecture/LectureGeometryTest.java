@@ -125,18 +125,22 @@ final class LectureGeometryTest {
 			Direction back = facing.getOpposite();
 			Direction right = facing.getClockWise();
 			List<BlockPos> expected = new ArrayList<>();
-			for (int distance = 2; distance <= 5; distance++) {
-				expected.add(DESK.relative(back, distance));
-				for (int lateral = 1; lateral <= 2; lateral++) {
-					expected.add(DESK.relative(back, distance).relative(right, lateral));
-					expected.add(DESK.relative(back, distance).relative(right, -lateral));
+			for (int shell = 2; shell <= 5; shell++) {
+				expected.add(DESK.relative(back, shell));
+				for (int lateral = 1; lateral <= shell; lateral++) {
+					expected.add(DESK.relative(back, shell).relative(right, lateral));
+					expected.add(DESK.relative(back, shell).relative(right, -lateral));
+				}
+				for (int distance = shell - 1; distance >= 2; distance--) {
+					expected.add(DESK.relative(back, distance).relative(right, shell));
+					expected.add(DESK.relative(back, distance).relative(right, -shell));
 				}
 			}
 
 			assertEquals(expected, layout.retryCandidates(), facing + " documented retry order");
 			assertEquals(DESK.relative(facing, -2), layout.retryCandidates().getFirst(), facing + " first retry");
-			assertEquals(20, layout.retryCandidates().size(), facing + " finite retry count");
-			assertEquals(20, new HashSet<>(layout.retryCandidates()).size(), facing + " no duplicate probes");
+			assertEquals(44, layout.retryCandidates().size(), facing + " finite retry count");
+			assertEquals(44, new HashSet<>(layout.retryCandidates()).size(), facing + " no duplicate probes");
 			assertTrue(layout.retryCandidates().stream().allMatch(candidate ->
 					Math.max(Math.abs(candidate.getX() - DESK.getX()), Math.abs(candidate.getZ() - DESK.getZ())) <= 5),
 					facing + " radius-five bound");
