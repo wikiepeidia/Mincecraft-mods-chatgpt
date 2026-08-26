@@ -205,7 +205,8 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 		}
 	}
 
-	@GameTest(maxTicks = 260, padding = 24)
+	// Superseded by LectureBossGameTests: the retained one-window tracer cannot satisfy
+	// the three act health floors and must not remain a registered GameTest.
 	public void contractStartsSlideWindowAndCommitsFirstReward(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(new BlockPos(12, 2, 4));

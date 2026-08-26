@@ -96,34 +96,35 @@ public final class LectureBossGameTests implements CustomTestMethodInvoker {
 			ServerPlayer owner = ownerConnection.player();
 			ServerPlayer other = otherConnection.player();
 			PlayerCampaignState active = startAttempt(context, level, owner, desk, facing);
-			encounterUuid = active.encounterUuid();
+			UUID activeEncounterUuid = active.encounterUuid();
+			encounterUuid = activeEncounterUuid;
 
-			LectureStateMachine.State slide = combatState(context, encounterUuid);
+			LectureStateMachine.State slide = combatState(context, activeEncounterUuid);
 			context.assertValueEqual(slide.act(), LectureAct.SLIDE_DECK, "first act");
 			placeAtLocal(owner, desk, facing, 9, laneCenter(slide.safeLane()));
-			tick(level, encounterUuid, slide.deadlineTick());
-			tick(level, encounterUuid, slide.deadlineTick() + 1L);
-			context.assertTrue(LectureEncounterManager.isVulnerabilityOpen(encounterUuid), "safe lane opens Act 1 window");
-			var professor = LectureEncounterManager.professor(encounterUuid)
+			tick(level, activeEncounterUuid, slide.deadlineTick());
+			tick(level, activeEncounterUuid, slide.deadlineTick() + 1L);
+			context.assertTrue(LectureEncounterManager.isVulnerabilityOpen(activeEncounterUuid), "safe lane opens Act 1 window");
+			var professor = LectureEncounterManager.professor(activeEncounterUuid)
 					.orElseThrow(() -> context.assertionException("missing Professor"));
 			context.assertTrue(
 					professor.hurtServer(level, owner.damageSources().playerAttack(owner), professor.getMaxHealth()),
 					"owner closes Act 1 threshold"
 			);
-			tick(level, encounterUuid, slide.deadlineTick() + 2L);
-			LectureStateMachine.State recovery = combatState(context, encounterUuid);
+			tick(level, activeEncounterUuid, slide.deadlineTick() + 2L);
+			LectureStateMachine.State recovery = combatState(context, activeEncounterUuid);
 			context.assertValueEqual(recovery.stage(), LectureStateMachine.Stage.RECOVERY, "threshold starts recovery");
-			tick(level, encounterUuid, recovery.deadlineTick());
+			tick(level, activeEncounterUuid, recovery.deadlineTick());
 
-			LectureStateMachine.State quiz = combatState(context, encounterUuid);
+			LectureStateMachine.State quiz = combatState(context, activeEncounterUuid);
 			context.assertValueEqual(quiz.act(), LectureAct.SURPRISE_QUIZ, "second act");
 			placeAtLocal(owner, desk, facing, 3, 0);
-			tick(level, encounterUuid, quiz.deadlineTick());
-			HomeworkAddEntity add = LectureEncounterManager.homeworkAdd(encounterUuid)
+			tick(level, activeEncounterUuid, quiz.deadlineTick());
+			HomeworkAddEntity add = LectureEncounterManager.homeworkAdd(activeEncounterUuid)
 					.orElseThrow(() -> context.assertionException("wrong/no quiz must spawn one Homework add"));
-			context.assertTrue(add.isBoundTo(OWNER_UUID, encounterUuid), "add binds exact owner and encounter");
+			context.assertTrue(add.isBoundTo(OWNER_UUID, activeEncounterUuid), "add binds exact owner and encounter");
 			context.assertValueEqual(
-					level.getEntities(ModEntities.HOMEWORK_ADD, entity -> entity.isBoundTo(OWNER_UUID, encounterUuid)).size(),
+					level.getEntities(ModEntities.HOMEWORK_ADD, entity -> entity.isBoundTo(OWNER_UUID, activeEncounterUuid)).size(),
 					1,
 					"one active Homework add cap"
 			);
@@ -132,22 +133,22 @@ public final class LectureBossGameTests implements CustomTestMethodInvoker {
 			add.setTarget(owner);
 			context.assertValueEqual(add.getTarget(), owner, "bound owner is the only target");
 
-			tick(level, encounterUuid, quiz.deadlineTick() + 1L);
-			LectureStateMachine.State quizRecovery = combatState(context, encounterUuid);
-			tick(level, encounterUuid, quizRecovery.deadlineTick());
-			LectureStateMachine.State repeatedQuiz = combatState(context, encounterUuid);
+			tick(level, activeEncounterUuid, quiz.deadlineTick() + 1L);
+			LectureStateMachine.State quizRecovery = combatState(context, activeEncounterUuid);
+			tick(level, activeEncounterUuid, quizRecovery.deadlineTick());
+			LectureStateMachine.State repeatedQuiz = combatState(context, activeEncounterUuid);
 			placeAtLocal(owner, desk, facing, 3, 0);
-			tick(level, encounterUuid, repeatedQuiz.deadlineTick());
+			tick(level, activeEncounterUuid, repeatedQuiz.deadlineTick());
 			context.assertValueEqual(
-					level.getEntities(ModEntities.HOMEWORK_ADD, entity -> entity.isBoundTo(OWNER_UUID, encounterUuid)).size(),
+					level.getEntities(ModEntities.HOMEWORK_ADD, entity -> entity.isBoundTo(OWNER_UUID, activeEncounterUuid)).size(),
 					1,
 					"a second wrong resolution cannot exceed one active add"
 			);
 
-			LectureEncounterManager.cleanup(encounterUuid);
+			LectureEncounterManager.cleanup(activeEncounterUuid);
 			context.assertTrue(add.isRemoved(), "terminal cleanup removes Homework immediately");
-			context.assertFalse(LectureEncounterManager.homeworkAdd(encounterUuid).isPresent(), "cleanup clears add schedule");
-			context.assertFalse(LectureEncounterManager.presentation(encounterUuid).isPresent(), "cleanup clears presentation");
+			context.assertFalse(LectureEncounterManager.homeworkAdd(activeEncounterUuid).isPresent(), "cleanup clears add schedule");
+			context.assertFalse(LectureEncounterManager.presentation(activeEncounterUuid).isPresent(), "cleanup clears presentation");
 			context.succeed();
 		}
 		finally {

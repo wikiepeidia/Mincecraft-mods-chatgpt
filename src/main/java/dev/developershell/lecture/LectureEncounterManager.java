@@ -2,6 +2,8 @@ package dev.developershell.lecture;
 
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignEvent;
+import dev.developershell.campaign.CampaignService;
+import dev.developershell.entity.HomeworkAddEntity;
 import dev.developershell.registry.ModEntities;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.BossEvent;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.phys.Vec3;
 
 /** Owns bounded, ephemeral encounter objects; durable progress stays in CampaignSavedData. */
@@ -34,18 +37,30 @@ public final class LectureEncounterManager {
 	private static final String CHAT_SLIDE_START_KEY = "message.developers_hell.lecture.slide_start";
 	private static final String SAFE_LANE_CENTER_KEY = "direction.developers_hell.lane.center";
 	public static final int SLIDE_DECK_TELEGRAPH_TICKS = LectureRules.standard().slideDeckTelegraphTicks();
+	public static final int HOMEWORK_ADD_LIFETIME_TICKS = 20 * 20;
 	public static final long ENCOUNTER_TIMEOUT_TICKS = 20L * 60L * 20L;
 	private static final double ESCAPE_RADIUS_SQUARED = 24.0D * 24.0D;
 	private static final Map<UUID, LectureRuntime> RUNTIMES = new LinkedHashMap<>();
 	private static LectureRules rules = LectureRules.standard();
+	private static boolean reducedEffects;
 	private static ExitHandler exitHandler = (runtime, reason) -> false;
 
 	/** Configures the single logical-server manager after stable registries are initialized. */
 	public static synchronized void initialize(LectureRules configuredRules, ExitHandler configuredExitHandler) {
+		initialize(configuredRules, false, configuredExitHandler);
+	}
+
+	/** Binds immutable rules and accessibility density for one logical-server session. */
+	public static synchronized void initialize(
+			LectureRules configuredRules,
+			boolean configuredReducedEffects,
+			ExitHandler configuredExitHandler
+	) {
 		if (!RUNTIMES.isEmpty()) {
 			throw new IllegalStateException("Lecture rules cannot change while an encounter is active");
 		}
 		rules = java.util.Objects.requireNonNull(configuredRules, "configuredRules");
+		reducedEffects = configuredReducedEffects;
 		exitHandler = java.util.Objects.requireNonNull(configuredExitHandler, "configuredExitHandler");
 	}
 
@@ -68,6 +83,11 @@ public final class LectureEncounterManager {
 		}
 		professor.setUUID(progress.professorUuid());
 		professor.bind(owner.getUUID(), encounterUuid);
+		var maxHealth = professor.getAttribute(Attributes.MAX_HEALTH);
+		if (maxHealth != null) {
+			maxHealth.setBaseValue(rules.bossMaxHealth());
+		}
+		professor.setHealth(rules.bossMaxHealth());
 		Vec3 spawn = Vec3.atBottomCenterOf(progress.deskPos().relative(progress.deskFacing(), 9));
 		professor.snapTo(spawn.x, spawn.y, spawn.z);
 		if (!level.addFreshEntity(professor)) {
@@ -93,7 +113,8 @@ public final class LectureEncounterManager {
 				progress.attemptCount(),
 				progress.deskPos(),
 				progress.deskFacing(),
-				rules
+				rules,
+				reducedEffects
 		);
 		RUNTIMES.put(encounterUuid, runtime);
 		runtime.beginPresentation();
@@ -132,8 +153,7 @@ public final class LectureEncounterManager {
 		if (!isCurrent(runtime)) {
 			return;
 		}
-		long elapsed = Math.max(0L, observedGameTime - runtime.startedAtGameTime);
-		runtime.tickPresentation((int) (elapsed % runtime.rules.slideCycleTicks()));
+		runtime.tickCombat(observedGameTime);
 	}
 
 	public static synchronized int activeRuntimeCount() {
@@ -148,6 +168,33 @@ public final class LectureEncounterManager {
 	public static synchronized Optional<ModEntities.ProfessorEntity> professor(UUID encounterUuid) {
 		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
 		return runtime == null ? Optional.empty() : Optional.of(runtime.professor);
+	}
+
+	/** Immutable pure state view for tests/debugging; never exposes mutable runtime ownership. */
+	public static synchronized Optional<LectureStateMachine.State> combatState(UUID encounterUuid) {
+		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
+		return runtime == null ? Optional.empty() : Optional.of(runtime.state);
+	}
+
+	public static synchronized Optional<HomeworkAddEntity> homeworkAdd(UUID encounterUuid) {
+		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
+		return runtime == null || runtime.homeworkAdd == null || runtime.homeworkAdd.isRemoved()
+				? Optional.empty()
+				: Optional.of(runtime.homeworkAdd);
+	}
+
+	/** Entity-side fail-closed ownership guard for live and disk-loaded Homework adds. */
+	public static synchronized boolean isHomeworkAddCurrent(
+			UUID ownerUuid,
+			UUID encounterUuid,
+			UUID entityUuid
+	) {
+		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
+		return runtime != null
+				&& runtime.owner.getUUID().equals(ownerUuid)
+				&& runtime.homeworkAdd != null
+				&& !runtime.homeworkAdd.isRemoved()
+				&& runtime.homeworkAdd.getUUID().equals(entityUuid);
 	}
 
 	public static synchronized Optional<ServerPlayer> participant(UUID encounterUuid) {
@@ -227,6 +274,10 @@ public final class LectureEncounterManager {
 		private final Vec3 arenaCenter;
 		private final Set<Entity> ownedEntities;
 		private final LectureRules rules;
+		private LectureStateMachine.State state;
+		private HomeworkAddEntity homeworkAdd;
+		private long homeworkAddExpiresAt;
+		private int homeworkAddsSpawned;
 		private boolean closed;
 		private boolean vulnerabilityOpen;
 		private Component currentInstruction;
@@ -248,7 +299,8 @@ public final class LectureEncounterManager {
 				int attemptNumber,
 				BlockPos deskPos,
 				Direction deskFacing,
-				LectureRules rules
+				LectureRules rules,
+				boolean reducedEffects
 		) {
 			this.level = level;
 			this.owner = owner;
@@ -262,6 +314,14 @@ public final class LectureEncounterManager {
 			this.ownedEntities = new LinkedHashSet<>();
 			this.ownedEntities.add(professor);
 			this.rules = rules;
+			this.state = LectureStateMachine.start(
+					professor.encounterUuid(),
+					owner.getUUID(),
+					attemptNumber,
+					startedAtGameTime,
+					rules,
+					reducedEffects
+			).state();
 		}
 
 		private UUID encounterUuid() {
@@ -326,6 +386,115 @@ public final class LectureEncounterManager {
 					&& expected.attemptNumber() == attemptNumber;
 		}
 
+		private void tickCombat(long observedGameTime) {
+			if (closed) {
+				return;
+			}
+			maintainHomeworkAdd(observedGameTime);
+			synchronizeProfessorDamage(observedGameTime);
+			if (closed || !isCurrent(this)) {
+				return;
+			}
+			LectureStateMachine.Output output = LectureStateMachine.step(
+					state,
+					new LectureStateMachine.Input.Tick(
+							observedGameTime,
+							ownerLocalPosition(),
+							Math.max(1, (int) Math.floor(owner.getHealth()))
+					)
+			);
+			applyOutput(output, observedGameTime);
+			tickPresentation(state, observedGameTime);
+		}
+
+		private void synchronizeProfessorDamage(long observedGameTime) {
+			int observedHealth = Math.max(0, Math.round(professor.getHealth()));
+			int acceptedDamage = state.bossHealth() - observedHealth;
+			if (acceptedDamage <= 0 || state.stage() == LectureStateMachine.Stage.COMPLETE) {
+				return;
+			}
+			LectureStateMachine.Output output = LectureStateMachine.step(
+					state,
+					new LectureStateMachine.Input.Damage(
+							observedGameTime,
+							owner.getUUID(),
+							encounterUuid(),
+							acceptedDamage
+					)
+			);
+			applyOutput(output, observedGameTime);
+		}
+
+		private void applyOutput(LectureStateMachine.Output output, long observedGameTime) {
+			state = output.state();
+			for (LectureStateMachine.Intent intent : output.intents()) {
+				if (intent instanceof LectureStateMachine.Intent.DirectDamage damage) {
+					owner.hurtServer(level, owner.damageSources().mobAttack(professor), damage.amount());
+				}
+				else if (intent instanceof LectureStateMachine.Intent.Homework) {
+					spawnHomeworkAdd(observedGameTime);
+				}
+				else if (intent instanceof LectureStateMachine.Intent.Vulnerability vulnerability) {
+					setVulnerabilityOpen(vulnerability.open());
+				}
+				else if (intent instanceof LectureStateMachine.Intent.Victory victory) {
+					CampaignService.victory(level, victory.ownerUuid(), victory.encounterUuid());
+				}
+			}
+		}
+
+		private LectureGeometry.LocalPosition ownerLocalPosition() {
+			Vec3 deskCenter = Vec3.atBottomCenterOf(deskPos);
+			Vec3 delta = owner.position().subtract(deskCenter);
+			Direction right = deskFacing.getClockWise();
+			double forwardOffset = delta.x * deskFacing.getStepX() + delta.z * deskFacing.getStepZ();
+			double rightOffset = delta.x * right.getStepX() + delta.z * right.getStepZ();
+			return new LectureGeometry.LocalPosition(forwardOffset, rightOffset);
+		}
+
+		private void spawnHomeworkAdd(long observedGameTime) {
+			maintainHomeworkAdd(observedGameTime);
+			if (homeworkAdd != null || homeworkAddsSpawned >= rules.maxHomeworkAdds()) {
+				return;
+			}
+			HomeworkAddEntity add = ModEntities.HOMEWORK_ADD.create(level, EntitySpawnReason.EVENT);
+			if (add == null) {
+				return;
+			}
+			add.bind(owner.getUUID(), encounterUuid());
+			BlockPos spawnFeet = deskPos.relative(deskFacing, 9).relative(deskFacing.getClockWise(), 2);
+			Vec3 spawn = Vec3.atBottomCenterOf(spawnFeet);
+			add.snapTo(spawn.x, spawn.y, spawn.z);
+			add.setTarget(owner);
+			homeworkAdd = add;
+			homeworkAddExpiresAt = Math.addExact(observedGameTime, HOMEWORK_ADD_LIFETIME_TICKS);
+			ownedEntities.add(add);
+			if (!level.addFreshEntity(add)) {
+				ownedEntities.remove(add);
+				homeworkAdd = null;
+				homeworkAddExpiresAt = 0L;
+				add.discard();
+				return;
+			}
+			homeworkAddsSpawned++;
+		}
+
+		private void maintainHomeworkAdd(long observedGameTime) {
+			if (homeworkAdd == null) {
+				return;
+			}
+			if (homeworkAdd.isRemoved() || observedGameTime >= homeworkAddExpiresAt) {
+				if (!homeworkAdd.isRemoved()) {
+					homeworkAdd.discard();
+				}
+				ownedEntities.remove(homeworkAdd);
+				homeworkAdd = null;
+				homeworkAddExpiresAt = 0L;
+				return;
+			}
+			homeworkAdd.setTarget(owner);
+		}
+
 		private void close(boolean discardEntities) {
 			if (closed) {
 				return;
@@ -336,19 +505,19 @@ public final class LectureEncounterManager {
 			currentInstruction = null;
 			bossBar.setVisible(false);
 			bossBar.removeAllPlayers();
-			if (discardEntities) {
-				for (Entity entity : java.util.List.copyOf(ownedEntities)) {
-					if (!entity.isRemoved()) {
-						entity.discard();
-					}
+			for (Entity entity : java.util.List.copyOf(ownedEntities)) {
+				if (!entity.isRemoved() && (discardEntities || entity != professor)) {
+					entity.discard();
 				}
 			}
+			homeworkAdd = null;
+			homeworkAddExpiresAt = 0L;
 			ownedEntities.clear();
 		}
 
 		private void beginPresentation() {
 			bossBar.setName(Component.translatable(BOSS_BAR_ACT_KEY, 1, 3));
-			sendInstruction(slideCountdown(0));
+			sendInstruction(slideCountdown(state, startedAtGameTime));
 			owner.sendSystemMessage(Component.translatable(CHAT_OBJECTIVE_KEY));
 			owner.sendSystemMessage(Component.translatable(CHAT_SLIDE_START_KEY));
 			messageGroups++;
@@ -356,28 +525,20 @@ public final class LectureEncounterManager {
 			emitTelegraphParticles(0);
 		}
 
-		private void tickPresentation(int cycleTick) {
+		private void tickPresentation(LectureStateMachine.State combat, long gameTick) {
 			if (closed) {
 				return;
 			}
-			boolean open = cycleTick >= rules.slideDeckTelegraphTicks();
-			if (open != vulnerabilityOpen) {
-				setVulnerabilityOpen(open);
-				if (open) {
-					lastCountdownSeconds = -1;
-					sendInstruction(Component.translatable(ACTION_PROJECTOR_COOLDOWN_KEY));
-					playTransitionSound(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.15F);
-				}
-				else {
-					lastParticleCycleTick = -1;
-					sendInstruction(slideCountdown(cycleTick));
-					playTransitionSound(SoundEvents.BOOK_PAGE_TURN, 0.85F);
-					emitTelegraphParticles(cycleTick);
+			bossBar.setName(Component.translatable(BOSS_BAR_ACT_KEY, combat.act().number(), 3));
+			if (combat.stage() == LectureStateMachine.Stage.WIND_UP) {
+				sendInstruction(slideCountdown(combat, gameTick));
+				if (combat.act() == LectureAct.SLIDE_DECK) {
+					emitTelegraphParticles((int) Math.max(0L, gameTick - combat.phaseStartedTick()));
 				}
 			}
-			else if (!open) {
-				sendInstruction(slideCountdown(cycleTick));
-				emitTelegraphParticles(cycleTick);
+			else if (combat.stage() == LectureStateMachine.Stage.VULNERABLE) {
+				lastCountdownSeconds = -1;
+				sendInstruction(Component.translatable(ACTION_PROJECTOR_COOLDOWN_KEY));
 			}
 
 			float progress = Math.max(0.0F, professor.getHealth() / professor.getMaxHealth());
@@ -387,8 +548,8 @@ public final class LectureEncounterManager {
 			}
 		}
 
-		private Component slideCountdown(int cycleTick) {
-			int remainingTicks = Math.max(1, rules.slideDeckTelegraphTicks() - cycleTick);
+		private Component slideCountdown(LectureStateMachine.State combat, long gameTick) {
+			int remainingTicks = (int) Math.max(1L, combat.deadlineTick() - gameTick);
 			int seconds = Math.max(1, (remainingTicks + rules.actionBarUpdateTicks() - 1) / rules.actionBarUpdateTicks());
 			if (seconds == lastCountdownSeconds && currentInstruction != null) {
 				return currentInstruction;

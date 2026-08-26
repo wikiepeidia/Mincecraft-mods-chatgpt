@@ -1,6 +1,7 @@
 package dev.developershell.registry;
 
 import dev.developershell.DevelopersHell;
+import dev.developershell.entity.HomeworkAddEntity;
 import dev.developershell.entity.ProfessorInfiniteSlidesEntity;
 import java.util.UUID;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
@@ -11,12 +12,17 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.monster.illager.Vindicator;
+import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.level.Level;
 
 public final class ModEntities {
 	public static final ResourceKey<EntityType<?>> PROFESSOR_KEY = ResourceKey.create(
 			Registries.ENTITY_TYPE,
 			DevelopersHell.id("professor_infinite_slides")
+	);
+	public static final ResourceKey<EntityType<?>> HOMEWORK_ADD_KEY = ResourceKey.create(
+			Registries.ENTITY_TYPE,
+			DevelopersHell.id("homework_add")
 	);
 
 	public static final EntityType<ProfessorInfiniteSlidesEntity> PROFESSOR = Registry.register(
@@ -28,9 +34,19 @@ public final class ModEntities {
 					.noLootTable()
 					.build(PROFESSOR_KEY)
 	);
+	public static final EntityType<HomeworkAddEntity> HOMEWORK_ADD = Registry.register(
+			BuiltInRegistries.ENTITY_TYPE,
+			HOMEWORK_ADD_KEY,
+			EntityType.Builder.of(HomeworkAddEntity::new, MobCategory.MONSTER)
+					.sized(0.6F, 1.95F)
+					.clientTrackingRange(8)
+					.noLootTable()
+					.build(HOMEWORK_ADD_KEY)
+	);
 
 	public static void initialize() {
 		FabricDefaultAttributeRegistry.register(PROFESSOR, Vindicator.createAttributes());
+		FabricDefaultAttributeRegistry.register(HOMEWORK_ADD, Zombie.createAttributes());
 	}
 
 	/**
