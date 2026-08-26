@@ -401,7 +401,14 @@ final class DevHellConfigTest {
 				new LectureRules(140, 120, 20, 15, 10, 30, 10),
 				runtime.lectureRules()
 		);
+		assertEquals(240, runtime.lectureRules().bossMaxHealth());
+		assertEquals(9, runtime.lectureRules().slideDeckMissDamage());
+		assertEquals(9, runtime.lectureRules().detentionDamage());
+		assertEquals(6, runtime.lectureRules().maxHomeworkAdds());
+		assertEquals(200, runtime.lectureRules().quizTelegraphTicks());
+		assertEquals(180, runtime.lectureRules().attendanceTelegraphTicks());
 		assertSame(runtime.lectureRules(), runtime.lectureManager().rules());
+		assertTrue(runtime.lectureManager().reducedEffects());
 	}
 
 	@Test
