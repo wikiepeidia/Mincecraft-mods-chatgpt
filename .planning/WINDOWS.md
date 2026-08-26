@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 12
-total_count: 12
-last_updated: 2026-08-26T20:34:38.897Z
+fixed_count: 14
+total_count: 14
+last_updated: 2026-08-26T21:05:24.751Z
 ---
 
 # Broken Windows Ledger
@@ -27,6 +27,8 @@ last_updated: 2026-08-26T20:34:38.897Z
 | 10 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignSavedData.java |  | Persisted optional schema-v1 failed encounter and fallback reservation UUIDs for reload-safe exactly-one Retake authority | fixed |  | 2026-08-26T20:34:29.591Z | 2026-08-26T20:34:37.748Z |
 | 11 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Routed persistent lifecycle GameTest retries from Contract setup through keyed RetakeService after the clean gate exposed the stale test contract | fixed |  | 2026-08-26T20:34:30.170Z | 2026-08-26T20:34:38.436Z |
 | 12 | 02 | deviation | src/main/java/dev/developershell/lecture/RetakeService.java |  | Compensated failed retry runtime starts and cleaned reserved or post-spawn fallback crash windows state-first | fixed |  | 2026-08-26T20:34:30.623Z | 2026-08-26T20:34:38.897Z |
+| 13 | 02 | deviation | src/main/java/dev/developershell/server/DevelopersHellRuntime.java |  | Approved lifecycle bridge invokes RetakeService only after an accepted persisted reconciliation intent | fixed |  | 2026-08-26T21:04:59.081Z | 2026-08-26T21:05:24.438Z |
+| 14 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Approved retained lifecycle expectations include issued copy only when reconciliation materializes a Form | fixed |  | 2026-08-26T21:04:59.387Z | 2026-08-26T21:05:24.751Z |
 
 ````json
 [
@@ -173,6 +175,30 @@ last_updated: 2026-08-26T20:34:38.897Z
     "reason": "",
     "recorded_at": "2026-08-26T20:34:30.623Z",
     "resolved_at": "2026-08-26T20:34:38.897Z"
+  },
+  {
+    "id": 13,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/server/DevelopersHellRuntime.java",
+    "line": null,
+    "description": "Approved lifecycle bridge invokes RetakeService only after an accepted persisted reconciliation intent",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T21:04:59.081Z",
+    "resolved_at": "2026-08-26T21:05:24.438Z"
+  },
+  {
+    "id": 14,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java",
+    "line": null,
+    "description": "Approved retained lifecycle expectations include issued copy only when reconciliation materializes a Form",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T21:04:59.387Z",
+    "resolved_at": "2026-08-26T21:05:24.751Z"
   }
 ]
 ````

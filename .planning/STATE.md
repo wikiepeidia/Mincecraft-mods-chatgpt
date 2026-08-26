@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-07-PLAN.md
-last_updated: "2026-08-26T20:36:59.460Z"
+stopped_at: Completed 02-08-PLAN.md
+last_updated: "2026-08-26T21:05:50.079Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 3b9397ea43578e7c6901987bceab7f69a773f20b
+state_head: 2ddf393c2557a3115d02cc6c13425722629b3cf7
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 14
+  completed_plans: 15
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 11 of 18
+Plan: 12 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -72,6 +72,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P05 | 22min | 2 tasks | 8 files |
 | Phase 02-persistent-lecture-vertical-slice P06 | 27min | 2 tasks | 11 files |
 | Phase 02-persistent-lecture-vertical-slice P07 | 32min | 2 tasks | 9 files |
+| Phase 02 P08 | 23min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-07: Optional schema-v1 reservation and committed fallback UUIDs are mutually exclusive and preserve future-schema read-only behavior.
 - [Phase 02]: Plan 02-07: RetakeService is the sole state-first adapter for reconciliation, recovery, and commit-before-consume retry.
 - [Phase 02]: Plan 02-07: Failed retry runtime start compensates with a new keyed ABORT entitlement before replacing old physical state.
+- [Phase 02]: Plan 02-08: Encode the exact owner plus failed-encounter RetakeKey in vanilla CUSTOM_DATA; physical Forms never manufacture authority.
+- [Phase 02]: Plan 02-08: Reject stale fallback chunk copies and clear only matching reserved/materialized UUIDs before replacement.
+- [Phase 02]: Plan 02-08: Revalidate owner, saved Desk, state, and complete arena; persist and start the retry before consuming the Form.
 
 ### Pending Todos
 
@@ -136,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T20:36:59.352Z
-Stopped at: Completed 02-07-PLAN.md
+Last session: 2026-08-26T21:05:49.976Z
+Stopped at: Completed 02-08-PLAN.md
 Resume file: None
