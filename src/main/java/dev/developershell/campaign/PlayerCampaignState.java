@@ -28,7 +28,9 @@ public record PlayerCampaignState(
 		boolean remoteIssued,
 		boolean retakeEntitled,
 		UUID retakeFallbackEntityUuid,
-		long remoteCooldownUntilGameTime
+		long remoteCooldownUntilGameTime,
+		long sheetRecoverySequence,
+		long remoteReadyNoticeForDeadlineGameTime
 ) implements CampaignSavedData.PlayerProgress {
 	public static final String OVERWORLD_DIMENSION = "minecraft:overworld";
 
@@ -54,6 +56,53 @@ public record PlayerCampaignState(
 		if (remoteCooldownUntilGameTime < 0L) {
 			throw new IllegalArgumentException("Remote cooldown deadline must be non-negative");
 		}
+		if (sheetRecoverySequence < 0L) {
+			throw new IllegalArgumentException("Sheet recovery sequence must be non-negative");
+		}
+		if (remoteReadyNoticeForDeadlineGameTime < 0L
+				|| remoteReadyNoticeForDeadlineGameTime > remoteCooldownUntilGameTime) {
+			throw new IllegalArgumentException("Remote ready notice must identify a committed cooldown deadline");
+		}
+	}
+
+	/**
+	 * Schema-v1 compatibility constructor retained for the frozen Plan 14 call surface.
+	 * New monotonic replay markers default to their never-issued value.
+	 */
+	public PlayerCampaignState(
+			UUID ownerUuid,
+			CampaignChapter chapter,
+			LectureStatus status,
+			int attemptCount,
+			String deskDimension,
+			BlockPos deskPos,
+			Direction deskFacing,
+			BlockPos retryPos,
+			EncounterRef activeEncounterRef,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			UUID retakeFallbackEntityUuid,
+			long remoteCooldownUntilGameTime
+	) {
+		this(
+				ownerUuid,
+				chapter,
+				status,
+				attemptCount,
+				deskDimension,
+				deskPos,
+				deskFacing,
+				retryPos,
+				activeEncounterRef,
+				sheetEntitled,
+				remoteIssued,
+				retakeEntitled,
+				retakeFallbackEntityUuid,
+				remoteCooldownUntilGameTime,
+				0L,
+				0L
+		);
 	}
 
 	public Optional<EncounterRef> activeEncounter() {
