@@ -1952,25 +1952,55 @@ function Stop-RuntimeAfterFailure {
     if (-not $cleanup.AlreadyComplete) { Write-Detail "scoped runtime cleanup terminated $(@($cleanup.TerminatedPids).Count) exact process-tree members" }
 }
 
+function Read-InteractiveUatControlAction {
+    param(
+        [Parameter(Mandatory)][string] $ControlPath,
+        [Parameter(Mandatory)][string] $ExpectedSessionId
+    )
+    if ($ExpectedSessionId -cnotmatch '^[0-9a-f]{32}$') { Throw-Failure 'Interactive UAT expected session ID is invalid' }
+    if (-not (Test-Path -LiteralPath $ControlPath -PathType Leaf)) { Throw-Failure 'Interactive UAT control.json is missing' }
+    $controlText = Get-Content -LiteralPath $ControlPath -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($controlText)) { Throw-Failure 'Interactive UAT control.json is empty' }
+
+    # The deliberately narrow lexical schema rejects duplicate, unknown, escaped,
+    # missing, null, and legacy `command` fields before ConvertFrom-Json can merge
+    # duplicate properties on Windows PowerShell 5.1.
+    $actionFirst = '^\s*\{\s*"action"\s*:\s*"(?<action>WAIT|CANCEL)"\s*,\s*"session_id"\s*:\s*"(?<session>[0-9a-f]{32})"\s*\}\s*$'
+    $sessionFirst = '^\s*\{\s*"session_id"\s*:\s*"(?<session>[0-9a-f]{32})"\s*,\s*"action"\s*:\s*"(?<action>WAIT|CANCEL)"\s*\}\s*$'
+    $match = [regex]::Match($controlText, $actionFirst, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) {
+        $match = [regex]::Match($controlText, $sessionFirst, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    }
+    if (-not $match.Success) { Throw-Failure 'Interactive UAT control.json does not match the exact action/session schema' }
+
+    try { $control = $controlText | ConvertFrom-Json -ErrorAction Stop }
+    catch { Throw-Failure 'Interactive UAT control.json is invalid JSON' }
+    $properties = @($control.PSObject.Properties)
+    if ($properties.Count -ne 2 -or (@($properties.Name | Sort-Object) -join ',') -cne 'action,session_id') {
+        Throw-Failure 'Interactive UAT control.json must contain exactly action and session_id'
+    }
+    if ([string]$match.Groups['session'].Value -cne $ExpectedSessionId -or [string]$control.session_id -cne $ExpectedSessionId) {
+        Throw-Failure 'Interactive UAT control session does not match the active supervisor session'
+    }
+    $action = [string]$match.Groups['action'].Value
+    if ([string]$control.action -cne $action) { Throw-Failure 'Interactive UAT control action changed during parsing' }
+    return $action
+}
+
 function Wait-ForHumanClientExit {
     param(
         [Parameter(Mandatory)] $Runtime,
         [Parameter(Mandatory)] $ClientInfo,
         [Parameter(Mandatory)][string] $ControlPath,
+        [Parameter(Mandatory)][string] $ExpectedSessionId,
         [int] $TimeoutSeconds = 21600
     )
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $clientProcess = [Diagnostics.Process]::GetProcessById([int]$ClientInfo.Pid)
     try {
         while ([DateTime]::UtcNow -lt $deadline) {
-            if (Test-Path -LiteralPath $ControlPath -PathType Leaf) {
-                $controlText = Get-Content -LiteralPath $ControlPath -Raw -ErrorAction Stop
-                if (-not [string]::IsNullOrWhiteSpace($controlText)) {
-                    try { $control = $controlText | ConvertFrom-Json } catch { Throw-Failure 'Interactive UAT control.json is invalid JSON' }
-                    if ($null -eq $control) { Throw-Failure 'Interactive UAT control.json cannot contain JSON null' }
-                    if ($control.PSObject.Properties['action'] -and [string]$control.action -eq 'CANCEL') { Throw-Failure 'Interactive UAT was cancelled by automation control' }
-                }
-            }
+            $controlAction = Read-InteractiveUatControlAction -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId
+            if ($controlAction -ceq 'CANCEL') { Throw-Failure 'Interactive UAT was cancelled by automation control' }
             if ($clientProcess.HasExited) {
                 $complete = Complete-GradleRuntime -Runtime $Runtime -TimeoutSeconds 120
                 if ($complete.ExitCode -ne 0) { Throw-Failure "Production client did not exit normally (Gradle exit $($complete.ExitCode))" }
@@ -2092,18 +2122,11 @@ function Invoke-SuperviseInteractiveUatMode {
     $existing = @(Get-ChildItem -LiteralPath $session -Force)
     if (@($existing | Where-Object { $_.Name -ne 'control.json' }).Count -ne 0) { Throw-Failure 'Interactive UAT session was reused or contains terminal state' }
     if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
-        Write-JsonAtomic -LiteralPath $controlPath -Value ([ordered]@{ action = 'WAIT' })
+        Write-JsonAtomic -LiteralPath $controlPath -Value ([ordered]@{ action = 'WAIT'; session_id = $sessionId })
     }
     else {
-        $controlText = Get-Content -LiteralPath $controlPath -Raw
-        if ([string]::IsNullOrWhiteSpace($controlText)) {
-            Write-JsonAtomic -LiteralPath $controlPath -Value ([ordered]@{ action = 'WAIT' })
-        }
-        else {
-            $control = $controlText | ConvertFrom-Json
-            if ($null -eq $control) { Throw-Failure 'Interactive control JSON cannot be null' }
-            if ($control.PSObject.Properties['action'] -and [string]$control.action -notin @('WAIT','CONTINUE')) { Throw-Failure 'Interactive control has a non-initial action' }
-        }
+        $initialAction = Read-InteractiveUatControlAction -ControlPath $controlPath -ExpectedSessionId $sessionId
+        if ($initialAction -cne 'WAIT') { Throw-Failure 'Interactive UAT control must begin in WAIT state' }
     }
     $profile = Resolve-CanonicalPath -LiteralPath (Join-Path $script:RepositoryRoot 'run\production-client')
     Assert-NoReparsePoint -LiteralPath $profile
@@ -2145,7 +2168,7 @@ function Invoke-SuperviseInteractiveUatMode {
             supervisor_pid=$PID; client_pid=$onlineClient.Pid; menu_ready=$true; updated_utc=$onlineReadyAt
         })
         [IO.File]::AppendAllText($supervisorLogPath, "state=ONLINE_READY`r`n", [Text.UTF8Encoding]::new($false))
-        $onlineExit = Wait-ForHumanClientExit -Runtime $onlineRuntime -ClientInfo $onlineClient -ControlPath $controlPath
+        $onlineExit = Wait-ForHumanClientExit -Runtime $onlineRuntime -ClientInfo $onlineClient -ControlPath $controlPath -ExpectedSessionId $sessionId
         [IO.File]::AppendAllText($supervisorLogPath, "state=ONLINE_EXIT_NORMAL`r`n", [Text.UTF8Encoding]::new($false))
         Assert-Equal (Get-Sha256 $distribution.Path) $distribution.Sha256 'Post-online-UAT distribution SHA-256'
         Assert-Equal (Get-Sha256 $runtimeCopy) $distribution.Sha256 'Post-online-UAT runtime-copy SHA-256'
@@ -2167,7 +2190,7 @@ function Invoke-SuperviseInteractiveUatMode {
                     firewall_membership=$Isolation.member_count_active; updated_utc=$script:IsolatedReadyAt
                 })
                 [IO.File]::AppendAllText($supervisorLogPath, "state=ISOLATED_READY`r`n", [Text.UTF8Encoding]::new($false))
-                $result = Wait-ForHumanClientExit -Runtime $script:IsolatedRuntimeForCleanup -ClientInfo $script:IsolatedClientForCleanup -ControlPath $controlPath
+                $result = Wait-ForHumanClientExit -Runtime $script:IsolatedRuntimeForCleanup -ClientInfo $script:IsolatedClientForCleanup -ControlPath $controlPath -ExpectedSessionId $sessionId
                 [IO.File]::AppendAllText($supervisorLogPath, "state=ISOLATED_EXIT_NORMAL`r`n", [Text.UTF8Encoding]::new($false))
                 return [pscustomobject]@{ Exit=$result.Exit; ExitCode=$result.ExitCode; Pid=$script:IsolatedClientForCleanup.Pid; ReadyAt=$script:IsolatedReadyAt }
             }
@@ -2542,6 +2565,56 @@ function Invoke-SelfCheckMode {
         if (Test-IsExactFirewallNotFoundError -ErrorRecord $adversarial -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name') {
             Throw-Failure 'Firewall absence classifier accepted a provider, target, or selector error'
         }
+    }
+    $controlSessionId = [guid]::NewGuid().ToString('N')
+    $controlSelfCheckPath = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-control-self-check-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        $waitJson = ([ordered]@{ action='WAIT'; session_id=$controlSessionId } | ConvertTo-Json -Compress)
+        [IO.File]::WriteAllText($controlSelfCheckPath, $waitJson, $utf8)
+        Assert-Equal (Read-InteractiveUatControlAction -ControlPath $controlSelfCheckPath -ExpectedSessionId $controlSessionId) 'WAIT' 'Interactive control WAIT action'
+        $sessionFirstJson = '{"session_id":"' + $controlSessionId + '","action":"WAIT"}'
+        [IO.File]::WriteAllText($controlSelfCheckPath, $sessionFirstJson, $utf8)
+        Assert-Equal (Read-InteractiveUatControlAction -ControlPath $controlSelfCheckPath -ExpectedSessionId $controlSessionId) 'WAIT' 'Interactive control property-order independence'
+
+        $invalidControls = @(
+            '{}',
+            '{"action":"WAIT"}',
+            '{"action":"WAIT","session_id":"' + $controlSessionId + '","extra":true}',
+            '{"action":"WAIT","action":"CANCEL","session_id":"' + $controlSessionId + '"}',
+            '{"command":"RUN","session_id":"' + $controlSessionId + '"}',
+            '{"action":null,"session_id":"' + $controlSessionId + '"}',
+            '{"action":"wait","session_id":"' + $controlSessionId + '"}',
+            '{"action":"WAIT","session_id":"' + [guid]::NewGuid().ToString('N') + '"}'
+        )
+        foreach ($invalidControl in $invalidControls) {
+            [IO.File]::WriteAllText($controlSelfCheckPath, $invalidControl, $utf8)
+            $rejected = $false
+            try { [void](Read-InteractiveUatControlAction -ControlPath $controlSelfCheckPath -ExpectedSessionId $controlSessionId) }
+            catch {
+                if ($_.Exception.Message -notmatch '^Interactive UAT control') { throw }
+                $rejected = $true
+            }
+            if (-not $rejected) { Throw-Failure 'Interactive control schema accepted a missing, duplicate, unknown, legacy, null, case-shifted, or wrong-session field' }
+        }
+
+        $cancelJson = ([ordered]@{ action='CANCEL'; session_id=$controlSessionId } | ConvertTo-Json -Compress)
+        [IO.File]::WriteAllText($controlSelfCheckPath, $cancelJson, $utf8)
+        $cancelWatch = [Diagnostics.Stopwatch]::StartNew()
+        $cancelled = $false
+        try {
+            [void](Wait-ForHumanClientExit -Runtime ([pscustomobject]@{}) -ClientInfo ([pscustomobject]@{ Pid=$PID }) -ControlPath $controlSelfCheckPath -ExpectedSessionId $controlSessionId -TimeoutSeconds 5)
+        }
+        catch {
+            if ($_.Exception.Message -cne 'Interactive UAT was cancelled by automation control') { throw }
+            $cancelled = $true
+        }
+        finally { $cancelWatch.Stop() }
+        if (-not $cancelled -or $cancelWatch.Elapsed.TotalSeconds -gt 2.5) { Throw-Failure 'Interactive cancellation did not terminate the supervised wait promptly' }
+        if (-not (Get-Process -Id $PID -ErrorAction SilentlyContinue)) { Throw-Failure 'Interactive cancellation self-check terminated its non-Minecraft host process' }
+    }
+    finally {
+        if (Test-Path -LiteralPath $controlSelfCheckPath -PathType Leaf) { Remove-Item -LiteralPath $controlSelfCheckPath -Force }
     }
     $defaultDistribution = Resolve-CanonicalPath -LiteralPath $script:DefaultDistributionPath -AllowMissingLeaf
     if ((Split-Path -Leaf $defaultDistribution) -cne $script:ExpectedDistributionName) { Throw-Failure 'Default distribution binding is invalid' }
