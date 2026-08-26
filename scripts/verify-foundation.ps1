@@ -1208,13 +1208,15 @@ function Test-IsExactFirewallNotFoundError {
     param(
         [Parameter(Mandatory)][Management.Automation.ErrorRecord] $ErrorRecord,
         [Parameter(Mandatory)][ValidateSet('Name','Group')][string] $QueryKind,
-        [Parameter(Mandatory)][string] $QueryValue
+        [Parameter(Mandatory)][string] $QueryValue,
+        [ValidateSet('Get-NetFirewallRule','Remove-NetFirewallRule')][string] $CommandName = 'Get-NetFirewallRule'
     )
+    if ($CommandName -ceq 'Remove-NetFirewallRule' -and $QueryKind -ne 'Name') { return $false }
     $expectedId = if ($QueryKind -eq 'Name') {
-        'CmdletizationQuery_NotFound_InstanceID,Get-NetFirewallRule'
+        "CmdletizationQuery_NotFound_InstanceID,$CommandName"
     }
     else {
-        'CmdletizationQuery_NotFound_RuleGroup,Get-NetFirewallRule'
+        "CmdletizationQuery_NotFound_RuleGroup,$CommandName"
     }
     return $ErrorRecord.FullyQualifiedErrorId -ceq $expectedId -and
         $ErrorRecord.CategoryInfo.Category -eq [Management.Automation.ErrorCategory]::ObjectNotFound -and
@@ -1303,6 +1305,136 @@ final class NetworkProbe {
     }
 }
 
+function Invoke-ExactFirewallIsolationCleanup {
+    param(
+        [Parameter(Mandatory)][string] $JavaRuleId,
+        [Parameter(Mandatory)][string] $JavawRuleId,
+        [Parameter(Mandatory)][string] $GroupId,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Record,
+        [scriptblock] $RemoveRuleAction,
+        [scriptblock] $QueryNameAction,
+        [scriptblock] $QueryGroupAction,
+        [ValidateRange(0,60)][int] $TimeoutSeconds = 10,
+        [ValidateRange(0,5000)][int] $PollMilliseconds = 250
+    )
+    if (-not $RemoveRuleAction) {
+        $RemoveRuleAction = {
+            param([string] $Name)
+            Remove-NetFirewallRule -Name $Name -PolicyStore PersistentStore -ErrorAction Stop
+        }
+    }
+    if (-not $QueryNameAction) {
+        $QueryNameAction = {
+            param([string] $Name, [string] $PolicyStore)
+            @(Get-ExactFirewallRulesStrict -Name $Name -PolicyStore $PolicyStore)
+        }
+    }
+    if (-not $QueryGroupAction) {
+        $QueryGroupAction = {
+            param([string] $Group, [string] $PolicyStore)
+            @(Get-ExactFirewallRulesStrict -Group $Group -PolicyStore $PolicyStore)
+        }
+    }
+
+    $issues = [System.Collections.Generic.List[string]]::new()
+    $issueKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $addIssue = {
+        param([string] $Key, [string] $Message)
+        if ($issueKeys.Add($Key)) { $issues.Add($Message) }
+    }.GetNewClosure()
+    $attemptRemoval = {
+        param([string] $RuleName)
+        try {
+            [void](& $RemoveRuleAction $RuleName)
+        }
+        catch {
+            if (-not (Test-IsExactFirewallNotFoundError -ErrorRecord $_ -QueryKind Name -QueryValue $RuleName -CommandName Remove-NetFirewallRule)) {
+                & $addIssue ("remove|" + $RuleName + "|" + $_.FullyQualifiedErrorId) ("exact removal failed for '" + $RuleName + "': " + $_.Exception.Message)
+            }
+        }
+    }.GetNewClosure()
+
+    # Both GUID-scoped names were proven absent before creation. Always attempt
+    # both removals even when creation or the first provider call reported an
+    # error: a provider can mutate PersistentStore and then throw.
+    & $attemptRemoval $JavaRuleId
+    & $attemptRemoval $JavawRuleId
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $observed = @{}
+    do {
+        $observed = @{}
+        foreach ($ruleName in @($JavaRuleId,$JavawRuleId)) {
+            foreach ($store in @('PersistentStore','ActiveStore')) {
+                $key = "name|$ruleName|$store"
+                try { $observed[$key] = @(& $QueryNameAction $ruleName $store).Count }
+                catch {
+                    $observed[$key] = $null
+                    & $addIssue ("query|" + $key + "|" + $_.FullyQualifiedErrorId) ("strict $store query failed for exact rule '" + $ruleName + "': " + $_.Exception.Message)
+                }
+            }
+        }
+        foreach ($store in @('PersistentStore','ActiveStore')) {
+            $key = "group|$GroupId|$store"
+            try { $observed[$key] = @(& $QueryGroupAction $GroupId $store).Count }
+            catch {
+                $observed[$key] = $null
+                & $addIssue ("query|" + $key + "|" + $_.FullyQualifiedErrorId) ("strict $store query failed for exact group '" + $GroupId + "': " + $_.Exception.Message)
+            }
+        }
+
+        $knownAbsent = $true
+        foreach ($value in $observed.Values) {
+            if ($null -eq $value -or [int]$value -ne 0) { $knownAbsent = $false; break }
+        }
+        if ($knownAbsent) { break }
+        if ([DateTime]::UtcNow -ge $deadline) { break }
+
+        # A transient removal error must not strand a rule. Retry each exact
+        # name whose state is present or uncertain, without broad selectors.
+        foreach ($ruleName in @($JavaRuleId,$JavawRuleId)) {
+            $persistent = $observed["name|$ruleName|PersistentStore"]
+            if ($null -eq $persistent -or [int]$persistent -ne 0) {
+                & $attemptRemoval $ruleName
+            }
+        }
+        if ($PollMilliseconds -gt 0) { Start-Sleep -Milliseconds $PollMilliseconds }
+    } while ($true)
+
+    $javaKnownAbsent = $null -ne $observed["name|$JavaRuleId|PersistentStore"] -and
+        $null -ne $observed["name|$JavaRuleId|ActiveStore"] -and
+        [int]$observed["name|$JavaRuleId|PersistentStore"] -eq 0 -and
+        [int]$observed["name|$JavaRuleId|ActiveStore"] -eq 0
+    $javawKnownAbsent = $null -ne $observed["name|$JavawRuleId|PersistentStore"] -and
+        $null -ne $observed["name|$JavawRuleId|ActiveStore"] -and
+        [int]$observed["name|$JavawRuleId|PersistentStore"] -eq 0 -and
+        [int]$observed["name|$JavawRuleId|ActiveStore"] -eq 0
+    $persistentGroupCount = $observed["group|$GroupId|PersistentStore"]
+    $activeGroupCount = $observed["group|$GroupId|ActiveStore"]
+    $groupKnownEmpty = $null -ne $persistentGroupCount -and $null -ne $activeGroupCount -and
+        [int]$persistentGroupCount -eq 0 -and [int]$activeGroupCount -eq 0
+    if ($observed.Count -ne 6) {
+        & $addIssue 'final|coverage' "strict firewall cleanup verification produced $($observed.Count) observations; expected 6"
+    }
+    if (-not $javaKnownAbsent -or -not $javawKnownAbsent -or -not $groupKnownEmpty) {
+        & $addIssue 'final|absence' 'exact firewall-rule and group absence could not be proven in both policy stores'
+    }
+
+    # Any provider uncertainty makes a PASS receipt impossible, even if a later
+    # retry observes absence. This keeps evidence fail-closed while still making
+    # every bounded cleanup attempt needed to avoid a host-side rule leak.
+    $success = $issues.Count -eq 0 -and $javaKnownAbsent -and $javawKnownAbsent -and $groupKnownEmpty
+    $Record.java_rule_absent = [bool]$javaKnownAbsent
+    $Record.javaw_rule_absent = [bool]$javawKnownAbsent
+    $Record.member_count_after = if ($null -ne $activeGroupCount) { [int]$activeGroupCount } else { -1 }
+    $Record.cleanup_status = if ($success) { 'PASS' } else { 'FAIL' }
+    return [pscustomobject]@{
+        Success = [bool]$success
+        Errors = @($issues)
+        Message = (@($issues) -join '; ')
+    }
+}
+
 function Invoke-WithFirewallIsolation {
     param(
         [Parameter(Mandatory)] $Jdk,
@@ -1319,8 +1451,6 @@ function Invoke-WithFirewallIsolation {
     if (Test-ExactFirewallRuleExists -Name $javawRuleId) { Throw-Failure 'Fresh Javaw firewall rule ID already exists' }
     if ((Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore) -ne 0 -or (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore) -ne 0) { Throw-Failure 'Fresh firewall group already contains rules' }
     $probeOnline = Invoke-ExactJavaNetworkProbe -Jdk $Jdk -ExpectReachable $true
-    $javaCreated = $false
-    $javawCreated = $false
     $operationResult = $null
     $primaryError = $null
     $cleanupError = $null
@@ -1340,9 +1470,7 @@ function Invoke-WithFirewallIsolation {
     }
     try {
         [void](New-NetFirewallRule -Name $javaRuleId -DisplayName $javaRuleId -Group $groupId -Direction Outbound -Action Block -Program $Jdk.Java -Profile Any -Enabled True -PolicyStore PersistentStore -ErrorAction Stop)
-        $javaCreated = $true
         [void](New-NetFirewallRule -Name $javawRuleId -DisplayName $javawRuleId -Group $groupId -Direction Outbound -Action Block -Program $Jdk.Javaw -Profile Any -Enabled True -PolicyStore PersistentStore -ErrorAction Stop)
-        $javawCreated = $true
         $activationDeadline = [DateTime]::UtcNow.AddSeconds(10)
         while ([DateTime]::UtcNow -lt $activationDeadline -and
             ((Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore) -ne 2 -or (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore) -ne 2)) {
@@ -1373,32 +1501,16 @@ function Invoke-WithFirewallIsolation {
     }
     finally {
         try {
-            if ($javaCreated) {
-                Remove-NetFirewallRule -Name $javaRuleId -PolicyStore PersistentStore -ErrorAction Stop
-            }
-            if ($javawCreated) {
-                Remove-NetFirewallRule -Name $javawRuleId -PolicyStore PersistentStore -ErrorAction Stop
-            }
-            $cleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            while ([DateTime]::UtcNow -lt $cleanupDeadline -and
-                ((Test-ExactFirewallRuleExists -Name $javaRuleId) -or (Test-ExactFirewallRuleExists -Name $javawRuleId) -or
-                (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore) -ne 0 -or (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore) -ne 0)) {
-                Start-Sleep -Milliseconds 250
-            }
-            $record.java_rule_absent = -not (Test-ExactFirewallRuleExists -Name $javaRuleId)
-            $record.javaw_rule_absent = -not (Test-ExactFirewallRuleExists -Name $javawRuleId)
-            $activeAfter = Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore
-            $persistentAfter = Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore
-            $record.member_count_after = $activeAfter
-            if (-not $record.java_rule_absent -or -not $record.javaw_rule_absent -or $activeAfter -ne 0 -or $persistentAfter -ne 0) {
-                Throw-Failure 'Exact firewall-rule cleanup could not be proven'
-            }
-            $record.cleanup_status = 'PASS'
+            $cleanupResult = Invoke-ExactFirewallIsolationCleanup -JavaRuleId $javaRuleId -JavawRuleId $javawRuleId -GroupId $groupId -Record $record
             $script:LastIsolationRecord = $record
+            if (-not $cleanupResult.Success) { throw [InvalidOperationException]::new($cleanupResult.Message) }
         }
         catch { $cleanupError = $_ }
     }
-    if ($cleanupError) { Throw-Failure "Firewall cleanup failed: $($cleanupError.Exception.Message)" }
+    if ($cleanupError -and $primaryError) {
+        Throw-Failure "Firewall-isolated operation failed: $($primaryError.Exception.Message); firewall cleanup failed after all attempts: $($cleanupError.Exception.Message)"
+    }
+    if ($cleanupError) { Throw-Failure "Firewall cleanup failed after all attempts: $($cleanupError.Exception.Message)" }
     if ($primaryError) { throw $primaryError }
     Write-Pass 'exact two-rule Java/javaw firewall isolation and cleanup'
     return [pscustomobject]@{ Operation = $operationResult; Isolation = [pscustomobject]$record }
@@ -2647,6 +2759,14 @@ function Invoke-SelfCheckMode {
     if (-not (Test-IsExactFirewallNotFoundError -ErrorRecord $nameNotFound -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name')) {
         Throw-Failure 'Exact-name firewall absence classifier rejected its only allowed shape'
     }
+    $removeNotFound = [Management.Automation.ErrorRecord]::new(
+        [InvalidOperationException]::new('synthetic exact-name removal absence'),
+        'CmdletizationQuery_NotFound_InstanceID,Remove-NetFirewallRule',
+        [Management.Automation.ErrorCategory]::ObjectNotFound,
+        'DevelopersHell.Foundation.Synthetic.Name')
+    if (-not (Test-IsExactFirewallNotFoundError -ErrorRecord $removeNotFound -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name' -CommandName Remove-NetFirewallRule)) {
+        Throw-Failure 'Exact-name firewall removal absence classifier rejected its only allowed shape'
+    }
     $groupNotFound = [Management.Automation.ErrorRecord]::new(
         [InvalidOperationException]::new('synthetic exact-group absence'),
         'CmdletizationQuery_NotFound_RuleGroup,Get-NetFirewallRule',
@@ -2663,6 +2783,62 @@ function Invoke-SelfCheckMode {
         if (Test-IsExactFirewallNotFoundError -ErrorRecord $adversarial -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name') {
             Throw-Failure 'Firewall absence classifier accepted a provider, target, or selector error'
         }
+    }
+    $cleanupJavaRule = 'DevelopersHell.Foundation.Java.Synthetic'
+    $cleanupJavawRule = 'DevelopersHell.Foundation.Javaw.Synthetic'
+    $cleanupGroup = 'DevelopersHell.Foundation.Synthetic'
+    $cleanupCalls = [System.Collections.Generic.List[string]]::new()
+    $cleanupRecord = [ordered]@{
+        java_rule_absent=$false; javaw_rule_absent=$false; member_count_after=-1; cleanup_status='FAIL'
+    }
+    $removeFault = {
+        param([string] $Name)
+        [void]$cleanupCalls.Add("remove|$Name")
+        if ($Name -ceq $cleanupJavaRule) { throw [UnauthorizedAccessException]::new('synthetic first-removal failure') }
+    }.GetNewClosure()
+    $queryNameEmpty = {
+        param([string] $Name, [string] $Store)
+        [void]$cleanupCalls.Add("name|$Name|$Store")
+        return @()
+    }.GetNewClosure()
+    $queryGroupEmpty = {
+        param([string] $Group, [string] $Store)
+        [void]$cleanupCalls.Add("group|$Group|$Store")
+        return @()
+    }.GetNewClosure()
+    $faultedCleanup = Invoke-ExactFirewallIsolationCleanup `
+        -JavaRuleId $cleanupJavaRule -JavawRuleId $cleanupJavawRule -GroupId $cleanupGroup -Record $cleanupRecord `
+        -RemoveRuleAction $removeFault -QueryNameAction $queryNameEmpty -QueryGroupAction $queryGroupEmpty `
+        -TimeoutSeconds 0 -PollMilliseconds 0
+    if ($faultedCleanup.Success -or $cleanupRecord.cleanup_status -cne 'FAIL' -or -not $cleanupRecord.java_rule_absent -or -not $cleanupRecord.javaw_rule_absent) {
+        Throw-Failure 'Firewall cleanup fault injection did not fail closed after provider uncertainty'
+    }
+    $requiredCleanupCalls = @(
+        "remove|$cleanupJavaRule",
+        "remove|$cleanupJavawRule",
+        "name|$cleanupJavaRule|PersistentStore",
+        "name|$cleanupJavaRule|ActiveStore",
+        "name|$cleanupJavawRule|PersistentStore",
+        "name|$cleanupJavawRule|ActiveStore",
+        "group|$cleanupGroup|PersistentStore",
+        "group|$cleanupGroup|ActiveStore"
+    )
+    foreach ($requiredCall in $requiredCleanupCalls) {
+        if (@($cleanupCalls | Where-Object { $_ -ceq $requiredCall }).Count -ne 1) {
+            Throw-Failure "Firewall cleanup fault injection did not execute exactly once: $requiredCall"
+        }
+    }
+    if ($cleanupCalls.IndexOf("remove|$cleanupJavawRule") -lt $cleanupCalls.IndexOf("remove|$cleanupJavaRule")) {
+        Throw-Failure 'Firewall cleanup fault injection did not preserve independent Java then Javaw attempts'
+    }
+    $lastRemovalIndex = $cleanupCalls.IndexOf("remove|$cleanupJavawRule")
+    foreach ($verificationCall in @($requiredCleanupCalls | Where-Object { $_ -notmatch '^remove\|' })) {
+        if ($cleanupCalls.IndexOf($verificationCall) -le $lastRemovalIndex) {
+            Throw-Failure "Firewall cleanup verification ran before both removal attempts: $verificationCall"
+        }
+    }
+    if ($faultedCleanup.Message -notmatch 'synthetic first-removal failure') {
+        Throw-Failure 'Firewall cleanup fault injection lost the first provider error'
     }
     $controlSessionId = [guid]::NewGuid().ToString('N')
     $controlSelfCheckPath = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-control-self-check-' + [guid]::NewGuid().ToString('N') + '.json')
