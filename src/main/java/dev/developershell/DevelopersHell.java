@@ -1,6 +1,7 @@
 package dev.developershell;
 
 import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.lecture.LectureRules;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import net.fabricmc.api.ModInitializer;
@@ -21,6 +22,7 @@ public final class DevelopersHell implements ModInitializer {
 	public void onInitialize() {
 		ModItems.initialize();
 		ModEntities.initialize();
+		LectureEncounterManager.initialize(LectureRules.standard());
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction();
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			LectureEncounterManager.tick(server);

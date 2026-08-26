@@ -1,3 +1,9 @@
 {
-  "item.developers_hell.foundation_token": "Foundation Token"
+  "actionbar.developers_hell.lecture.projector_cooldown": "PROJECTOR COOLDOWN - ATTACK!",
+  "actionbar.developers_hell.lecture.slide_countdown": "NEXT SLIDE [%s] - SAFE: %s",
+  "bossbar.developers_hell.professor.act": "Professor Infinite Slides | Act %s/%s",
+  "direction.developers_hell.lane.center": "CENTER",
+  "item.developers_hell.foundation_token": "Foundation Token",
+  "message.developers_hell.lecture.objective": "Objective: Pass Professor Infinite Slides.",
+  "message.developers_hell.lecture.slide_start": "Slide Deck started. Hold the named safe lane until cooldown."
 }

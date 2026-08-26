@@ -5,12 +5,14 @@ import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.DevelopersHell;
 import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.lecture.LectureRules;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
@@ -21,6 +23,8 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
@@ -114,6 +118,26 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 
 			UUID encounterUuid = active.encounterUuid();
 			UUID professorUuid = active.professorUuid();
+			LectureEncounterManager.PresentationSnapshot startedPresentation = LectureEncounterManager.presentation(encounterUuid)
+					.orElseThrow(() -> context.assertionException("missing owner presentation"));
+			context.assertValueEqual(startedPresentation.participantUuids(), Set.of(OWNER_UUID), "one owner boss-bar participant");
+			context.assertValueEqual(
+					translationKey(startedPresentation.bossBarName()),
+					"bossbar.developers_hell.professor.act",
+					"translated boss-bar name"
+			);
+			context.assertValueEqual(
+					translationKey(startedPresentation.currentInstruction()),
+					"actionbar.developers_hell.lecture.slide_countdown",
+					"translated initial action-bar instruction"
+			);
+			context.assertValueEqual(startedPresentation.actionBarUpdates(), 1, "one initial action-bar update");
+			context.assertValueEqual(startedPresentation.messageGroups(), 1, "one transition-scoped start message group");
+			context.assertValueEqual(startedPresentation.transitionSounds(), 1, "one transition-scoped start sound");
+			context.assertTrue(
+					startedPresentation.emittedParticles() <= LectureRules.standard().maxParticlesPerEncounter(),
+					"initial particles stay under the encounter cap"
+			);
 			ConnectedPlayer finalOwnerConnection = ownerConnection;
 			ConnectedPlayer finalCompetitorConnection = competitorConnection;
 			context.runBeforeTestEnd(() -> LectureEncounterManager.cleanup(encounterUuid));
@@ -123,6 +147,22 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 					context.assertTrue(
 							LectureEncounterManager.isVulnerabilityOpen(encounterUuid),
 							"five-second Slide Deck cue must open the owner window; seed=" + TRACER_SEED
+					);
+					LectureEncounterManager.PresentationSnapshot openPresentation = LectureEncounterManager.presentation(encounterUuid)
+							.orElseThrow(() -> context.assertionException("missing open-window presentation"));
+					context.assertValueEqual(openPresentation.participantUuids(), Set.of(OWNER_UUID), "inactive player sees no boss bar");
+					context.assertValueEqual(
+							translationKey(openPresentation.currentInstruction()),
+							"actionbar.developers_hell.lecture.projector_cooldown",
+							"translated open-window action instruction"
+					);
+					context.assertValueEqual(openPresentation.actionBarUpdates(), 6, "whole-second action updates plus transition");
+					context.assertValueEqual(openPresentation.messageGroups(), 1, "chat does not repeat during countdown");
+					context.assertValueEqual(openPresentation.transitionSounds(), 2, "sound emits only at phase transitions");
+					context.assertTrue(openPresentation.emittedParticles() > 0, "telegraph emits a bounded particle cue");
+					context.assertTrue(
+							openPresentation.emittedParticles() <= LectureRules.standard().maxParticlesPerEncounter(),
+							"telegraph particles stay under the encounter cap"
 					);
 					ModEntities.ProfessorEntity professor = LectureEncounterManager.professor(encounterUuid)
 							.orElseThrow(() -> context.assertionException("missing Professor %s", professorUuid));
@@ -153,6 +193,7 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 					context.assertValueEqual(countItem(owner, ModItems.ATTENDANCE_SHEET), sheetBefore + 1, "first Sheet grant");
 					context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), remoteBefore + 1, "first Remote grant");
 					context.assertValueEqual(LectureEncounterManager.activeRuntimeCount(), 0, "victory removes runtime and boss bar");
+					context.assertFalse(LectureEncounterManager.presentation(encounterUuid).isPresent(), "victory removes presentation state");
 					context.assertValueEqual(level.getEntities(ModEntities.PROFESSOR, entity -> true).size(), 0, "victory removes Professor");
 
 					context.assertFalse(
@@ -301,6 +342,13 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 			}
 		}
 		return count;
+	}
+
+	private static String translationKey(Component component) {
+		if (component == null || !(component.getContents() instanceof TranslatableContents translated)) {
+			return "";
+		}
+		return translated.getKey();
 	}
 
 	private record ConnectedPlayer(ServerPlayer player, Runnable cleanup) implements AutoCloseable {
