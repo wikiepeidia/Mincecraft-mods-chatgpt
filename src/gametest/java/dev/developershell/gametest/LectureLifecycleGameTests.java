@@ -3,16 +3,22 @@ package dev.developershell.gametest;
 import com.mojang.authlib.GameProfile;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.entity.ProfessorInfiniteSlidesEntity;
+import dev.developershell.lecture.ArenaValidationResult;
+import dev.developershell.lecture.ArenaValidator;
 import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.lecture.RetakeService;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import dev.developershell.server.CampaignLifecycle;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
@@ -59,10 +65,11 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 		Direction facing = Direction.SOUTH;
 		buildArena(level, desk, facing);
 		List<BlockState> blocksBefore = snapshotArena(level, desk, facing);
+		UUID ownerUuid = invocationOwnerUuid(EXIT_OWNER_UUID, desk, level.getGameTime());
 		ConnectedPlayer connection = null;
 
 		try {
-			connection = createSurvivalPlayer(context, EXIT_OWNER_UUID, "lifecycle-exits", new BlockPos(12, 2, 2));
+			connection = createSurvivalPlayer(context, ownerUuid, "lifecycle-exits", new BlockPos(12, 2, 2));
 			RecordingServerPlayer owner = connection.player();
 
 			PlayerCampaignState death = startAttempt(context, level, owner, desk, facing);
@@ -130,7 +137,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			if (connection != null) {
 				connection.close();
 			}
-			cleanupOwnerRuntimes(level.getServer(), EXIT_OWNER_UUID);
+			cleanupOwnerRuntimes(level.getServer(), ownerUuid);
 			clearArena(level, desk, facing);
 		}
 	}
@@ -142,10 +149,11 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 		Direction facing = Direction.SOUTH;
 		buildArena(level, desk, facing);
 		List<BlockState> blocksBefore = snapshotArena(level, desk, facing);
+		UUID ownerUuid = invocationOwnerUuid(RELOAD_OWNER_UUID, desk, level.getGameTime());
 		ConnectedPlayer connection = null;
 
 		try {
-			connection = createSurvivalPlayer(context, RELOAD_OWNER_UUID, "lifecycle-reload", new BlockPos(12, 2, 2));
+			connection = createSurvivalPlayer(context, ownerUuid, "lifecycle-reload", new BlockPos(12, 2, 2));
 			RecordingServerPlayer owner = connection.player();
 			PlayerCampaignState reload = startAttempt(context, level, owner, desk, facing);
 			LectureEncounterManager.RuntimeSnapshot realRuntime = LectureEncounterManager.runtimeSnapshot(
@@ -236,7 +244,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			if (connection != null) {
 				connection.close();
 			}
-			cleanupOwnerRuntimes(level.getServer(), RELOAD_OWNER_UUID);
+			cleanupOwnerRuntimes(level.getServer(), ownerUuid);
 			clearArena(level, desk, facing);
 		}
 	}
@@ -249,10 +257,11 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 		Direction facing = Direction.SOUTH;
 		buildArena(level, desk, facing);
 		List<BlockState> blocksBefore = snapshotArena(level, desk, facing);
+		UUID ownerUuid = invocationOwnerUuid(STOP_OWNER_UUID, desk, level.getGameTime());
 		ConnectedPlayer connection = null;
 
 		try {
-			connection = createSurvivalPlayer(context, STOP_OWNER_UUID, "lifecycle-stop", new BlockPos(12, 2, 2));
+			connection = createSurvivalPlayer(context, ownerUuid, "lifecycle-stop", new BlockPos(12, 2, 2));
 			RecordingServerPlayer owner = connection.player();
 			PlayerCampaignState active = startAttempt(context, level, owner, desk, facing);
 			owner.clearRecordedSystemMessages();
@@ -281,7 +290,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			if (connection != null) {
 				connection.close();
 			}
-			cleanupOwnerRuntimes(server, STOP_OWNER_UUID);
+			cleanupOwnerRuntimes(server, ownerUuid);
 			clearArena(level, desk, facing);
 		}
 	}
@@ -293,8 +302,58 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			BlockPos desk,
 			Direction facing
 	) {
-		ItemStack contract = new ItemStack(ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT);
-		context.assertTrue(CampaignService.start(owner, desk, facing, contract), "attempt must start through production service");
+		Optional<PlayerCampaignState> before = CampaignSavedData.get(level).player(owner.getUUID());
+		if (before.isEmpty() || before.get().status() == PlayerCampaignState.LectureStatus.READY) {
+			ItemStack contract = new ItemStack(ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT);
+			context.assertTrue(
+					CampaignService.start(owner, desk, facing, contract),
+					"initial attempt must start through the atomic Contract service"
+			);
+			context.assertTrue(contract.isEmpty(), "accepted initial attempt consumes its Contract last");
+		}
+		else {
+			PlayerCampaignState failed = before.get();
+			context.assertValueEqual(
+					failed.status(),
+					PlayerCampaignState.LectureStatus.RETAKE_READY,
+					"subsequent lifecycle attempt requires Retake authority"
+			);
+			ArenaValidationResult validation = ArenaValidator.validate(level, owner, desk, facing);
+			context.assertTrue(validation instanceof ArenaValidationResult.Accepted,
+					"Retake helper must freeze accepted production arena geometry");
+			ArenaValidationResult.Accepted accepted = (ArenaValidationResult.Accepted) validation;
+			int nextAttempt = Math.addExact(failed.attemptCount(), 1);
+			UUID encounterUuid = attemptUuid("encounter", owner.getUUID(), desk, nextAttempt);
+			UUID professorUuid = attemptUuid("professor", owner.getUUID(), desk, nextAttempt);
+			LifecycleRetakeRepresentation representation = new LifecycleRetakeRepresentation(
+					failed.retakeKey().orElseThrow(() -> context.assertionException("missing keyed Retake authority"))
+			);
+			boolean[] runtimeStarted = {false};
+			RetakeService service = RetakeService.forLevel(
+					level,
+					representation,
+					() -> UUID.fromString("c0de0000-0000-4000-8000-000000000595")
+			);
+			RetakeService.Outcome outcome = service.startRetake(
+					owner.getUUID(),
+					accepted,
+					encounterUuid,
+					professorUuid,
+					effect -> {
+						if (effect instanceof CampaignTransition.EffectIntent.StartEncounter) {
+							runtimeStarted[0] = LectureEncounterManager.start(
+									level,
+									owner,
+									CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow()
+							);
+						}
+					}
+			);
+			context.assertValueEqual(outcome, RetakeService.Outcome.RETRY_ACCEPTED,
+					"retry must pass through the keyed Retake service");
+			context.assertTrue(runtimeStarted[0], "accepted keyed retry starts its runtime after persistence");
+			context.assertTrue(representation.consumed(), "accepted keyed retry consumes its Form last");
+		}
 		PlayerCampaignState active = CampaignSavedData.get(level).player(owner.getUUID())
 				.orElseThrow(() -> context.assertionException("missing active campaign state"));
 		context.assertValueEqual(active.status(), PlayerCampaignState.LectureStatus.ACTIVE, "attempt starts active");
@@ -304,6 +363,67 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 		context.assertTrue(LectureEncounterManager.presentation(active.encounterUuid()).isPresent(),
 				"attempt owns one presentation");
 		return active;
+	}
+
+	private static UUID invocationOwnerUuid(UUID seed, BlockPos desk, long gameTime) {
+		String value = seed + ":" + desk.getX() + ":" + desk.getY() + ":" + desk.getZ() + ":" + gameTime;
+		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
+	}
+
+	private static UUID attemptUuid(String kind, UUID ownerUuid, BlockPos desk, int attempt) {
+		String value = kind + ":" + ownerUuid + ":" + desk.getX() + ":" + desk.getY() + ":"
+				+ desk.getZ() + ":" + attempt;
+		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
+	}
+
+	private static final class LifecycleRetakeRepresentation implements RetakeService.RepresentationPort {
+		private final PlayerCampaignState.RetakeKey expectedKey;
+		private boolean formPresent = true;
+
+		private LifecycleRetakeRepresentation(PlayerCampaignState.RetakeKey expectedKey) {
+			this.expectedKey = expectedKey;
+		}
+
+		private boolean consumed() {
+			return !formPresent;
+		}
+
+		@Override
+		public boolean hasInventoryForm(PlayerCampaignState.RetakeKey key) {
+			return formPresent && expectedKey.equals(key);
+		}
+
+		@Override
+		public boolean hasFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			return false;
+		}
+
+		@Override
+		public boolean tryInsertInventoryForm(PlayerCampaignState.RetakeKey key) {
+			throw new IllegalStateException("Lifecycle retry fixture already owns its Form");
+		}
+
+		@Override
+		public boolean materializeFallback(
+				PlayerCampaignState.RetakeKey key,
+				UUID fallbackEntityUuid,
+				BlockPos retryPos
+		) {
+			throw new IllegalStateException("Lifecycle retry fixture must not materialize a fallback");
+		}
+
+		@Override
+		public void consumeInventoryForm(PlayerCampaignState.RetakeKey key) {
+			if (!formPresent || !expectedKey.equals(key)) {
+				throw new IllegalStateException("Only the matching lifecycle Retake Form may be consumed");
+			}
+			formPresent = false;
+		}
+
+		@Override
+		public void discardFallback(PlayerCampaignState.RetakeKey key, UUID fallbackEntityUuid) {
+			throw new IllegalStateException("Lifecycle retry fixture owns no fallback");
+		}
 	}
 
 	private static void assertConverged(
