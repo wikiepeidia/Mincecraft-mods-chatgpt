@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-08-26T17:09:40.116Z"
+stopped_at: Completed 02-14-PLAN.md
+last_updated: "2026-08-26T17:28:45.689Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 6fc55856cd9237b92b5b9c35cb7a00e1a7f0bad5
+state_head: b51f12bbcd1a8d5b70dcc78001dced4db6ea0715
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 5
+  completed_plans: 6
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 2 of 18
+Plan: 3 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -63,6 +63,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 01 P03 | 29 min | 1 tasks | 6 files |
 | Phase 01 P04 | 15h | 3 tasks | 4 files |
 | Phase 02 P01 | 20min | 1 tasks | 12 files |
+| Phase 02 P14 | 14min | 1 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Decode unsupported schema numbers into read-only campaign state so computeIfAbsent cannot replace future data after a Codec error.
 - [Phase 02]: Match both owner UUID and active encounter UUID, and dirty the ledger before spawning, shrinking, cleanup, boss-bar changes, or inventory grants.
 - [Phase 02]: Keep the Professor as a no-loot Vindicator-derived server identity while the encounter manager owns the bounded runtime and owner-only ServerBossEvent.
+- [Phase 02]: Plan 02-14: PlayerCampaignState and ProfessorInfiniteSlidesEntity are the sole state-owning final types; existing tracer consumers use zero-state compatibility views.
+- [Phase 02]: Plan 02-14: Schema-v1 optional fields preserve tracer saves, while encoded owner and UUID map-key disagreement makes campaign state read-only.
+- [Phase 02]: Plan 02-14: Professor damage requires matching attacker, live runtime participant, saved owner, and active encounter before CampaignService may commit rewards.
 
 ### Pending Todos
 
@@ -98,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T17:09:39.966Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-08-26T17:28:45.477Z
+Stopped at: Completed 02-14-PLAN.md
 Resume file: None
