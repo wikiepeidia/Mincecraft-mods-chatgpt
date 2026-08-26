@@ -328,7 +328,11 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 			context.assertValueEqual(level.getRespawnData(), worldRespawnBefore, "world respawn unchanged");
 			context.assertValueEqual(
 					player.recordedSystemMessageKeys(),
-					List.of("message.developers_hell.contract.signed", "message.developers_hell.lecture.objective"),
+					List.of(
+							"message.developers_hell.contract.signed",
+							"message.developers_hell.lecture.objective",
+							"message.developers_hell.lecture.slide_start"
+					),
 					"one accepted Contract message group"
 			);
 			context.succeed();
