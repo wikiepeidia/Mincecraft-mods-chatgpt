@@ -101,7 +101,8 @@ public final class CampaignService {
 		for (int forward = 1; forward <= ARENA_FORWARD; forward++) {
 			for (int lateral = -ARENA_HALF_WIDTH; lateral <= ARENA_HALF_WIDTH; lateral++) {
 				BlockPos floor = deskPos.relative(deskFacing, forward).relative(right, lateral).below();
-				if (!isLoadedAndInside(level, floor) || !level.getBlockState(floor).isSolid()) {
+				if (!isLoadedAndInside(level, floor)
+						|| !level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)) {
 					return Optional.empty();
 				}
 				for (int height = 1; height <= REQUIRED_HEADROOM; height++) {
@@ -136,7 +137,7 @@ public final class CampaignService {
 		BlockPos floor = position.below();
 		return isLoadedAndInside(level, floor)
 				&& isLoadedAndInside(level, position.above())
-				&& level.getBlockState(floor).isSolid()
+				&& level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)
 				&& level.getBlockState(position).getCollisionShape(level, position).isEmpty()
 				&& level.getBlockState(position.above()).getCollisionShape(level, position.above()).isEmpty()
 				&& level.getFluidState(position).isEmpty()
