@@ -3,6 +3,7 @@ package dev.developershell.lecture;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -21,7 +22,72 @@ public final class LectureGeometry {
 	private static final int RETRY_RADIUS_MIN = 2;
 	private static final int RETRY_RADIUS_MAX = 5;
 	private static final int ATTENDANCE_ANCHOR_OFFSET = 4;
+	private static final double INTERIOR_FORWARD_MIN_EDGE = INTERIOR_FORWARD_MIN - 0.5D;
+	private static final double INTERIOR_FORWARD_MAX_EDGE = INTERIOR_FORWARD_MAX + 0.5D;
+	private static final double INTERIOR_RIGHT_MIN_EDGE = INTERIOR_RIGHT_MIN - 0.5D;
+	private static final double INTERIOR_RIGHT_MAX_EDGE = INTERIOR_RIGHT_MAX + 0.5D;
+	private static final double QUIZ_PAD_HALF_SIZE = 1.5D;
 	public static final double ATTENDANCE_RADIUS = 2.5D;
+
+	/** Finite, Minecraft-independent coordinates in the Desk's forward/right basis. */
+	public record LocalPosition(double forwardOffset, double rightOffset) {
+		public LocalPosition {
+			if (!Double.isFinite(forwardOffset) || !Double.isFinite(rightOffset)) {
+				throw new IllegalArgumentException("Lecture local position must be finite");
+			}
+		}
+	}
+
+	public static Optional<Lane> laneAt(LocalPosition position) {
+		Objects.requireNonNull(position, "position");
+		if (!isInsideInterior(position)) {
+			return Optional.empty();
+		}
+		for (Lane lane : Lane.values()) {
+			if (lane.contains(position)) {
+				return Optional.of(lane);
+			}
+		}
+		return Optional.empty();
+	}
+
+	public static Optional<QuizPad> quizPadAt(LocalPosition position) {
+		Objects.requireNonNull(position, "position");
+		if (!isInsideInterior(position)) {
+			return Optional.empty();
+		}
+		for (QuizPad pad : QuizPad.values()) {
+			if (pad.contains(position)) {
+				return Optional.of(pad);
+			}
+		}
+		return Optional.empty();
+	}
+
+	public static LocalPosition attendanceCenter(AttendanceQuadrant quadrant) {
+		Objects.requireNonNull(quadrant, "quadrant");
+		return new LocalPosition(
+				COMBAT_CENTER_FORWARD + quadrant.forwardOffset(),
+				quadrant.rightOffset()
+		);
+	}
+
+	public static boolean isInsideAttendanceRing(AttendanceQuadrant quadrant, LocalPosition position) {
+		Objects.requireNonNull(position, "position");
+		LocalPosition center = attendanceCenter(quadrant);
+		double forwardDistance = position.forwardOffset() - center.forwardOffset();
+		double rightDistance = position.rightOffset() - center.rightOffset();
+		return isInsideInterior(position)
+				&& forwardDistance * forwardDistance + rightDistance * rightDistance
+				<= ATTENDANCE_RADIUS * ATTENDANCE_RADIUS;
+	}
+
+	private static boolean isInsideInterior(LocalPosition position) {
+		return position.forwardOffset() >= INTERIOR_FORWARD_MIN_EDGE
+				&& position.forwardOffset() < INTERIOR_FORWARD_MAX_EDGE
+				&& position.rightOffset() >= INTERIOR_RIGHT_MIN_EDGE
+				&& position.rightOffset() < INTERIOR_RIGHT_MAX_EDGE;
+	}
 
 	public static Layout layout(BlockPos deskPos, Direction forward) {
 		Objects.requireNonNull(deskPos, "deskPos");
@@ -136,13 +202,24 @@ public final class LectureGeometry {
 		RIGHT(3, 7);
 
 		private final List<Integer> rightOffsets;
+		private final double minimumEdge;
+		private final double maximumEdge;
 
 		Lane(int minimumRight, int maximumRight) {
 			rightOffsets = IntStream.rangeClosed(minimumRight, maximumRight).boxed().toList();
+			minimumEdge = minimumRight - 0.5D;
+			maximumEdge = maximumRight + 0.5D;
 		}
 
 		public List<Integer> rightOffsets() {
 			return rightOffsets;
+		}
+
+		public boolean contains(LocalPosition position) {
+			Objects.requireNonNull(position, "position");
+			return isInsideInterior(position)
+					&& position.rightOffset() >= minimumEdge
+					&& position.rightOffset() < maximumEdge;
 		}
 	}
 
@@ -165,6 +242,15 @@ public final class LectureGeometry {
 
 		public String shapeId() {
 			return shapeId;
+		}
+
+		public boolean contains(LocalPosition position) {
+			Objects.requireNonNull(position, "position");
+			return isInsideInterior(position)
+					&& position.forwardOffset() >= COMBAT_CENTER_FORWARD - QUIZ_PAD_HALF_SIZE
+					&& position.forwardOffset() < COMBAT_CENTER_FORWARD + QUIZ_PAD_HALF_SIZE
+					&& position.rightOffset() >= rightAnchor - QUIZ_PAD_HALF_SIZE
+					&& position.rightOffset() < rightAnchor + QUIZ_PAD_HALF_SIZE;
 		}
 	}
 

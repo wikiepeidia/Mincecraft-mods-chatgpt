@@ -214,7 +214,19 @@ final class LectureStateMachineTest {
 				assertEquals(Math.min(RULES.detentionDamage(), 5), detention.amount(),
 						"detention clamps to health - 1; " + seedContext);
 				assertEquals(LectureStateMachine.Consequence.DETENTION, detention.consequence(), seedContext);
-				assertEquals(LectureStateMachine.Stage.VULNERABLE, settle(absent).state().stage(), seedContext);
+				LectureStateMachine.State retry = finishRecovery(settle(absent));
+				assertEquals(LectureStateMachine.Stage.WIND_UP, retry.stage(), seedContext);
+				assertEquals(3, retry.absenceCount(), seedContext);
+				LectureStateMachine.Output present = LectureStateMachine.step(
+						retry,
+						new LectureStateMachine.Input.Tick(
+								retry.deadlineTick(),
+								LectureGeometry.attendanceCenter(retry.attendanceQuadrant()),
+								6
+						)
+				);
+				assertEquals(LectureStateMachine.Resolution.PRESENT, present.state().resolution(), seedContext);
+				assertEquals(LectureStateMachine.Stage.VULNERABLE, settle(present).state().stage(), seedContext);
 			}
 		}
 
@@ -252,6 +264,61 @@ final class LectureStateMachineTest {
 	}
 
 	@Test
+	void vulnerabilityUsesHalfOpenEightyTickBoundaryAndTimeoutRepeatsOnlyCurrentAct() {
+		LectureStateMachine.State windUp = LectureStateMachine.start(ENCOUNTER, OWNER, 3, 0L, RULES, false).state();
+		LectureStateMachine.State vulnerable = settle(LectureStateMachine.step(
+				windUp,
+				new LectureStateMachine.Input.Tick(100L, laneCenter(windUp.safeLane()), 20)
+		)).state();
+		assertEquals(100L, vulnerable.phaseStartedTick());
+		assertEquals(180L, vulnerable.deadlineTick());
+		assertEquals(LectureStateMachine.Stage.VULNERABLE, LectureStateMachine.step(
+				vulnerable,
+				new LectureStateMachine.Input.Tick(179L, laneCenter(windUp.safeLane()), 20)
+		).state().stage());
+
+		LectureStateMachine.Output timedOut = LectureStateMachine.step(
+				vulnerable,
+				new LectureStateMachine.Input.Tick(180L, laneCenter(windUp.safeLane()), 20)
+		);
+		assertEquals(LectureStateMachine.Stage.RECOVERY, timedOut.state().stage());
+		assertFalse(timedOut.state().advanceAfterRecovery());
+		assertFalse(onlyIntent(timedOut, LectureStateMachine.Intent.Vulnerability.class).open());
+		LectureStateMachine.State repeated = finishRecovery(timedOut);
+		assertEquals(LectureAct.SLIDE_DECK, repeated.act());
+		assertEquals(1, repeated.actCycle());
+		assertNotEquals(windUp.choiceSeed(), repeated.choiceSeed(),
+				() -> "act cycle must contribute; seed0=" + windUp.choiceSeed() + ", seed1=" + repeated.choiceSeed());
+	}
+
+	@Test
+	void detentionAtOneHealthEmitsNoDamageAndNeverRepeatsAfterThirdAbsence() {
+		LectureStateMachine.State thirdAbsence = LectureStateMachine.testingState(
+				ENCOUNTER, OWNER, 4, LectureAct.ATTENDANCE_CHECK, 2, 0, 2, 40, 0L, RULES, false
+		);
+		LectureStateMachine.Output detention = LectureStateMachine.step(
+				thirdAbsence,
+				new LectureStateMachine.Input.Tick(120L, new LectureGeometry.LocalPosition(9.0D, 0.0D), 1)
+		);
+		assertEquals(LectureStateMachine.Resolution.DETENTION, detention.state().resolution());
+		assertTrue(detention.intents().stream().noneMatch(LectureStateMachine.Intent.DirectDamage.class::isInstance));
+
+		LectureStateMachine.State afterDetention = finishRecovery(settle(detention));
+		LectureStateMachine.Output fourthMiss = LectureStateMachine.step(
+				afterDetention,
+				new LectureStateMachine.Input.Tick(
+						afterDetention.deadlineTick(),
+						new LectureGeometry.LocalPosition(9.0D, 0.0D),
+						20
+				)
+		);
+		assertEquals(3, fourthMiss.state().absenceCount());
+		assertEquals(LectureStateMachine.Resolution.ABSENT, fourthMiss.state().resolution());
+		assertFalse(onlyIntent(fourthMiss, LectureStateMachine.Intent.Attendance.class).detention());
+		assertTrue(fourthMiss.intents().stream().noneMatch(LectureStateMachine.Intent.DirectDamage.class::isInstance));
+	}
+
+	@Test
 	void explicitSeedRepeatsAndIncludesAttemptCycleAndQuizIndex() {
 		LectureStateMachine.State first = LectureStateMachine.start(ENCOUNTER, OWNER, 7, 500L, RULES, false).state();
 		LectureStateMachine.State repeated = LectureStateMachine.start(ENCOUNTER, OWNER, 7, 500L, RULES, false).state();
@@ -259,6 +326,9 @@ final class LectureStateMachineTest {
 		LectureStateMachine.State nextAttempt = LectureStateMachine.start(ENCOUNTER, OWNER, 8, 500L, RULES, false).state();
 		assertNotEquals(first.choiceSeed(), nextAttempt.choiceSeed(),
 				() -> "attempt must contribute; seed=" + first.choiceSeed());
+		LectureStateMachine.State nextEncounter = LectureStateMachine.start(uuidFor(1), OWNER, 7, 500L, RULES, false).state();
+		assertNotEquals(first.choiceSeed(), nextEncounter.choiceSeed(),
+				() -> "encounter UUID must contribute; seed=" + first.choiceSeed());
 
 		LectureStateMachine.State quiz0 = startAct(ENCOUNTER, LectureAct.SURPRISE_QUIZ, 4, 0, 80, false);
 		LectureStateMachine.State quiz1 = LectureStateMachine.testingState(
@@ -266,6 +336,11 @@ final class LectureStateMachineTest {
 		);
 		assertNotEquals(quiz0.choiceSeed(), quiz1.choiceSeed(),
 				() -> "quiz index must contribute; seed0=" + quiz0.choiceSeed() + ", seed1=" + quiz1.choiceSeed());
+		assertNotEquals(
+				LectureStateMachine.choiceSeed(ENCOUNTER, 7, LectureAct.SLIDE_DECK, 0, 0),
+				LectureStateMachine.choiceSeed(ENCOUNTER, 7, LectureAct.SURPRISE_QUIZ, 0, 0),
+				"act identity must contribute to the explicit seed"
+		);
 	}
 
 	private static LectureStateMachine.State startAct(
