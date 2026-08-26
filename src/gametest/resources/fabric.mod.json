@@ -9,7 +9,8 @@
       "dev.developershell.gametest.FoundationGameTests",
       "dev.developershell.gametest.LectureLifecycleGameTests",
       "dev.developershell.gametest.ContractArenaGameTests",
-      "dev.developershell.gametest.RetakeGameTests"
+      "dev.developershell.gametest.RetakeGameTests",
+      "dev.developershell.gametest.LectureBossGameTests"
     ]
   }
 }
