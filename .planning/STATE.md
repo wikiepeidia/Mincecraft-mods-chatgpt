@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-16-PLAN.md
-last_updated: "2026-08-26T19:00:31.178Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-08-26T19:28:31.135Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 18b273b3bbe44d4c4f2630016c5269733483c5ff
+state_head: 6d936e41b42db64663296466c32bb6c3f1be9c2a
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 11
+  completed_plans: 12
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 8 of 18
+Plan: 9 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -69,6 +69,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P03 | 4min | 1 tasks | 8 files |
 | Phase 02 P04 | 25min | 2 tasks | 8 files |
 | Phase 02 P16 | 12min | 1 tasks | 5 files |
+| Phase 02 P05 | 22min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-16: Require paper and ink together in one local advancement, then reward exactly the namespaced Contract recipe.
 - [Phase 02]: Plan 02-16: Handle wrong-target Contract use with Fabric SUCCESS/SUCCESS_SERVER semantics, server-only localized guidance, and no consumption or persistence.
 - [Phase 02]: Plan 02-16: Feed recipe-assembled output into the retained lifecycle tracer and keep the separate discovery GameTest runtime-free.
+- [Phase 02]: Fabric lifecycle callbacks submit closed CampaignEvent values; CampaignService.apply remains the only durable mutation path.
+- [Phase 02]: Live runtime exits require exact owner, encounter, Professor UUID, and attempt identity before cleanup.
+- [Phase 02]: Disk-loaded Professors normalize matching ACTIVE progress to safe Retake and never resume combat.
+- [Phase 02]: The real SERVER_STOPPING callback and in-process GameTest share one server-wide state-first handler.
 
 ### Pending Todos
 
@@ -121,6 +126,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T19:00:31.006Z
-Stopped at: Completed 02-16-PLAN.md
+Last session: 2026-08-26T19:28:31.023Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None

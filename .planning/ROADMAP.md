@@ -66,7 +66,7 @@ Plans:
   4. Saving or unloading mid-fight, dying, escaping, timing out, or aborting never duplicates or regresses state: owned hazards and bars clean up, a Retake action remains safe, and the first victory grants the Attendance Sheet and cooldown-limited Infinite Slides Remote exactly once across reloads, with artifact recovery.
   5. A contributor can run automated unit tests and Fabric GameTests that cover reducer transitions, bounds, persistence, failure/retry cleanup, and a real Contract-to-Lecture encounter lifecycle.
 
-**Plans:** 7/18 plans executed
+**Plans:** 8/18 plans executed
 **Wave 1**
 
 - [x] 02-01-PLAN.md
@@ -94,7 +94,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 02-05-PLAN.md
+- [x] 02-05-PLAN.md
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -206,7 +206,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Java 25 and Fabric 26.2 Foundation | 4/4 | Complete    | 2026-08-26 |
-| 2. Persistent Lecture Vertical Slice | 7/18 | In Progress|  |
+| 2. Persistent Lecture Vertical Slice | 8/18 | In Progress|  |
 | 3. Contract-to-Diploma Boss Campaign | 0/TBD | Not started | - |
 | 4. Developer-Tool Sandbox Loops | 0/TBD | Not started | - |
 | 5. Safe Metadata Roulette and Module Independence | 0/TBD | Not started | - |
