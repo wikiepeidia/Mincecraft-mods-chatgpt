@@ -1176,16 +1176,56 @@ function Assert-WindowsFirewallControl {
         Throw-Failure 'Administrative control is required for exact two-rule firewall isolation'
     }
     $controlProbeName = 'DevelopersHell.Foundation.ControlProbe.' + [guid]::NewGuid().ToString('N')
-    try { [void](Get-NetFirewallRule -Name $controlProbeName -PolicyStore ActiveStore -ErrorAction SilentlyContinue) }
-    catch { Throw-Failure "Windows Defender Firewall ActiveStore is unavailable: $($_.Exception.Message)" }
+    foreach ($store in @('PersistentStore','ActiveStore')) {
+        try { [void]@(Get-ExactFirewallRulesStrict -Name $controlProbeName -PolicyStore $store) }
+        catch { Throw-Failure "Windows Defender Firewall $store is unavailable: $($_.Exception.Message)" }
+    }
     Write-Pass 'elevated Windows Defender Firewall control available'
+}
+
+function Test-IsExactFirewallNotFoundError {
+    param(
+        [Parameter(Mandatory)][Management.Automation.ErrorRecord] $ErrorRecord,
+        [Parameter(Mandatory)][ValidateSet('Name','Group')][string] $QueryKind,
+        [Parameter(Mandatory)][string] $QueryValue
+    )
+    $expectedId = if ($QueryKind -eq 'Name') {
+        'CmdletizationQuery_NotFound_InstanceID,Get-NetFirewallRule'
+    }
+    else {
+        'CmdletizationQuery_NotFound_RuleGroup,Get-NetFirewallRule'
+    }
+    return $ErrorRecord.FullyQualifiedErrorId -ceq $expectedId -and
+        $ErrorRecord.CategoryInfo.Category -eq [Management.Automation.ErrorCategory]::ObjectNotFound -and
+        [string]$ErrorRecord.CategoryInfo.TargetName -ceq $QueryValue
+}
+
+function Get-ExactFirewallRulesStrict {
+    [CmdletBinding(DefaultParameterSetName='Name')]
+    param(
+        [Parameter(Mandatory,ParameterSetName='Name')][string] $Name,
+        [Parameter(Mandatory,ParameterSetName='Group')][string] $Group,
+        [Parameter(Mandatory)][ValidateSet('ActiveStore','PersistentStore')][string] $PolicyStore
+    )
+    $queryKind = $PSCmdlet.ParameterSetName
+    $queryValue = if ($queryKind -eq 'Name') { $Name } else { $Group }
+    try {
+        if ($queryKind -eq 'Name') {
+            return @(Get-NetFirewallRule -Name $Name -PolicyStore $PolicyStore -ErrorAction Stop)
+        }
+        return @(Get-NetFirewallRule -Group $Group -PolicyStore $PolicyStore -ErrorAction Stop)
+    }
+    catch {
+        if (Test-IsExactFirewallNotFoundError -ErrorRecord $_ -QueryKind $queryKind -QueryValue $queryValue) { return @() }
+        throw
+    }
 }
 
 function Test-ExactFirewallRuleExists {
     param([Parameter(Mandatory)][string] $Name)
-    if (Get-NetFirewallRule -Name $Name -PolicyStore PersistentStore -ErrorAction SilentlyContinue) { return $true }
-    if (Get-NetFirewallRule -Name $Name -PolicyStore ActiveStore -ErrorAction SilentlyContinue) { return $true }
-    return $false
+    $persistent = @(Get-ExactFirewallRulesStrict -Name $Name -PolicyStore PersistentStore)
+    $active = @(Get-ExactFirewallRulesStrict -Name $Name -PolicyStore ActiveStore)
+    return $persistent.Count -ne 0 -or $active.Count -ne 0
 }
 
 function Get-ExactFirewallGroupCount {
@@ -1193,7 +1233,7 @@ function Get-ExactFirewallGroupCount {
         [Parameter(Mandatory)][string] $Group,
         [ValidateSet('ActiveStore','PersistentStore')][string] $PolicyStore = 'ActiveStore'
     )
-    return @(Get-NetFirewallRule -Group $Group -PolicyStore $PolicyStore -ErrorAction SilentlyContinue).Count
+    return @(Get-ExactFirewallRulesStrict -Group $Group -PolicyStore $PolicyStore).Count
 }
 
 function Invoke-ExactJavaNetworkProbe {
@@ -1312,10 +1352,10 @@ function Invoke-WithFirewallIsolation {
     }
     finally {
         try {
-            if (Test-ExactFirewallRuleExists -Name $javaRuleId) {
+            if ($javaCreated) {
                 Remove-NetFirewallRule -Name $javaRuleId -PolicyStore PersistentStore -ErrorAction Stop
             }
-            if (Test-ExactFirewallRuleExists -Name $javawRuleId) {
+            if ($javawCreated) {
                 Remove-NetFirewallRule -Name $javawRuleId -PolicyStore PersistentStore -ErrorAction Stop
             }
             $cleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -2478,6 +2518,31 @@ function Invoke-SelfCheckMode {
     if ([regex]::Matches($source, '(?m)^\s*\[void\]\(New-NetFirewallRule\b').Count -ne 2) { Throw-Failure 'Firewall primitive must contain exactly two rule creations' }
     if ($source -match '(?i)Get-NetFirewallRule\s*\|\s*Remove-NetFirewallRule|Remove-NetFirewallRule\s+-Group') { Throw-Failure 'Broad firewall cleanup pattern found' }
     if ($source -match '(?m)^\s*(?:\[[^\]]+\]\s*)?Get-NetFirewallRule(?![^\r\n]*(?:-Name|-Group))') { Throw-Failure 'Unscoped firewall rule enumeration found' }
+    $nameNotFound = [Management.Automation.ErrorRecord]::new(
+        [InvalidOperationException]::new('synthetic exact-name absence'),
+        'CmdletizationQuery_NotFound_InstanceID,Get-NetFirewallRule',
+        [Management.Automation.ErrorCategory]::ObjectNotFound,
+        'DevelopersHell.Foundation.Synthetic.Name')
+    if (-not (Test-IsExactFirewallNotFoundError -ErrorRecord $nameNotFound -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name')) {
+        Throw-Failure 'Exact-name firewall absence classifier rejected its only allowed shape'
+    }
+    $groupNotFound = [Management.Automation.ErrorRecord]::new(
+        [InvalidOperationException]::new('synthetic exact-group absence'),
+        'CmdletizationQuery_NotFound_RuleGroup,Get-NetFirewallRule',
+        [Management.Automation.ErrorCategory]::ObjectNotFound,
+        'DevelopersHell.Foundation.Synthetic.Group')
+    if (-not (Test-IsExactFirewallNotFoundError -ErrorRecord $groupNotFound -QueryKind Group -QueryValue 'DevelopersHell.Foundation.Synthetic.Group')) {
+        Throw-Failure 'Exact-group firewall absence classifier rejected its only allowed shape'
+    }
+    foreach ($adversarial in @(
+        [Management.Automation.ErrorRecord]::new([UnauthorizedAccessException]::new('denied'),'PermissionDenied,Get-NetFirewallRule',[Management.Automation.ErrorCategory]::PermissionDenied,'DevelopersHell.Foundation.Synthetic.Name'),
+        [Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('wrong target'),'CmdletizationQuery_NotFound_InstanceID,Get-NetFirewallRule',[Management.Automation.ErrorCategory]::ObjectNotFound,'DevelopersHell.Foundation.Other'),
+        [Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('wrong selector'),'CmdletizationQuery_NotFound_RuleGroup,Get-NetFirewallRule',[Management.Automation.ErrorCategory]::ObjectNotFound,'DevelopersHell.Foundation.Synthetic.Name')
+    )) {
+        if (Test-IsExactFirewallNotFoundError -ErrorRecord $adversarial -QueryKind Name -QueryValue 'DevelopersHell.Foundation.Synthetic.Name') {
+            Throw-Failure 'Firewall absence classifier accepted a provider, target, or selector error'
+        }
+    }
     $defaultDistribution = Resolve-CanonicalPath -LiteralPath $script:DefaultDistributionPath -AllowMissingLeaf
     if ((Split-Path -Leaf $defaultDistribution) -cne $script:ExpectedDistributionName) { Throw-Failure 'Default distribution binding is invalid' }
     $repository = Resolve-CanonicalPath -LiteralPath $script:RepositoryRoot
