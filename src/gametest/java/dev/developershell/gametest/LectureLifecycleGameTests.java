@@ -241,7 +241,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 		}
 	}
 
-	@GameTest(padding = 24)
+	@GameTest(setupTicks = 140, maxTicks = 40, padding = 24)
 	public void serverStopHandlerConvergesExactlyOnceWithoutStoppingGameTestServer(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		MinecraftServer server = level.getServer();

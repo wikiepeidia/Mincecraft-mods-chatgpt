@@ -1,5 +1,6 @@
 package dev.developershell.server;
 
+import dev.developershell.DevelopersHell;
 import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.PlayerCampaignState;
@@ -11,6 +12,8 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -24,6 +27,8 @@ import net.minecraft.world.entity.EntitySpawnReason;
  * adapter.</p>
  */
 public final class CampaignLifecycle {
+	private static final String SERVER_STOPPING_MARKER =
+			"DEVELOPERS_HELL_SERVER_STOPPING_CLEANUP_COMPLETE";
 	private static DevelopersHellRuntime.LifecycleAdapter adapter;
 
 	/** Registers the production callbacks once after immutable runtime composition. */
@@ -51,6 +56,26 @@ public final class CampaignLifecycle {
 		ServerEntityEvents.ALLOW_LOAD.register(CampaignLifecycle::onAllowLoad);
 		ServerEntityEvents.ENTITY_LOAD.register(CampaignLifecycle::onEntityLoad);
 		ServerEntityEvents.ENTITY_UNLOAD.register(CampaignLifecycle::onEntityUnload);
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			onServerStopping(server);
+			DevelopersHell.LOGGER.info(SERVER_STOPPING_MARKER);
+		});
+	}
+
+	/**
+	 * Runs the same bounded, state-first stop cleanup used by the production callback.
+	 * This method never stops the supplied server, so GameTest can verify it in-process.
+	 */
+	public static int onServerStopping(MinecraftServer server) {
+		Objects.requireNonNull(server, "server");
+		int accepted = 0;
+		for (LectureEncounterManager.RuntimeSnapshot runtime
+				: LectureEncounterManager.activeRuntimeSnapshots(server)) {
+			if (onRuntimeExit(runtime, CampaignEvent.TerminalReason.SERVER_STOP)) {
+				accepted++;
+			}
+		}
+		return accepted;
 	}
 
 	/** Testable explicit-abort seam used by the later command adapter. */
