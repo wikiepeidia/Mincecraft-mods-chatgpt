@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-12-PLAN.md
-last_updated: "2026-08-26T22:57:59.928Z"
+stopped_at: Completed 02-18-PLAN.md
+last_updated: "2026-08-26T23:35:05.126Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 3e8889c5c3490a4c3604d63c68255aeed736cad6
+state_head: 62473d525257f75db6447380cb2cd40289e8b77d
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 20
+  completed_plans: 21
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 17 of 18
+Plan: 18 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -78,6 +78,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02-persistent-lecture-vertical-slice P11 | 9min | 1 tasks | 4 files |
 | Phase 02 P17 | 24min | 1 tasks | 10 files |
 | Phase 02 P12 | 14min | 1 tasks | 5 files |
+| Phase 02 P18 | 32min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -143,6 +144,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Plan 02-12: Reuse the frozen optional schema-v1 Remote deadline and notice fields/events; no persistence widening or version bump.
 - [Phase 02]: Plan 02-12: Route held Remote use through Fabric UseItemCallback before vanilla cooldown rejection while leaving the client PASS-only and the persisted server deadline authoritative.
 - [Phase 02]: Plan 02-12: Dispatch the capped six-block/six-target slide only from the accepted post-setDirty cooldown intent.
+- [Phase 02]: Plan 02-18: Project one native cooldown group from the first present production Remote; matching stacks share it without duplicate packets.
+- [Phase 02]: Plan 02-18: Leave an elapsed ready edge pending while the Remote is absent or a critical owner action bar is active.
+- [Phase 02]: Plan 02-18: Reconcile Remote readiness after encounter runtime ticks so just-closed fights release action-bar priority.
+- [Phase 02]: Plan 02-18: Preserve lifecycle orphan rejection and prove critical priority with a real ACTIVE encounter.
 
 ### Pending Todos
 
@@ -161,6 +166,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T22:57:59.800Z
-Stopped at: Completed 02-12-PLAN.md
+Last session: 2026-08-26T23:35:05.013Z
+Stopped at: Completed 02-18-PLAN.md
 Resume file: None
