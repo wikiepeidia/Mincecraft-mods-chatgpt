@@ -66,7 +66,70 @@ Plans:
   4. Saving or unloading mid-fight, dying, escaping, timing out, or aborting never duplicates or regresses state: owned hazards and bars clean up, a Retake action remains safe, and the first victory grants the Attendance Sheet and cooldown-limited Infinite Slides Remote exactly once across reloads, with artifact recovery.
   5. A contributor can run automated unit tests and Fabric GameTests that cover reducer transitions, bounds, persistence, failure/retry cleanup, and a real Contract-to-Lecture encounter lifecycle.
 
-**Plans:** TBD
+**Plans:** 18 plans
+**Wave 1**
+
+- [ ] 02-01-PLAN.md
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-14-PLAN.md
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 02-15-PLAN.md
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 02-02-PLAN.md
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 02-03-PLAN.md
+- [ ] 02-04-PLAN.md
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 02-16-PLAN.md
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 02-05-PLAN.md
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 02-06-PLAN.md
+- [ ] 02-07-PLAN.md
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 02-08-PLAN.md
+- [ ] 02-09-PLAN.md
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 02-10-PLAN.md
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 02-11-PLAN.md
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 02-17-PLAN.md
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
+- [ ] 02-12-PLAN.md
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
+- [ ] 02-18-PLAN.md
+
+**Wave 15** *(blocked on Wave 14 completion)*
+
+- [ ] 02-13-PLAN.md
+
 **UI hint:** yes
 
 ### Phase 3: Contract-to-Diploma Boss Campaign
@@ -143,7 +206,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Java 25 and Fabric 26.2 Foundation | 4/4 | Complete    | 2026-08-26 |
-| 2. Persistent Lecture Vertical Slice | 0/TBD | Not started | - |
+| 2. Persistent Lecture Vertical Slice | 0/18 | Planned    |  |
 | 3. Contract-to-Diploma Boss Campaign | 0/TBD | Not started | - |
 | 4. Developer-Tool Sandbox Loops | 0/TBD | Not started | - |
 | 5. Safe Metadata Roulette and Module Independence | 0/TBD | Not started | - |
