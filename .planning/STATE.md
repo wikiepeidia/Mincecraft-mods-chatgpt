@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-current_phase: 2
+current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Phase 2 UI-SPEC approved
-last_updated: "2026-08-26T16:43:01.495Z"
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-08-26T17:09:40.116Z"
 last_activity: 2026-08-26
-last_activity_desc: Phase 1 complete, transitioned to Phase 2
-state_head: f416d81fb33714c9078cd5881514d6689b2fc6bc
+last_activity_desc: Phase 02 execution started
+state_head: 6fc55856cd9237b92b5b9c35cb7a00e1a7f0bad5
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 4
+  completed_plans: 5
   percent: 17
 ---
 
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-26)
 
 **Core value:** Deliver a genuinely funny, replayable boss-rush experience whose university and developer jokes become visible Minecraft mechanics rather than merely renamed items or text references.
-**Current focus:** Phase 2 — Persistent Lecture Vertical Slice
+**Current focus:** Phase 02 — Persistent Lecture Vertical Slice
 
 ## Current Position
 
-Phase: 2 (Persistent Lecture Vertical Slice) — READY TO EXECUTE
-Plan: Not started
+Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
+Plan: 2 of 18
 Status: Ready to execute
-Last activity: 2026-08-26 — Phase 1 complete, transitioned to Phase 2
+Last activity: 2026-08-26 — Phase 02 execution started
 
-Progress: [████████████████████] 4/4 plans (100%)
+Progress: [████████████████████] 4/4 plans ([██░░░░░░░░] 17%)
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 01 P02 | 9 min | 1 tasks | 8 files |
 | Phase 01 P03 | 29 min | 1 tasks | 6 files |
 | Phase 01 P04 | 15h | 3 tasks | 4 files |
+| Phase 02 P01 | 20min | 1 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Stable content registration is unconditional and independent of the eight immutable behavior gates so later toggle changes cannot remove saved IDs.
 - [Phase 01]: Preserve the one ordinary JAR and fail-closed offline/runtime proof contract; online, same-cache-offline, distribution, and runtime-copy SHA-256 values remain identical.
 - [Phase 01]: The vanilla paper/map-style Foundation Token appearance is accepted MVP cosmetic debt; bespoke art remains later release polish.
+- [Phase 02]: Use Fabric UseBlockCallback as the normal Contract-to-lectern entrypoint because Minecraft 26.2 consumes empty-lectern handling before Item.useOn.
+- [Phase 02]: Decode unsupported schema numbers into read-only campaign state so computeIfAbsent cannot replace future data after a Codec error.
+- [Phase 02]: Match both owner UUID and active encounter UUID, and dirty the ledger before spawning, shrinking, cleanup, boss-bar changes, or inventory grants.
+- [Phase 02]: Keep the Professor as a no-loot Vindicator-derived server identity while the encounter manager owns the bounded runtime and owner-only ServerBossEvent.
 
 ### Pending Todos
 
@@ -93,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T14:26:16.627Z
-Stopped at: Phase 2 UI-SPEC approved
-Resume file: .planning/phases/02-persistent-lecture-vertical-slice/02-UI-SPEC.md
+Last session: 2026-08-26T17:09:39.966Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None

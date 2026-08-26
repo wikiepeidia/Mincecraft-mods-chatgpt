@@ -12,13 +12,13 @@
 - [x] **FND-03**: The production mod can launch both a client world and a dedicated server without client-only classloading failures.
 - [x] **FND-04**: All stable items, entities, effects, payloads, and other content IDs remain registered regardless of module-toggle values so existing saves remain loadable.
 - [ ] **FND-05**: The mod validates configuration at startup, reports actionable errors, and defaults destructive or scheduled chaos to opt-in behavior.
-- [ ] **FND-06**: Versioned campaign, encounter, reward, and module state survives save, quit, reload, death, and chunk unload without duplication or regression.
-- [ ] **FND-07**: Automated unit tests and Fabric GameTests cover state transitions, bounds, persistence, and at least one real encounter lifecycle before release.
+- [x] **FND-06**: Versioned campaign, encounter, reward, and module state survives save, quit, reload, death, and chunk unload without duplication or regression.
+- [x] **FND-07**: Automated unit tests and Fabric GameTests cover state transitions, bounds, persistence, and at least one real encounter lifecycle before release.
 
 ### Campaign
 
 - [ ] **CAMP-01**: A new player can discover, craft, and use the Cursed Unpaid Internship Contract without consulting an external wiki or using an admin command.
-- [ ] **CAMP-02**: Starting the Contract validates a player-selected overworld arena, creates a nearby retry checkpoint, and leaves blocks undamaged by default.
+- [x] **CAMP-02**: Starting the Contract validates a player-selected overworld arena, creates a nearby retry checkpoint, and leaves blocks undamaged by default.
 - [ ] **CAMP-03**: The player progresses in one visible sequence through Lecture, Jury, Chairman, and Codex Overdraft using recoverable chapter artifacts and current-objective text.
 - [ ] **CAMP-04**: Death, escape, timeout, abort, or reload cleans encounter-owned hazards, helpers, entities, and boss bars before offering a safe Retake Form or retry action.
 - [ ] **CAMP-05**: Each first-time boss completion records its checkpoint and grants its campaign artifact and practical reward exactly once, with recovery if a physical artifact is lost.
@@ -26,8 +26,8 @@
 
 ### Lecture Boss
 
-- [ ] **LECT-01**: The player can defeat Professor Infinite Slides by learning three readable acts: Slide Deck safe lanes, deterministic Surprise Quiz pads, and Attendance Check positioning.
-- [ ] **LECT-02**: Defeating Professor Infinite Slides grants the Attendance Sheet and a cooldown-limited Infinite Slides Remote after a fight that supports failure, cleanup, retry, and mid-campaign persistence.
+- [x] **LECT-01**: The player can defeat Professor Infinite Slides by learning three readable acts: Slide Deck safe lanes, deterministic Surprise Quiz pads, and Attendance Check positioning.
+- [x] **LECT-02**: Defeating Professor Infinite Slides grants the Attendance Sheet and a cooldown-limited Infinite Slides Remote after a fight that supports failure, cleanup, retry, and mid-campaign persistence.
 
 ### Jury Gauntlet
 
@@ -150,16 +150,16 @@
 | FND-03 | Phase 1 | Complete |
 | FND-04 | Phase 1 | Complete |
 | FND-05 | Phase 2 | Pending |
-| FND-06 | Phase 2 | Pending |
-| FND-07 | Phase 2 | Pending |
+| FND-06 | Phase 2 | Complete |
+| FND-07 | Phase 2 | Complete |
 | CAMP-01 | Phase 2 | Pending |
-| CAMP-02 | Phase 2 | Pending |
+| CAMP-02 | Phase 2 | Complete |
 | CAMP-03 | Phase 3 | Pending |
 | CAMP-04 | Phase 3 | Pending |
 | CAMP-05 | Phase 3 | Pending |
 | CAMP-06 | Phase 3 | Pending |
-| LECT-01 | Phase 2 | Pending |
-| LECT-02 | Phase 2 | Pending |
+| LECT-01 | Phase 2 | Complete |
+| LECT-02 | Phase 2 | Complete |
 | JURY-01 | Phase 3 | Pending |
 | JURY-02 | Phase 3 | Pending |
 | CHAIR-01 | Phase 3 | Pending |
