@@ -1,3 +1,3 @@
 # Deferred Items — Phase 02
 
-- **Plan 02-17 production victory ownership:** `ProfessorInfiniteSlidesEntity.die()` still calls the compatibility `CampaignService.victory(...)` path directly. Plan 02-17 must deauthorize or route that call so only the manager's accepted final-window `CampaignService.commitVictory(...)` result reaches `RewardService`. This file is outside Plan 02-11 ownership and was not changed here.
+- **Resolved by Plan 02-17 — production victory ownership:** `ProfessorInfiniteSlidesEntity.die()` and the source-compatible `CampaignService.victory(...)` wrapper are now inert. Only `LectureEncounterManager` consumes admitted final-window damage, receives the accepted persisted `CampaignService.commitVictory(...)` transition, and passes its matching reward intent to `RewardService` (`2b12332`).

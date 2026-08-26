@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 14
-total_count: 14
-last_updated: 2026-08-26T21:05:24.751Z
+fixed_count: 16
+total_count: 16
+last_updated: 2026-08-26T22:39:28.514Z
 ---
 
 # Broken Windows Ledger
@@ -29,6 +29,8 @@ last_updated: 2026-08-26T21:05:24.751Z
 | 12 | 02 | deviation | src/main/java/dev/developershell/lecture/RetakeService.java |  | Compensated failed retry runtime starts and cleaned reserved or post-spawn fallback crash windows state-first | fixed |  | 2026-08-26T20:34:30.623Z | 2026-08-26T20:34:38.897Z |
 | 13 | 02 | deviation | src/main/java/dev/developershell/server/DevelopersHellRuntime.java |  | Approved lifecycle bridge invokes RetakeService only after an accepted persisted reconciliation intent | fixed |  | 2026-08-26T21:04:59.081Z | 2026-08-26T21:05:24.438Z |
 | 14 | 02 | deviation | src/gametest/java/dev/developershell/gametest/LectureLifecycleGameTests.java |  | Approved retained lifecycle expectations include issued copy only when reconciliation materializes a Form | fixed |  | 2026-08-26T21:04:59.387Z | 2026-08-26T21:05:24.751Z |
+| 15 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java | 128 | Deauthorized the carried legacy entity and compatibility reward paths so only the manager accepted persisted transition reaches RewardService | fixed |  | 2026-08-26T22:39:23.172Z | 2026-08-26T22:39:28.191Z |
+| 16 | 02 | deviation | src/gametest/java/dev/developershell/gametest/RewardGameTests.java | 554 | Made nullable campaign preservation assertions null-safe after the clean transformed gate exposed the test helper dereference | fixed |  | 2026-08-26T22:39:23.504Z | 2026-08-26T22:39:28.514Z |
 
 ````json
 [
@@ -199,6 +201,30 @@ last_updated: 2026-08-26T21:05:24.751Z
     "reason": "",
     "recorded_at": "2026-08-26T21:04:59.387Z",
     "resolved_at": "2026-08-26T21:05:24.751Z"
+  },
+  {
+    "id": 15,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/campaign/CampaignService.java",
+    "line": 128,
+    "description": "Deauthorized the carried legacy entity and compatibility reward paths so only the manager accepted persisted transition reaches RewardService",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T22:39:23.172Z",
+    "resolved_at": "2026-08-26T22:39:28.191Z"
+  },
+  {
+    "id": 16,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/gametest/java/dev/developershell/gametest/RewardGameTests.java",
+    "line": 554,
+    "description": "Made nullable campaign preservation assertions null-safe after the clean transformed gate exposed the test helper dereference",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T22:39:23.504Z",
+    "resolved_at": "2026-08-26T22:39:28.514Z"
   }
 ]
 ````
