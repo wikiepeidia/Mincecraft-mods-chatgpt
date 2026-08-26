@@ -83,6 +83,7 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			).orElseThrow(() -> context.assertionException("missing timeout runtime"));
 			LectureEncounterManager.tick(
 					level.getServer(),
+					timeout.encounterUuid(),
 					timeoutRuntime.startedAtGameTime() + LectureEncounterManager.ENCOUNTER_TIMEOUT_TICKS
 			);
 			assertConverged(context, level, timeout, blocksBefore, desk, facing, "timeout");
@@ -145,6 +146,41 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 			connection = createSurvivalPlayer(context, RELOAD_OWNER_UUID, "lifecycle-reload", new BlockPos(12, 2, 2));
 			RecordingServerPlayer owner = connection.player();
 			PlayerCampaignState reload = startAttempt(context, level, owner, desk, facing);
+			LectureEncounterManager.RuntimeSnapshot realRuntime = LectureEncounterManager.runtimeSnapshot(
+					reload.encounterUuid()
+			).orElseThrow(() -> context.assertionException("missing reload runtime"));
+			LectureEncounterManager.RuntimeSnapshot wrongEncounter = new LectureEncounterManager.RuntimeSnapshot(
+					realRuntime.level(),
+					realRuntime.ownerUuid(),
+					UUID.fromString("c0de0000-0000-4000-8000-000000000597"),
+					realRuntime.professorUuid(),
+					realRuntime.attemptNumber(),
+					realRuntime.startedAtGameTime(),
+					realRuntime.deskPos(),
+					realRuntime.deskFacing(),
+					realRuntime.ownedEntityUuids()
+			);
+			context.assertFalse(CampaignLifecycle.onRuntimeExit(
+					wrongEncounter, dev.developershell.campaign.CampaignEvent.TerminalReason.ABORT
+			), "wrong encounter exit is rejected");
+			LectureEncounterManager.RuntimeSnapshot wrongProfessor = new LectureEncounterManager.RuntimeSnapshot(
+					realRuntime.level(),
+					realRuntime.ownerUuid(),
+					realRuntime.encounterUuid(),
+					UUID.fromString("c0de0000-0000-4000-8000-000000000596"),
+					realRuntime.attemptNumber(),
+					realRuntime.startedAtGameTime(),
+					realRuntime.deskPos(),
+					realRuntime.deskFacing(),
+					realRuntime.ownedEntityUuids()
+			);
+			context.assertFalse(CampaignLifecycle.onRuntimeExit(
+					wrongProfessor, dev.developershell.campaign.CampaignEvent.TerminalReason.ABORT
+			), "wrong Professor exit is rejected");
+			context.assertValueEqual(CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow(), reload,
+					"wrong identities change no durable state");
+			context.assertTrue(LectureEncounterManager.presentation(reload.encounterUuid()).isPresent(),
+					"wrong identities change no presentation");
 			owner.clearRecordedSystemMessages();
 			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
 			assertConverged(context, level, reload, blocksBefore, desk, facing, "reload");
@@ -153,7 +189,11 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 
 			owner.clearRecordedSystemMessages();
 			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
-			LectureEncounterManager.tick(level.getServer(), level.getGameTime() + LectureEncounterManager.ENCOUNTER_TIMEOUT_TICKS);
+			LectureEncounterManager.tick(
+					level.getServer(),
+					reload.encounterUuid(),
+					level.getGameTime() + LectureEncounterManager.ENCOUNTER_TIMEOUT_TICKS
+			);
 			context.assertTrue(owner.recordedSystemMessageKeys().isEmpty(),
 					"replayed join neither resumes a cast nor repeats presentation");
 

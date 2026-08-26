@@ -5,6 +5,7 @@ import dev.developershell.config.ConfigIssue;
 import dev.developershell.config.DevHellConfigLoader;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
+import dev.developershell.server.CampaignLifecycle;
 import dev.developershell.server.DevelopersHellRuntime;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -44,6 +45,7 @@ public final class DevelopersHell implements ModInitializer {
 			);
 		}
 
+		CampaignLifecycle.register(runtime);
 		runtime.lectureManager().initialize();
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
 		DevHellCommands.register(runtime);

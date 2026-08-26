@@ -29,6 +29,7 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 	private UUID encounterUuid;
 	private boolean vulnerabilityOpen;
 	private boolean victoryCommitted;
+	private boolean loadedFromDisk;
 
 	public ProfessorInfiniteSlidesEntity(EntityType<? extends Vindicator> type, Level level) {
 		super(type, level);
@@ -56,6 +57,11 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 				&& this.encounterUuid != null
 				&& this.ownerUuid.equals(ownerUuid)
 				&& this.encounterUuid.equals(encounterUuid);
+	}
+
+	/** True only after this instance decoded persisted entity data. */
+	public boolean wasLoadedFromDisk() {
+		return loadedFromDisk;
 	}
 
 	@Override
@@ -98,6 +104,9 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 	@Override
 	protected void readAdditionalSaveData(ValueInput input) {
 		super.readAdditionalSaveData(input);
+		loadedFromDisk = true;
+		vulnerabilityOpen = false;
+		victoryCommitted = false;
 		UUID persistedOwner = input.read(OWNER_SAVE_KEY, UUIDUtil.CODEC).orElse(null);
 		UUID persistedEncounter = input.read(ENCOUNTER_SAVE_KEY, UUIDUtil.CODEC).orElse(null);
 		if (persistedOwner == null || persistedEncounter == null) {

@@ -1,16 +1,22 @@
 package dev.developershell.server;
 
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.campaign.CampaignEvent;
+import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.config.DevHellConfig;
 import dev.developershell.config.DevHellConfigLoader;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureRules;
 import dev.developershell.module.ModuleGate;
 import java.util.Objects;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
@@ -21,6 +27,7 @@ public final class DevelopersHellRuntime {
 	private final ModuleGate moduleGate;
 	private final LectureRules lectureRules;
 	private final CampaignServiceAdapter campaignService;
+	private final LifecycleAdapter lifecycle;
 	private final LectureManagerAdapter lectureManager;
 
 	private DevelopersHellRuntime(
@@ -28,12 +35,14 @@ public final class DevelopersHellRuntime {
 			ModuleGate moduleGate,
 			LectureRules lectureRules,
 			CampaignServiceAdapter campaignService,
+			LifecycleAdapter lifecycle,
 			LectureManagerAdapter lectureManager
 	) {
 		this.loadResult = Objects.requireNonNull(loadResult, "loadResult");
 		this.moduleGate = Objects.requireNonNull(moduleGate, "moduleGate");
 		this.lectureRules = Objects.requireNonNull(lectureRules, "lectureRules");
 		this.campaignService = Objects.requireNonNull(campaignService, "campaignService");
+		this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
 		this.lectureManager = Objects.requireNonNull(lectureManager, "lectureManager");
 	}
 
@@ -50,11 +59,14 @@ public final class DevelopersHellRuntime {
 				tuning.maxParticleBurstsPerEncounter(),
 				tuning.maxTransitionSoundsPerEncounter()
 		);
+		CampaignServiceAdapter campaignService = new CampaignServiceAdapter(config.campaignEnabled());
+		LifecycleAdapter lifecycle = new LifecycleAdapter();
 		return new DevelopersHellRuntime(
 				loadResult,
 				config.moduleGate(),
 				rules,
-				new CampaignServiceAdapter(config.campaignEnabled()),
+				campaignService,
+				lifecycle,
 				new LectureManagerAdapter(rules)
 		);
 	}
@@ -79,8 +91,94 @@ public final class DevelopersHellRuntime {
 		return campaignService;
 	}
 
+	public LifecycleAdapter lifecycle() {
+		return lifecycle;
+	}
+
 	public LectureManagerAdapter lectureManager() {
 		return lectureManager;
+	}
+
+	/**
+	 * Applies lifecycle events through the retained persist-before-effect campaign service.
+	 * Physical Retake materialization remains owned by the later Retake service plan.
+	 */
+	public static final class LifecycleAdapter {
+		private static final String RELOAD_KEY = "message.developers_hell.lecture.reload";
+		private static final String RETAKE_KEY = "message.developers_hell.lecture.retake";
+		private final Set<UUID> pendingReloadNotices = new LinkedHashSet<>();
+
+		public boolean submit(ServerLevel level, CampaignEvent event, ServerPlayer feedbackPlayer) {
+			Objects.requireNonNull(level, "level");
+			Objects.requireNonNull(event, "event");
+			ServerPlayer feedback = feedbackPlayer != null
+					? feedbackPlayer
+					: feedbackPlayer(level, event);
+			boolean[] reconcileRetake = {false};
+			CampaignTransition transition = CampaignService.apply(level, event, intent -> {
+				if (intent instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
+					LectureEncounterManager.cleanup(cleanup.encounterUuid());
+				}
+				else if (intent instanceof CampaignTransition.EffectIntent.ReconcileRetake) {
+					reconcileRetake[0] = true;
+				}
+			});
+			if (!transition.accepted()) {
+				return false;
+			}
+
+			if (event instanceof CampaignEvent.NormalizeReload) {
+				if (feedback == null) {
+					pendingReloadNotices.add(event.ownerUuid());
+				}
+				else {
+					sendReloadNotice(feedback);
+				}
+			}
+			else if (event instanceof CampaignEvent.Terminal terminal && feedback != null) {
+				feedback.sendSystemMessage(Component.translatable(terminalMessageKey(terminal.reason())));
+				if (reconcileRetake[0]) {
+					feedback.sendSystemMessage(Component.translatable(RETAKE_KEY));
+				}
+			}
+			return true;
+		}
+
+		public void deliverPendingReloadNotice(ServerPlayer player) {
+			Objects.requireNonNull(player, "player");
+			if (pendingReloadNotices.remove(player.getUUID())) {
+				sendReloadNotice(player);
+			}
+		}
+
+		public void cleanupStaleRuntime(LectureEncounterManager.RuntimeSnapshot runtime) {
+			LectureEncounterManager.cleanupIfIdentityMatches(Objects.requireNonNull(runtime, "runtime"));
+		}
+
+		private static ServerPlayer feedbackPlayer(ServerLevel level, CampaignEvent event) {
+			if (event instanceof CampaignEvent.Terminal terminal) {
+				return LectureEncounterManager.participant(terminal.encounterUuid()).orElse(null);
+			}
+			return level.getServer().getPlayerList().getPlayer(event.ownerUuid());
+		}
+
+		private static String terminalMessageKey(CampaignEvent.TerminalReason reason) {
+			return switch (reason) {
+				case DEATH -> "message.developers_hell.lecture.failure.death";
+				case ESCAPE -> "message.developers_hell.lecture.failure.escape";
+				case TIMEOUT -> "message.developers_hell.lecture.failure.timeout";
+				case DIMENSION_CHANGE -> "message.developers_hell.lecture.failure.dimension";
+				case DISCONNECT -> "message.developers_hell.lecture.failure.disconnect";
+				case ABORT -> "message.developers_hell.lecture.failure.abort";
+				case SERVER_STOP -> "message.developers_hell.lecture.failure.server_stop";
+				case ENTITY_UNLOAD -> "message.developers_hell.lecture.failure.unload";
+			};
+		}
+
+		private static void sendReloadNotice(ServerPlayer player) {
+			player.sendSystemMessage(Component.translatable(RELOAD_KEY));
+			player.sendSystemMessage(Component.translatable(RETAKE_KEY));
+		}
 	}
 
 	/** One-shot behavior adapter over the retained state-before-effects campaign service. */
@@ -122,7 +220,7 @@ public final class DevelopersHellRuntime {
 			if (initialized) {
 				throw new IllegalStateException("Lecture manager already initialized for this runtime");
 			}
-			LectureEncounterManager.initialize(rules);
+			LectureEncounterManager.initialize(rules, CampaignLifecycle::onRuntimeExit);
 			initialized = true;
 		}
 
