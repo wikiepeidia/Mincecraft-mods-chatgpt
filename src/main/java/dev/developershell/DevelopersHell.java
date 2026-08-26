@@ -1,5 +1,7 @@
 package dev.developershell;
 
+import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -18,7 +20,10 @@ public final class DevelopersHell implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		ModItems.initialize();
+		ModEntities.initialize();
+		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction();
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			LectureEncounterManager.tick(server);
 			if (server.getTickCount() == 1) {
 				LOGGER.info("DEVELOPERS_HELL_SERVER_FIRST_TICK_READY");
 			}
