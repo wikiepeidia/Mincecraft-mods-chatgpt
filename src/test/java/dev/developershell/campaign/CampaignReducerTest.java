@@ -546,6 +546,99 @@ final class CampaignReducerTest {
 	}
 
 	@Test
+	void retakeServiceStartsFromMaterializedReservationAndClearsItAfterPersistence() {
+		PlayerCampaignState reserved = state(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.RETAKE_READY,
+				6,
+				null,
+				false,
+				false,
+				true,
+				ENCOUNTER,
+				FALLBACK,
+				null,
+				900L,
+				2L,
+				800L
+		);
+		TestCampaignPort campaign = new TestCampaignPort(reserved);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.fallbacks.add(FALLBACK);
+		RetakeService service = new RetakeService(campaign, representations, () -> OTHER_FALLBACK);
+
+		assertEquals(
+				RetakeService.Outcome.RETRY_ACCEPTED,
+				service.startRetake(
+						OWNER,
+						acceptedArena(DESK),
+						OTHER_ENCOUNTER,
+						OTHER_PROFESSOR,
+						intent -> true
+				)
+		);
+		PlayerCampaignState active = campaign.state(OWNER).orElseThrow();
+		assertEquals(PlayerCampaignState.LectureStatus.ACTIVE, active.status());
+		assertEquals(null, active.retakeFallbackReservationUuid());
+		assertFalse(representations.fallbacks.contains(FALLBACK));
+		assertTrue(campaign.log.indexOf("effect:start:persisted=true") < campaign.log.indexOf("discard:state_first=true"));
+	}
+
+	@Test
+	void retakeServiceCompensatesRuntimeFailureBeforeReplacingTheForm() {
+		PlayerCampaignState failed = failedState(OWNER, 6, null);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.inventoryForm = true;
+		representations.inventoryKey = failed.retakeKey().orElseThrow();
+		representations.insertSucceeds = true;
+		RetakeService service = new RetakeService(campaign, representations, () -> FALLBACK);
+		List<EffectIntent> runtimeIntents = new ArrayList<>();
+
+		assertEquals(
+				RetakeService.Outcome.RUNTIME_START_FAILED,
+				service.startRetake(
+						OWNER,
+						acceptedArena(DESK),
+						OTHER_ENCOUNTER,
+						OTHER_PROFESSOR,
+						intent -> {
+							runtimeIntents.add(intent);
+							return false;
+						}
+				)
+		);
+		PlayerCampaignState compensated = campaign.state(OWNER).orElseThrow();
+		assertEquals(PlayerCampaignState.LectureStatus.RETAKE_READY, compensated.status());
+		assertEquals(7, compensated.attemptCount());
+		assertEquals(new PlayerCampaignState.RetakeKey(OWNER, OTHER_ENCOUNTER), compensated.retakeKey().orElseThrow());
+		assertEquals(compensated.retakeKey().orElseThrow(), representations.inventoryKey);
+		assertTrue(representations.inventoryForm);
+		assertEquals(1, representations.insertAttempts);
+		assertEquals(1, runtimeIntents.size());
+		assertTrue(campaign.log.indexOf("effect:start:persisted=true") < campaign.log.indexOf("apply:terminal"));
+		assertTrue(campaign.log.indexOf("apply:terminal") < campaign.log.indexOf("insert:state_entitled=true"));
+	}
+
+	@Test
+	void retakeServiceDiscardsMaterializedFallbackWhenCommitLosesItsKey() {
+		PlayerCampaignState failed = failedState(OWNER, 3, null);
+		PlayerCampaignState changed = failedState(OWNER, 4, STALE_ENCOUNTER, null);
+		TestCampaignPort campaign = new TestCampaignPort(failed);
+		TestRepresentationPort representations = new TestRepresentationPort(campaign);
+		representations.insertSucceeds = false;
+		representations.materializeSucceeds = true;
+		campaign.beforeMaterializedCommit = () -> assertTrue(campaign.data.replace(changed));
+		RetakeService service = new RetakeService(campaign, representations, () -> FALLBACK);
+
+		assertEquals(RetakeService.Outcome.STALE_STATE, service.reconcile(OWNER));
+		assertEquals(changed, campaign.state(OWNER).orElseThrow());
+		assertFalse(representations.fallbacks.contains(FALLBACK));
+		assertTrue(campaign.log.contains("discard:state_first=true"));
+	}
+
+	@Test
 	void sheetRecoveryUsesMonotonicSequenceToSuppressReplays() {
 		PlayerCampaignState passed = passedState(OWNER, 4, 1_200L, 4L, 1_000L);
 		CampaignEvent.RecoverSheet recover = new CampaignEvent.RecoverSheet(OWNER, 4L);
@@ -675,6 +768,7 @@ final class CampaignReducerTest {
 		private final CampaignSavedData data;
 		private final List<String> log = new ArrayList<>();
 		private int applyCount;
+		private Runnable beforeMaterializedCommit;
 
 		private TestCampaignPort(PlayerCampaignState initialState) {
 			data = CampaignSavedData.createForTesting(java.util.Map.of(initialState.ownerUuid(), initialState));
@@ -688,6 +782,13 @@ final class CampaignReducerTest {
 		@Override
 		public CampaignTransition apply(CampaignEvent event, Consumer<EffectIntent> effectConsumer) {
 			applyCount++;
+			if (event instanceof CampaignEvent.RetakeFallback fallback
+					&& fallback.operation() == FallbackOperation.MATERIALIZED
+					&& beforeMaterializedCommit != null) {
+				Runnable hook = beforeMaterializedCommit;
+				beforeMaterializedCommit = null;
+				hook.run();
+			}
 			if (event instanceof CampaignEvent.ReconcileRetake) {
 				log.add("apply:reserve");
 			}
@@ -696,6 +797,9 @@ final class CampaignReducerTest {
 			}
 			else if (event instanceof CampaignEvent.Start) {
 				log.add("apply:start");
+			}
+			else if (event instanceof CampaignEvent.Terminal) {
+				log.add("apply:terminal");
 			}
 			return CampaignService.apply(data, event, intent -> {
 				if (intent instanceof EffectIntent.StartEncounter) {
@@ -714,6 +818,7 @@ final class CampaignReducerTest {
 		private final TestCampaignPort campaign;
 		private final Set<UUID> fallbacks = new HashSet<>();
 		private boolean inventoryForm;
+		private PlayerCampaignState.RetakeKey inventoryKey;
 		private boolean insertSucceeds;
 		private boolean materializeSucceeds;
 		private int insertAttempts;
@@ -725,7 +830,7 @@ final class CampaignReducerTest {
 
 		@Override
 		public boolean hasInventoryForm(PlayerCampaignState.RetakeKey key) {
-			return inventoryForm;
+			return inventoryForm && (inventoryKey == null || inventoryKey.equals(key));
 		}
 
 		@Override
@@ -741,6 +846,7 @@ final class CampaignReducerTest {
 			campaign.log.add("insert:state_entitled=" + entitled);
 			if (insertSucceeds) {
 				inventoryForm = true;
+				inventoryKey = key;
 			}
 			return insertSucceeds;
 		}
@@ -770,6 +876,7 @@ final class CampaignReducerTest {
 					.orElse(false);
 			campaign.log.add("consume:state_active=" + active);
 			inventoryForm = false;
+			inventoryKey = null;
 		}
 
 		@Override

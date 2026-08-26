@@ -340,13 +340,12 @@ public final class LectureLifecycleGameTests implements CustomTestMethodInvoker 
 					encounterUuid,
 					professorUuid,
 					effect -> {
-						if (effect instanceof CampaignTransition.EffectIntent.StartEncounter) {
-							runtimeStarted[0] = LectureEncounterManager.start(
-									level,
-									owner,
-									CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow()
-							);
-						}
+						runtimeStarted[0] = LectureEncounterManager.start(
+								level,
+								owner,
+								CampaignSavedData.get(level).player(owner.getUUID()).orElseThrow()
+						);
+						return runtimeStarted[0];
 					}
 			);
 			context.assertValueEqual(outcome, RetakeService.Outcome.RETRY_ACCEPTED,

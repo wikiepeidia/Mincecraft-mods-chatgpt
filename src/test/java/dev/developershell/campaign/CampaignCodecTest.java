@@ -101,10 +101,47 @@ final class CampaignCodecTest {
 		assertTrue(decoded.isWritableSchema());
 		assertTrue(migrated.retakeEntitled());
 		assertEquals(OWNER, migrated.retakeKey().orElseThrow().ownerUuid());
+		assertEquals(
+				PlayerCampaignState.legacyRetakeEncounterUuid(OWNER, DESK, 3),
+				migrated.retakeKey().orElseThrow().failedEncounterUuid()
+		);
 		assertEquals(3, migrated.attemptCount());
 		assertEquals(FALLBACK, migrated.retakeFallbackEntityUuid());
 		assertTrue(encode(decoded).getAsJsonObject().getAsJsonArray("players").get(0).getAsJsonObject()
 				.has("retake_encounter_uuid"));
+	}
+
+	@Test
+	void schemaOneRoundTripsMaterializationReservationForReloadRecovery() {
+		PlayerCampaignState reserved = new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.RETAKE_READY,
+				3,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				false,
+				false,
+				true,
+				ENCOUNTER,
+				FALLBACK,
+				null,
+				0L,
+				0L,
+				0L
+		);
+		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, reserved))).getAsJsonObject();
+		JsonObject encodedPlayer = root.getAsJsonArray("players").get(0).getAsJsonObject();
+
+		assertEquals(encodeUuid(FALLBACK), encodedPlayer.get("retake_fallback_reservation_uuid"));
+		assertFalse(encodedPlayer.has("retake_fallback_entity_uuid"));
+		CampaignSavedData decoded = decode(root);
+		assertTrue(decoded.isWritableSchema());
+		assertEquals(reserved, decoded.player(OWNER).orElseThrow());
+		assertEquals(root, encode(decoded));
 	}
 
 	@Test
