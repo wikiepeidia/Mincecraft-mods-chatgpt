@@ -399,7 +399,15 @@ final class CampaignReducerTest {
 		assertTrue(active.retakeKey().isEmpty());
 		assertEquals(null, active.retakeFallbackReservationUuid());
 		assertEquals(null, active.retakeFallbackEntityUuid());
-		assertMonotonicFieldsEqual(failed, active);
+		assertEquals(failed.chapter(), active.chapter());
+		assertEquals(failed.sheetEntitled(), active.sheetEntitled());
+		assertEquals(failed.remoteIssued(), active.remoteIssued());
+		assertEquals(failed.remoteCooldownUntilGameTime(), active.remoteCooldownUntilGameTime());
+		assertEquals(failed.sheetRecoverySequence(), active.sheetRecoverySequence());
+		assertEquals(
+				failed.remoteReadyNoticeForDeadlineGameTime(),
+				active.remoteReadyNoticeForDeadlineGameTime()
+		);
 		assertNoOp(CampaignReducer.reduce(accepted.nextState(), stale), active, "start_not_ready");
 		assertNoOp(
 				CampaignReducer.reduce(
