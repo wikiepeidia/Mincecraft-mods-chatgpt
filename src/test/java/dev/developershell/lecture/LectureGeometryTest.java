@@ -119,6 +119,48 @@ final class LectureGeometryTest {
 	}
 
 	@Test
+	void everyCombatZoneUsesOneExactServerSideContainmentContract() {
+		for (LectureGeometry.Lane lane : LectureGeometry.Lane.values()) {
+			for (int rightOffset : lane.rightOffsets()) {
+				LectureGeometry.LocalPosition position = new LectureGeometry.LocalPosition(9.0D, rightOffset);
+				assertTrue(lane.contains(position), () -> lane + " must contain " + position);
+				assertEquals(lane, LectureGeometry.laneAt(position).orElseThrow(),
+						() -> "unique lane at " + position);
+			}
+		}
+		assertTrue(LectureGeometry.laneAt(new LectureGeometry.LocalPosition(9.0D, -7.5D)).isPresent());
+		assertTrue(LectureGeometry.laneAt(new LectureGeometry.LocalPosition(9.0D, 7.5D)).isEmpty());
+		assertTrue(LectureGeometry.laneAt(new LectureGeometry.LocalPosition(1.49D, 0.0D)).isEmpty());
+
+		for (LectureGeometry.QuizPad pad : LectureGeometry.QuizPad.values()) {
+			LectureGeometry.LocalPosition center = new LectureGeometry.LocalPosition(9.0D, pad.rightAnchor());
+			assertTrue(pad.contains(center), () -> pad + " center " + center);
+			assertEquals(pad, LectureGeometry.quizPadAt(center).orElseThrow(),
+					() -> "unique quiz pad at " + center);
+		}
+		assertTrue(LectureGeometry.quizPadAt(new LectureGeometry.LocalPosition(9.0D, -2.5D)).isEmpty(),
+				"space between pads is no answer");
+
+		for (LectureGeometry.AttendanceQuadrant quadrant : LectureGeometry.AttendanceQuadrant.values()) {
+			LectureGeometry.LocalPosition center = LectureGeometry.attendanceCenter(quadrant);
+			assertTrue(LectureGeometry.isInsideAttendanceRing(quadrant, center),
+					() -> quadrant + " center " + center);
+			LectureGeometry.LocalPosition edge = new LectureGeometry.LocalPosition(
+					center.forwardOffset() + LectureGeometry.ATTENDANCE_RADIUS,
+					center.rightOffset()
+			);
+			assertTrue(LectureGeometry.isInsideAttendanceRing(quadrant, edge),
+					() -> quadrant + " radius edge " + edge);
+			LectureGeometry.LocalPosition outside = new LectureGeometry.LocalPosition(
+					center.forwardOffset() + LectureGeometry.ATTENDANCE_RADIUS + 0.01D,
+					center.rightOffset()
+			);
+			assertFalse(LectureGeometry.isInsideAttendanceRing(quadrant, outside),
+					() -> quadrant + " outside " + outside);
+		}
+	}
+
+	@Test
 	void retryOrderStartsTwoBehindAndIsFiniteThroughRadiusFive() {
 		for (Direction facing : HORIZONTAL_FACINGS) {
 			LectureGeometry.Layout layout = LectureGeometry.layout(DESK, facing);
