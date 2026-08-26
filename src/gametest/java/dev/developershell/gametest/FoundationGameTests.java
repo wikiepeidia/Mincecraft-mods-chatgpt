@@ -1,9 +1,9 @@
 package dev.developershell.gametest;
 
 import com.mojang.authlib.GameProfile;
+import dev.developershell.DevelopersHell;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
-import dev.developershell.DevelopersHell;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureRules;
 import dev.developershell.registry.ModEntities;
@@ -15,19 +15,25 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.minecraft.advancements.AdvancementHolder;
+import net.minecraft.advancements.DisplayInfo;
+import net.minecraft.advancements.triggers.CriteriaTriggers;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
@@ -36,17 +42,38 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LecternBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.item.crafting.CraftingInput;
+import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Recipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 public final class FoundationGameTests implements CustomTestMethodInvoker {
 	private static final UUID OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000201");
 	private static final UUID COMPETING_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000202");
+	private static final UUID DISCOVERY_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000216");
 	private static final long TRACER_SEED = 0x02_01_5L;
+	private static final Identifier CONTRACT_ADVANCEMENT_ID =
+			DevelopersHell.id("a_suspicious_opportunity");
+	private static final ResourceKey<Recipe<?>> CONTRACT_RECIPE_KEY = ResourceKey.create(
+			Registries.RECIPE,
+			DevelopersHell.id("cursed_unpaid_internship_contract")
+	);
+	private static final List<String> CONTRACT_TOOLTIP_KEYS = List.of(
+			"tooltip.developers_hell.contract.lectern",
+			"tooltip.developers_hell.contract.lecture",
+			"tooltip.developers_hell.contract.blocks"
+	);
+	private static final String WRONG_TARGET_KEY = "message.developers_hell.contract.find_lectern";
 
 	@GameTest
 	public void foundationTokenIsRegistered(GameTestHelper context) {
@@ -54,6 +81,128 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 		Identifier expected = DevelopersHell.id("foundation_token");
 		context.assertValueEqual(actual, expected, "foundation token registry key");
 		context.succeed();
+	}
+
+	@GameTest(padding = 24)
+	public void contractDiscoveryCraftingAndGuidanceAreSurvivalReachable(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		MinecraftServer server = level.getServer();
+		BlockPos wrongTarget = context.absolutePos(new BlockPos(12, 2, 4));
+		ConnectedPlayer ownerConnection = null;
+		level.setBlock(wrongTarget, Blocks.STONE.defaultBlockState(), 3);
+
+		try {
+			ownerConnection = createSurvivalPlayer(
+					context,
+					DISCOVERY_OWNER_UUID,
+					"discovery-owner",
+					new BlockPos(12, 2, 2)
+			);
+			RecordingServerPlayer owner = ownerConnection.player();
+			AdvancementHolder discovery = server.getAdvancements().get(CONTRACT_ADVANCEMENT_ID);
+			context.assertTrue(discovery != null, "A Suspicious Opportunity advancement must load by exact ID");
+			DisplayInfo display = discovery.value().display()
+					.orElseThrow(() -> context.assertionException("discovery advancement display missing"));
+			context.assertValueEqual(
+					translationKey(display.getTitle()),
+					"advancement.developers_hell.a_suspicious_opportunity.title",
+					"localized discovery title"
+			);
+			context.assertValueEqual(
+					translationKey(display.getDescription()),
+					"advancement.developers_hell.a_suspicious_opportunity.description",
+					"localized discovery description"
+			);
+			context.assertValueEqual(
+					discovery.value().rewards().recipes(),
+					List.of(CONTRACT_RECIPE_KEY),
+					"discovery rewards the exact Contract recipe"
+			);
+			context.assertTrue(
+					server.getRecipeManager().byKey(CONTRACT_RECIPE_KEY).isPresent(),
+					"Contract recipe must load by exact ID"
+			);
+
+			context.assertFalse(
+					owner.getAdvancements().getOrStartProgress(discovery).isDone(),
+					"discovery starts incomplete"
+			);
+			context.assertFalse(owner.getRecipeBook().contains(CONTRACT_RECIPE_KEY), "recipe starts hidden");
+			owner.getInventory().add(new ItemStack(Items.PAPER));
+			CriteriaTriggers.INVENTORY_CHANGED.trigger(owner, owner.getInventory(), new ItemStack(Items.PAPER));
+			context.assertFalse(
+					owner.getAdvancements().getOrStartProgress(discovery).isDone(),
+					"paper alone does not complete discovery"
+			);
+			context.assertFalse(owner.getRecipeBook().contains(CONTRACT_RECIPE_KEY), "paper alone keeps recipe hidden");
+			owner.getInventory().add(new ItemStack(Items.INK_SAC));
+			CriteriaTriggers.INVENTORY_CHANGED.trigger(owner, owner.getInventory(), new ItemStack(Items.INK_SAC));
+			context.assertTrue(
+					owner.getAdvancements().getOrStartProgress(discovery).isDone(),
+					"paper plus ink completes discovery"
+			);
+			context.assertTrue(owner.getRecipeBook().contains(CONTRACT_RECIPE_KEY), "discovery unlocks Contract recipe");
+
+			CraftingInput input = CraftingInput.of(
+					2,
+					1,
+					List.of(new ItemStack(Items.PAPER), new ItemStack(Items.INK_SAC))
+			);
+			RecipeHolder<CraftingRecipe> recipe = server.getRecipeManager()
+					.getRecipeFor(RecipeType.CRAFTING, input, level)
+					.orElseThrow(() -> context.assertionException("paper plus ink did not match a crafting recipe"));
+			context.assertValueEqual(recipe.id(), CONTRACT_RECIPE_KEY, "paper plus ink matches exact Contract recipe");
+			ItemStack crafted = recipe.value().assemble(input);
+			context.assertTrue(
+					crafted.getItem() == ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT,
+					"recipe produces the registered Contract"
+			);
+			context.assertValueEqual(crafted.getCount(), 1, "recipe produces one Contract");
+
+			List<Component> tooltip = new ArrayList<>();
+			ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.appendHoverText(
+					crafted,
+					Item.TooltipContext.of(level),
+					TooltipDisplay.DEFAULT,
+					tooltip::add,
+					TooltipFlag.NORMAL
+			);
+			context.assertValueEqual(
+					tooltip.stream().map(FoundationGameTests::translationKey).toList(),
+					CONTRACT_TOOLTIP_KEYS,
+					"Contract tooltip has exactly three localized instructions"
+			);
+
+			owner.setItemInHand(InteractionHand.MAIN_HAND, crafted);
+			owner.clearRecordedSystemMessages();
+			InteractionResult wrongUse = useBlock(level, owner, wrongTarget);
+			context.assertValueEqual(wrongUse, InteractionResult.SUCCESS_SERVER, "wrong target is handled on the server");
+			context.assertValueEqual(crafted.getCount(), 1, "wrong target consumes no Contract");
+			context.assertValueEqual(
+					owner.recordedSystemMessageKeys(),
+					List.of(WRONG_TARGET_KEY),
+					"wrong target sends one localized lectern direction"
+			);
+			context.assertFalse(
+					CampaignSavedData.get(level).player(DISCOVERY_OWNER_UUID).isPresent(),
+					"wrong target writes no campaign state"
+			);
+			context.assertValueEqual(
+					level.getEntities(ModEntities.PROFESSOR, professor -> professor.ownerUuid().equals(DISCOVERY_OWNER_UUID)).size(),
+					0,
+					"wrong target spawns no Professor"
+			);
+			level.setBlock(wrongTarget, Blocks.AIR.defaultBlockState(), 3);
+			ownerConnection.close();
+			ownerConnection = null;
+			context.succeed();
+		}
+		finally {
+			if (ownerConnection != null) {
+				ownerConnection.close();
+			}
+			level.setBlock(wrongTarget, Blocks.AIR.defaultBlockState(), 3);
+		}
 	}
 
 	@GameTest(maxTicks = 260, padding = 24)
@@ -74,7 +223,8 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 					new BlockPos(12, 2, 2)
 			);
 			ServerPlayer owner = ownerConnection.player();
-			ItemStack ownerContracts = new ItemStack(ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT, 2);
+			ItemStack ownerContracts = craftContract(level, context);
+			ownerContracts.setCount(2);
 			owner.setItemInHand(InteractionHand.MAIN_HAND, ownerContracts);
 
 			InteractionResult firstStart = useDesk(level, owner, desk);
@@ -234,8 +384,30 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 	}
 
 	private static InteractionResult useDesk(ServerLevel level, ServerPlayer player, BlockPos desk) {
-		BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(desk), Direction.UP, desk, false);
+		return useBlock(level, player, desk);
+	}
+
+	private static InteractionResult useBlock(ServerLevel level, ServerPlayer player, BlockPos target) {
+		BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(target), Direction.UP, target, false);
 		return UseBlockCallback.EVENT.invoker().interact(player, level, InteractionHand.MAIN_HAND, hit);
+	}
+
+	private static ItemStack craftContract(ServerLevel level, GameTestHelper context) {
+		CraftingInput input = CraftingInput.of(
+				2,
+				1,
+				List.of(new ItemStack(Items.PAPER), new ItemStack(Items.INK_SAC))
+		);
+		RecipeHolder<CraftingRecipe> recipe = level.getServer().getRecipeManager()
+				.getRecipeFor(RecipeType.CRAFTING, input, level)
+				.orElseThrow(() -> context.assertionException("paper plus ink did not match the Contract recipe"));
+		context.assertValueEqual(recipe.id(), CONTRACT_RECIPE_KEY, "valid tracer uses exact crafted Contract recipe");
+		ItemStack crafted = recipe.value().assemble(input);
+		context.assertTrue(
+				crafted.getItem() == ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT,
+				"valid tracer starts from crafted Contract output"
+		);
+		return crafted;
 	}
 
 	private static ConnectedPlayer createSurvivalPlayer(
@@ -249,7 +421,12 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 		PlayerList players = server.getPlayerList();
 		GameProfile profile = new GameProfile(uuid, name);
 		CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
-		ServerPlayer player = new ServerPlayer(server, level, cookie.gameProfile(), cookie.clientInformation());
+		RecordingServerPlayer player = new RecordingServerPlayer(
+				server,
+				level,
+				cookie.gameProfile(),
+				cookie.clientInformation()
+		);
 		Connection connection = new Connection(PacketFlow.SERVERBOUND);
 		EmbeddedChannel channel = new EmbeddedChannel(connection);
 		AtomicBoolean cleaned = new AtomicBoolean();
@@ -351,7 +528,36 @@ public final class FoundationGameTests implements CustomTestMethodInvoker {
 		return translated.getKey();
 	}
 
-	private record ConnectedPlayer(ServerPlayer player, Runnable cleanup) implements AutoCloseable {
+	private static final class RecordingServerPlayer extends ServerPlayer {
+		private final List<Component> recordedSystemMessages = new ArrayList<>();
+
+		private RecordingServerPlayer(
+				MinecraftServer server,
+				ServerLevel level,
+				GameProfile profile,
+				ClientInformation clientInformation
+		) {
+			super(server, level, profile, clientInformation);
+		}
+
+		@Override
+		public void sendSystemMessage(Component message) {
+			recordedSystemMessages.add(message);
+			super.sendSystemMessage(message);
+		}
+
+		private void clearRecordedSystemMessages() {
+			recordedSystemMessages.clear();
+		}
+
+		private List<String> recordedSystemMessageKeys() {
+			return recordedSystemMessages.stream()
+					.map(FoundationGameTests::translationKey)
+					.toList();
+		}
+	}
+
+	private record ConnectedPlayer(RecordingServerPlayer player, Runnable cleanup) implements AutoCloseable {
 		@Override
 		public void close() {
 			cleanup.run();
