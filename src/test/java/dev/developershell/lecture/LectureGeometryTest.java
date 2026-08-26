@@ -105,13 +105,13 @@ final class LectureGeometryTest {
 
 		LectureGeometry.Layout layout = LectureGeometry.layout(DESK, Direction.SOUTH);
 		BlockPos center = layout.combatCenterFloor();
-		assertEquals(center.relative(Direction.SOUTH, 4).relative(Direction.WEST, 4),
-				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.FRONT_LEFT).centerFloor());
 		assertEquals(center.relative(Direction.SOUTH, 4).relative(Direction.EAST, 4),
+				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.FRONT_LEFT).centerFloor());
+		assertEquals(center.relative(Direction.SOUTH, 4).relative(Direction.WEST, 4),
 				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.FRONT_RIGHT).centerFloor());
-		assertEquals(center.relative(Direction.NORTH, 4).relative(Direction.WEST, 4),
-				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.BACK_LEFT).centerFloor());
 		assertEquals(center.relative(Direction.NORTH, 4).relative(Direction.EAST, 4),
+				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.BACK_LEFT).centerFloor());
+		assertEquals(center.relative(Direction.NORTH, 4).relative(Direction.WEST, 4),
 				layout.attendanceRing(LectureGeometry.AttendanceQuadrant.BACK_RIGHT).centerFloor());
 		for (LectureGeometry.AttendanceQuadrant quadrant : LectureGeometry.AttendanceQuadrant.values()) {
 			assertEquals(2.5D, layout.attendanceRing(quadrant).radius(), quadrant + " exact radius");
