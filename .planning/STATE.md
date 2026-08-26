@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-08-26T18:16:14.044Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-08-26T18:45:11.110Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 679b1dc09fbe691971365bfb717b322166933155
+state_head: 97c6f62353b464187808cda27a3c682ef0e13499
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 9
+  completed_plans: 10
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 6 of 18
+Plan: 7 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -67,6 +67,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P15 | 8min | 1 tasks | 6 files |
 | Phase 02 P02 | 22 min | 2 tasks | 9 files |
 | Phase 02 P03 | 4min | 1 tasks | 8 files |
+| Phase 02 P04 | 25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Keep /devhell status read-only and reserve game-master-gated mutation children for their owning recovery plan.
 - [Phase 02]: Plan 02-03: Use vanilla map, paper, filled-map, and repeater runtime textures for the four stable Phase 2 item placeholders without copied art.
 - [Phase 02]: Plan 02-03: Mirror the Minecraft 26.2 Foundation Token item-definition/model chain and leave gameplay, registries, dependencies, and source-set boundaries unchanged.
+- [Phase 02]: Decode strict schema 1 first, then retain future or malformed documents as explicit read-only Dynamic values.
+- [Phase 02]: Compose flat MapCodec groups to preserve established schema-1 field names beyond the 16-field builder limit.
+- [Phase 02]: Record encounter materialization failure as ABORT so attempt counters never roll back.
+- [Phase 02]: Persist replacement and mark SavedData dirty before CampaignService dispatches any effect.
 
 ### Pending Todos
 
@@ -112,6 +117,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T18:16:13.926Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-08-26T18:45:10.988Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None

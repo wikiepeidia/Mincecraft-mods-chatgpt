@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 3
-total_count: 3
-last_updated: 2026-08-26T17:09:10.764Z
+fixed_count: 4
+total_count: 4
+last_updated: 2026-08-26T18:43:17.572Z
 ---
 
 # Broken Windows Ledger
@@ -18,6 +18,7 @@ last_updated: 2026-08-26T17:09:10.764Z
 | 1 | 02 | deviation | src/main/java/dev/developershell/item/CursedInternshipContractItem.java |  | Fabric pre-block callback required for Contract use on an empty lectern | fixed |  | 2026-08-26T17:08:39.981Z | 2026-08-26T17:09:05.619Z |
 | 2 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignSavedData.java |  | Removed stale invalid mapping import during compile gate | fixed |  | 2026-08-26T17:08:40.346Z | 2026-08-26T17:09:10.361Z |
 | 3 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignService.java |  | Replaced deprecated solid-floor predicate with upward-face sturdiness | fixed |  | 2026-08-26T17:08:40.728Z | 2026-08-26T17:09:10.764Z |
+| 4 | 02 | deviation | src/main/java/dev/developershell/campaign/CampaignSavedData.java | 155 | Preserve mismatched UUID map-key records while marking schema-1 data read-only. | fixed |  | 2026-08-26T18:42:52.733Z | 2026-08-26T18:43:17.572Z |
 
 ````json
 [
@@ -56,6 +57,18 @@ last_updated: 2026-08-26T17:09:10.764Z
     "reason": "",
     "recorded_at": "2026-08-26T17:08:40.728Z",
     "resolved_at": "2026-08-26T17:09:10.764Z"
+  },
+  {
+    "id": 4,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/main/java/dev/developershell/campaign/CampaignSavedData.java",
+    "line": 155,
+    "description": "Preserve mismatched UUID map-key records while marking schema-1 data read-only.",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-26T18:42:52.733Z",
+    "resolved_at": "2026-08-26T18:43:17.572Z"
   }
 ]
 ````
