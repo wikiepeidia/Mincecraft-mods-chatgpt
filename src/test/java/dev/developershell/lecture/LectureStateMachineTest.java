@@ -343,6 +343,109 @@ final class LectureStateMachineTest {
 		);
 	}
 
+	@Test
+	void entityDamageAdmissionRejectsClosedWrongOwnerStaleAndInvalidDamage() {
+		UUID stranger = uuidFor(800);
+		UUID staleEncounter = uuidFor(801);
+		assertEquals(
+				LectureStateMachine.DamageRejection.CLOSED_WINDOW,
+				LectureStateMachine.admitEntityDamage(
+						OWNER, ENCOUNTER, OWNER, ENCOUNTER, false, 120.0F, 5.0F
+				).rejection()
+		);
+		assertEquals(
+				LectureStateMachine.DamageRejection.WRONG_OWNER,
+				LectureStateMachine.admitEntityDamage(
+						OWNER, ENCOUNTER, stranger, ENCOUNTER, true, 120.0F, 5.0F
+				).rejection()
+		);
+		assertEquals(
+				LectureStateMachine.DamageRejection.STALE_ENCOUNTER,
+				LectureStateMachine.admitEntityDamage(
+						OWNER, ENCOUNTER, OWNER, staleEncounter, true, 120.0F, 5.0F
+				).rejection()
+		);
+		for (float invalid : List.of(0.0F, -1.0F, Float.NaN, Float.POSITIVE_INFINITY)) {
+			LectureStateMachine.DamageAdmission rejected = LectureStateMachine.admitEntityDamage(
+					OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, invalid
+			);
+			assertFalse(rejected.accepted(), () -> "invalid damage=" + invalid);
+			assertEquals(LectureStateMachine.DamageRejection.INVALID_AMOUNT, rejected.rejection(),
+					() -> "invalid damage=" + invalid);
+		}
+	}
+
+	@Test
+	void entityDamageAdmissionClampsAtEachActFloorWithoutSkipping() {
+		assertAdmission(120.0F, 999.0F, 40.0F, 80.0F, false);
+		assertAdmission(80.0F, 999.0F, 40.0F, 40.0F, false);
+		assertAdmission(40.0F, 999.0F, 40.0F, 0.0F, true);
+
+		LectureStateMachine.DamageAdmission partial = LectureStateMachine.admitEntityDamage(
+				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, 7.5F
+		);
+		assertTrue(partial.accepted());
+		assertEquals(7.5F, partial.acceptedDamage());
+		assertEquals(112.5F, partial.projectedHealth());
+		assertFalse(partial.closesWindow());
+		assertFalse(partial.victoryIntent());
+	}
+
+	@Test
+	void pureDamageRejectsWrongStaleAndExpiredInputsWithoutChangingState() {
+		LectureStateMachine.State windUp = LectureStateMachine.start(ENCOUNTER, OWNER, 3, 0L, RULES, false).state();
+		LectureStateMachine.State vulnerable = settle(LectureStateMachine.step(
+				windUp,
+				new LectureStateMachine.Input.Tick(100L, laneCenter(windUp.safeLane()), 20)
+		)).state();
+		List<LectureStateMachine.Input.Damage> rejected = List.of(
+				new LectureStateMachine.Input.Damage(100L, uuidFor(810), ENCOUNTER, 5),
+				new LectureStateMachine.Input.Damage(100L, OWNER, uuidFor(811), 5),
+				new LectureStateMachine.Input.Damage(180L, OWNER, ENCOUNTER, 5),
+				new LectureStateMachine.Input.Damage(100L, OWNER, ENCOUNTER, 0)
+		);
+		for (LectureStateMachine.Input.Damage input : rejected) {
+			LectureStateMachine.Output output = LectureStateMachine.step(vulnerable, input);
+			assertEquals(vulnerable, output.state(), () -> "rejected input=" + input);
+			assertInstanceOf(LectureStateMachine.Intent.DamageRejected.class, output.intents().getFirst(),
+					() -> "rejected input=" + input);
+		}
+	}
+
+	@Test
+	void finalMatchingThresholdEmitsVictoryExactlyOnce() {
+		LectureStateMachine.State attendance = LectureStateMachine.testingState(
+				ENCOUNTER, OWNER, 5, LectureAct.ATTENDANCE_CHECK, 0, 0, 0, 40, 0L, RULES, false
+		);
+		LectureStateMachine.Output present = LectureStateMachine.step(
+				attendance,
+				new LectureStateMachine.Input.Tick(
+						120L,
+						LectureGeometry.attendanceCenter(attendance.attendanceQuadrant()),
+						20
+				)
+		);
+		LectureStateMachine.State vulnerable = settle(present).state();
+		LectureStateMachine.Output victory = LectureStateMachine.step(
+				vulnerable,
+				new LectureStateMachine.Input.Damage(120L, OWNER, ENCOUNTER, 999)
+		);
+		assertEquals(LectureStateMachine.Stage.COMPLETE, victory.state().stage());
+		assertEquals(0, victory.state().bossHealth());
+		assertEquals(1L, victory.intents().stream().filter(LectureStateMachine.Intent.Victory.class::isInstance).count());
+
+		LectureStateMachine.Output replay = LectureStateMachine.step(
+				victory.state(),
+				new LectureStateMachine.Input.Damage(120L, OWNER, ENCOUNTER, 999)
+		);
+		assertEquals(victory.state(), replay.state());
+		assertTrue(replay.intents().stream().noneMatch(LectureStateMachine.Intent.Victory.class::isInstance));
+		assertEquals(
+				LectureStateMachine.DamageRejection.COMPLETE,
+				onlyIntent(replay, LectureStateMachine.Intent.DamageRejected.class).reason()
+		);
+	}
+
 	private static LectureStateMachine.State startAct(
 			UUID encounter,
 			LectureAct act,
@@ -389,6 +492,23 @@ final class LectureStateMachineTest {
 
 	private static UUID uuidFor(int sample) {
 		return new UUID(ENCOUNTER.getMostSignificantBits() + sample, ENCOUNTER.getLeastSignificantBits() - sample);
+	}
+
+	private static void assertAdmission(
+			float health,
+			float requested,
+			float accepted,
+			float projected,
+			boolean victory
+	) {
+		LectureStateMachine.DamageAdmission admission = LectureStateMachine.admitEntityDamage(
+				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, health, requested
+		);
+		assertTrue(admission.accepted(), () -> "health=" + health + ", requested=" + requested);
+		assertEquals(accepted, admission.acceptedDamage(), () -> "health=" + health + ", requested=" + requested);
+		assertEquals(projected, admission.projectedHealth(), () -> "health=" + health + ", requested=" + requested);
+		assertTrue(admission.closesWindow(), () -> "health=" + health + ", requested=" + requested);
+		assertEquals(victory, admission.victoryIntent(), () -> "health=" + health + ", requested=" + requested);
 	}
 
 	private static <T extends LectureStateMachine.Intent> T onlyIntent(
