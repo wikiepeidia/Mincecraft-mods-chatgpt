@@ -48,12 +48,45 @@ public final class LectureStateMachine {
 	}
 
 	public enum DamageRejection {
+		NONE,
 		CLOSED_WINDOW,
 		WRONG_OWNER,
 		STALE_ENCOUNTER,
 		INVALID_AMOUNT,
 		AT_THRESHOLD,
 		COMPLETE
+	}
+
+	/** Pure projection used by the Minecraft entity before it delegates to vanilla damage. */
+	public record DamageAdmission(
+			boolean accepted,
+			float acceptedDamage,
+			float projectedHealth,
+			float thresholdHealth,
+			boolean closesWindow,
+			boolean victoryIntent,
+			DamageRejection rejection
+	) {
+		public DamageAdmission {
+			Objects.requireNonNull(rejection, "rejection");
+			if (!Float.isFinite(acceptedDamage)
+					|| !Float.isFinite(projectedHealth)
+					|| !Float.isFinite(thresholdHealth)
+					|| acceptedDamage < 0.0F
+					|| projectedHealth < 0.0F
+					|| thresholdHealth < 0.0F) {
+				throw new IllegalArgumentException("Damage admission values must be finite and non-negative");
+			}
+			if (accepted != (rejection == DamageRejection.NONE)) {
+				throw new IllegalArgumentException("Accepted admission must use the NONE rejection identity");
+			}
+			if (accepted && (acceptedDamage <= 0.0F || projectedHealth < thresholdHealth)) {
+				throw new IllegalArgumentException("Accepted entity damage cannot cross the act floor");
+			}
+			if (victoryIntent && (!closesWindow || thresholdHealth != 0.0F)) {
+				throw new IllegalArgumentException("Victory is possible only when the final window closes");
+			}
+		}
 	}
 
 	public record State(
@@ -287,6 +320,54 @@ public final class LectureStateMachine {
 					: finishRecovery(state, tick.gameTick());
 			case COMPLETE -> new Output(state, List.of());
 		};
+	}
+
+	/**
+	 * Admits a vanilla damage request against the active server-owned window.
+	 * Campaign persistence validation remains an additional required conjunct at the entity seam.
+	 */
+	public static DamageAdmission admitEntityDamage(
+			UUID expectedOwnerUuid,
+			UUID expectedEncounterUuid,
+			UUID attackerUuid,
+			UUID currentEncounterUuid,
+			boolean windowOpen,
+			float currentHealth,
+			float requestedDamage
+	) {
+		if (!windowOpen) {
+			return rejectedEntityDamage(DamageRejection.CLOSED_WINDOW, currentHealth);
+		}
+		if (expectedOwnerUuid == null || !expectedOwnerUuid.equals(attackerUuid)) {
+			return rejectedEntityDamage(DamageRejection.WRONG_OWNER, currentHealth);
+		}
+		if (expectedEncounterUuid == null || !expectedEncounterUuid.equals(currentEncounterUuid)) {
+			return rejectedEntityDamage(DamageRejection.STALE_ENCOUNTER, currentHealth);
+		}
+		if (!Float.isFinite(requestedDamage) || requestedDamage <= 0.0F) {
+			return rejectedEntityDamage(DamageRejection.INVALID_AMOUNT, currentHealth);
+		}
+		if (!Float.isFinite(currentHealth) || currentHealth <= 0.0F) {
+			return rejectedEntityDamage(DamageRejection.COMPLETE, 0.0F);
+		}
+
+		float threshold = entityHealthThreshold(currentHealth);
+		float available = Math.max(0.0F, currentHealth - threshold);
+		if (available <= 0.0F) {
+			return rejectedEntityDamage(DamageRejection.AT_THRESHOLD, currentHealth);
+		}
+		float acceptedDamage = Math.min(requestedDamage, available);
+		float projectedHealth = Math.max(threshold, currentHealth - acceptedDamage);
+		boolean closesWindow = projectedHealth <= threshold;
+		return new DamageAdmission(
+				true,
+				acceptedDamage,
+				projectedHealth,
+				threshold,
+				closesWindow,
+				closesWindow && threshold == 0.0F,
+				DamageRejection.NONE
+		);
 	}
 
 	static State testingState(
@@ -678,6 +759,29 @@ public final class LectureStateMachine {
 			throw new IllegalArgumentException("Lecture deadlines require non-negative time and positive duration");
 		}
 		return Math.addExact(startTick, durationTicks);
+	}
+
+	private static float entityHealthThreshold(float currentHealth) {
+		if (currentHealth > LectureAct.SLIDE_DECK.healthThreshold()) {
+			return LectureAct.SLIDE_DECK.healthThreshold();
+		}
+		if (currentHealth > LectureAct.SURPRISE_QUIZ.healthThreshold()) {
+			return LectureAct.SURPRISE_QUIZ.healthThreshold();
+		}
+		return LectureAct.ATTENDANCE_CHECK.healthThreshold();
+	}
+
+	private static DamageAdmission rejectedEntityDamage(DamageRejection rejection, float currentHealth) {
+		float safeHealth = Float.isFinite(currentHealth) ? Math.max(0.0F, currentHealth) : 0.0F;
+		return new DamageAdmission(
+				false,
+				0.0F,
+				safeHealth,
+				0.0F,
+				false,
+				false,
+				rejection
+		);
 	}
 
 	private LectureStateMachine() {

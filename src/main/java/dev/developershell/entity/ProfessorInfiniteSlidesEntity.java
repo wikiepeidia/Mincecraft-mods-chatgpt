@@ -1,6 +1,9 @@
 package dev.developershell.entity;
 
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.lecture.LectureEncounterManager;
+import dev.developershell.lecture.LectureRules;
+import dev.developershell.lecture.LectureStateMachine;
 import dev.developershell.registry.ModEntities;
 import java.util.Objects;
 import java.util.UUID;
@@ -9,6 +12,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.illager.Vindicator;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
@@ -39,6 +43,13 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 	public void bind(UUID ownerUuid, UUID encounterUuid) {
 		this.ownerUuid = Objects.requireNonNull(ownerUuid, "ownerUuid");
 		this.encounterUuid = Objects.requireNonNull(encounterUuid, "encounterUuid");
+		var maxHealth = getAttribute(Attributes.MAX_HEALTH);
+		if (maxHealth != null) {
+			maxHealth.setBaseValue(LectureRules.standard().bossMaxHealth());
+		}
+		setHealth(LectureRules.standard().bossMaxHealth());
+		vulnerabilityOpen = false;
+		victoryCommitted = false;
 		setNoAi(true);
 	}
 
@@ -66,14 +77,13 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 
 	@Override
 	public void setVulnerabilityOpen(boolean vulnerabilityOpen) {
-		this.vulnerabilityOpen = vulnerabilityOpen;
+		this.vulnerabilityOpen = vulnerabilityOpen && !victoryCommitted && getHealth() > 0.0F;
 	}
 
 	@Override
 	public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
 		Entity attacker = source.getEntity();
-		if (!vulnerabilityOpen
-				|| attacker == null
+		if (attacker == null
 				|| !CampaignService.canDamageProfessor(
 						level,
 						ownerUuid,
@@ -82,7 +92,33 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 				)) {
 			return false;
 		}
-		return super.hurtServer(level, source, amount);
+
+		boolean managerWindowOpen = encounterUuid != null
+				&& LectureEncounterManager.isVulnerabilityOpen(encounterUuid);
+		LectureStateMachine.DamageAdmission admission = LectureStateMachine.admitEntityDamage(
+				ownerUuid,
+				encounterUuid,
+				attacker.getUUID(),
+				managerWindowOpen ? encounterUuid : null,
+				vulnerabilityOpen && managerWindowOpen,
+				getHealth(),
+				amount
+		);
+		if (!admission.accepted()) {
+			return false;
+		}
+
+		boolean damaged = super.hurtServer(level, source, admission.acceptedDamage());
+		if (!damaged) {
+			return false;
+		}
+		if (!isRemoved() && getHealth() < admission.thresholdHealth()) {
+			setHealth(admission.thresholdHealth());
+		}
+		if (isRemoved() || getHealth() <= admission.thresholdHealth()) {
+			setVulnerabilityOpen(false);
+		}
+		return true;
 	}
 
 	@Override
