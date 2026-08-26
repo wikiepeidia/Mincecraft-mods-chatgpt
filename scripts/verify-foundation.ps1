@@ -1463,25 +1463,51 @@ function Invoke-WithFirewallIsolation {
         [Parameter(Mandatory)] $Jdk,
         [Parameter(Mandatory)][scriptblock] $Operation,
         [string] $ControlPath,
-        [string] $ExpectedSessionId
+        [string] $ExpectedSessionId,
+        [System.Collections.IDictionary] $FirewallActions
     )
     $script:LastIsolationRecord = $null
     $hasControlPath = -not [string]::IsNullOrWhiteSpace($ControlPath)
     $hasSessionId = -not [string]::IsNullOrWhiteSpace($ExpectedSessionId)
     if ($hasControlPath -ne $hasSessionId) { Throw-Failure 'Firewall isolation requires both interactive control path and expected session ID, or neither' }
     $controlEnabled = $hasControlPath -and $hasSessionId
+    $requiredFirewallActions = @('AssertAvailable','RuleExists','GroupCount','NetworkProbe','CreateRule','GroupRules','ApplicationFilters','RemoveRule','QueryName','QueryGroup')
+    if (-not $FirewallActions) {
+        $FirewallActions = [ordered]@{
+            AssertAvailable = { Assert-WindowsFirewallControl }
+            RuleExists = { param([string] $Name) Test-ExactFirewallRuleExists -Name $Name }
+            GroupCount = { param([string] $Group,[string] $Store) Get-ExactFirewallGroupCount -Group $Group -PolicyStore $Store }
+            NetworkProbe = { param($ExactJdk,[bool] $ExpectReachable) Invoke-ExactJavaNetworkProbe -Jdk $ExactJdk -ExpectReachable $ExpectReachable }
+            CreateRule = {
+                param([string] $Name,[string] $Group,[string] $Program)
+                New-NetFirewallRule -Name $Name -DisplayName $Name -Group $Group -Direction Outbound -Action Block -Program $Program -Profile Any -Enabled True -PolicyStore PersistentStore -ErrorAction Stop
+            }
+            GroupRules = { param([string] $Group) @(Get-NetFirewallRule -Group $Group -PolicyStore ActiveStore -ErrorAction Stop) }
+            ApplicationFilters = { param($Rule) @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $Rule -ErrorAction Stop) }
+            RemoveRule = { param([string] $Name) Remove-NetFirewallRule -Name $Name -PolicyStore PersistentStore -ErrorAction Stop }
+            QueryName = { param([string] $Name,[string] $Store) @(Get-ExactFirewallRulesStrict -Name $Name -PolicyStore $Store) }
+            QueryGroup = { param([string] $Group,[string] $Store) @(Get-ExactFirewallRulesStrict -Group $Group -PolicyStore $Store) }
+        }
+    }
+    $providedNames = @($FirewallActions.Keys | ForEach-Object { [string]$_ })
+    if ($providedNames.Count -ne $requiredFirewallActions.Count -or @($providedNames | Where-Object { $_ -notin $requiredFirewallActions }).Count -ne 0) {
+        Throw-Failure 'Firewall isolation provider must expose exactly the bounded action surface'
+    }
+    foreach ($actionName in $requiredFirewallActions) {
+        if ($FirewallActions[$actionName] -isnot [scriptblock]) { Throw-Failure "Firewall isolation provider action is not executable: $actionName" }
+    }
     if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
-    Assert-WindowsFirewallControl
+    [void](& $FirewallActions['AssertAvailable'])
     $suffix = [guid]::NewGuid().ToString('N')
     $groupId = "DevelopersHell.Foundation.$suffix"
     $javaRuleId = "DevelopersHell.Foundation.Java.$suffix"
     $javawRuleId = "DevelopersHell.Foundation.Javaw.$suffix"
     if ($javaRuleId -eq $javawRuleId) { Throw-Failure 'Firewall rule IDs collided' }
-    if (Test-ExactFirewallRuleExists -Name $javaRuleId) { Throw-Failure 'Fresh Java firewall rule ID already exists' }
-    if (Test-ExactFirewallRuleExists -Name $javawRuleId) { Throw-Failure 'Fresh Javaw firewall rule ID already exists' }
-    if ((Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore) -ne 0 -or (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore) -ne 0) { Throw-Failure 'Fresh firewall group already contains rules' }
+    if (& $FirewallActions['RuleExists'] $javaRuleId) { Throw-Failure 'Fresh Java firewall rule ID already exists' }
+    if (& $FirewallActions['RuleExists'] $javawRuleId) { Throw-Failure 'Fresh Javaw firewall rule ID already exists' }
+    if ((& $FirewallActions['GroupCount'] $groupId 'ActiveStore') -ne 0 -or (& $FirewallActions['GroupCount'] $groupId 'PersistentStore') -ne 0) { Throw-Failure 'Fresh firewall group already contains rules' }
     if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
-    $probeOnline = Invoke-ExactJavaNetworkProbe -Jdk $Jdk -ExpectReachable $true
+    $probeOnline = & $FirewallActions['NetworkProbe'] $Jdk $true
     if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
     $operationResult = $null
     $primaryError = $null
@@ -1502,24 +1528,24 @@ function Invoke-WithFirewallIsolation {
     }
     try {
         if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
-        [void](New-NetFirewallRule -Name $javaRuleId -DisplayName $javaRuleId -Group $groupId -Direction Outbound -Action Block -Program $Jdk.Java -Profile Any -Enabled True -PolicyStore PersistentStore -ErrorAction Stop)
+        [void](& $FirewallActions['CreateRule'] $javaRuleId $groupId $Jdk.Java)
         if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
-        [void](New-NetFirewallRule -Name $javawRuleId -DisplayName $javawRuleId -Group $groupId -Direction Outbound -Action Block -Program $Jdk.Javaw -Profile Any -Enabled True -PolicyStore PersistentStore -ErrorAction Stop)
+        [void](& $FirewallActions['CreateRule'] $javawRuleId $groupId $Jdk.Javaw)
         $activationDeadline = [DateTime]::UtcNow.AddSeconds(10)
         while ([DateTime]::UtcNow -lt $activationDeadline -and
-            ((Get-ExactFirewallGroupCount -Group $groupId -PolicyStore ActiveStore) -ne 2 -or (Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore) -ne 2)) {
+            ((& $FirewallActions['GroupCount'] $groupId 'ActiveStore') -ne 2 -or (& $FirewallActions['GroupCount'] $groupId 'PersistentStore') -ne 2)) {
             if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
             Start-Sleep -Milliseconds 250
         }
         if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
-        $members = @(Get-NetFirewallRule -Group $groupId -PolicyStore ActiveStore -ErrorAction Stop)
-        $persistentMembers = Get-ExactFirewallGroupCount -Group $groupId -PolicyStore PersistentStore
+        $members = @(& $FirewallActions['GroupRules'] $groupId)
+        $persistentMembers = & $FirewallActions['GroupCount'] $groupId 'PersistentStore'
         if ($members.Count -ne 2 -or $persistentMembers -ne 2) { Throw-Failure "Firewall group membership is active=$($members.Count), persistent=$persistentMembers; expected exactly 2 in both stores" }
         $memberNames = @($members | ForEach-Object Name)
         if ($memberNames -notcontains $javaRuleId -or $memberNames -notcontains $javawRuleId) { Throw-Failure 'Firewall group does not contain both exact rule IDs' }
         foreach ($rule in $members) {
             if ($rule.Direction -ne 'Outbound' -or $rule.Action -ne 'Block' -or $rule.Enabled -ne 'True') { Throw-Failure "Firewall rule has unexpected state: $($rule.Name)" }
-            $applications = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
+            $applications = @(& $FirewallActions['ApplicationFilters'] $rule)
             if ($applications.Count -ne 1) { Throw-Failure "Firewall rule has an ambiguous application filter: $($rule.Name)" }
             $application = $applications[0]
             $expectedProgram = if ($rule.Name -eq $javaRuleId) { $Jdk.Java } else { $Jdk.Javaw }
@@ -1528,7 +1554,7 @@ function Invoke-WithFirewallIsolation {
             }
         }
         $record.member_count_active = 2
-        $record.probe_isolated = Invoke-ExactJavaNetworkProbe -Jdk $Jdk -ExpectReachable $false
+        $record.probe_isolated = & $FirewallActions['NetworkProbe'] $Jdk $false
         if ($controlEnabled) { Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId }
         $script:LastIsolationRecord = $record
         $operationResult = & $Operation ([pscustomobject]$record)
@@ -1538,7 +1564,8 @@ function Invoke-WithFirewallIsolation {
     }
     finally {
         try {
-            $cleanupResult = Invoke-ExactFirewallIsolationCleanup -JavaRuleId $javaRuleId -JavawRuleId $javawRuleId -GroupId $groupId -Record $record
+            $cleanupResult = Invoke-ExactFirewallIsolationCleanup -JavaRuleId $javaRuleId -JavawRuleId $javawRuleId -GroupId $groupId -Record $record `
+                -RemoveRuleAction $FirewallActions['RemoveRule'] -QueryNameAction $FirewallActions['QueryName'] -QueryGroupAction $FirewallActions['QueryGroup']
             $script:LastIsolationRecord = $record
             if (-not $cleanupResult.Success) { throw [InvalidOperationException]::new($cleanupResult.Message) }
         }
@@ -2295,6 +2322,81 @@ function Wait-ForHumanClientExit {
     }
 }
 
+function Invoke-IsolatedInteractiveUatTransition {
+    param(
+        [Parameter(Mandatory)] $Jdk,
+        [Parameter(Mandatory)][string] $ControlPath,
+        [Parameter(Mandatory)][string] $ExpectedSessionId,
+        [Parameter(Mandatory)][string] $Profile,
+        [Parameter(Mandatory)][string] $StatusPath,
+        [Parameter(Mandatory)][string] $SupervisorLogPath,
+        [Parameter(Mandatory)] $Distribution,
+        [Parameter(Mandatory)] $OnlineClient,
+        [System.Collections.IDictionary] $FirewallActions,
+        [scriptblock] $StartRuntimeAction,
+        [scriptblock] $WaitForClientReadyAction,
+        [scriptblock] $WaitForHumanExitAction,
+        [scriptblock] $StopRuntimeAfterFailureAction,
+        [scriptblock] $WriteStatusAction,
+        [scriptblock] $TransitionStatusAction
+    )
+    if (-not $StartRuntimeAction) { $StartRuntimeAction = { param($ExactJdk) Start-GradleRuntime -TaskName runProductionClient -Jdk $ExactJdk -Offline } }
+    if (-not $WaitForClientReadyAction) {
+        $WaitForClientReadyAction = { param($Runtime,$ExactJdk,$LogPath,$BoundControlPath,$BoundSessionId) Wait-ForClientReady -Runtime $Runtime -Jdk $ExactJdk -LogPath $LogPath -ControlPath $BoundControlPath -ExpectedSessionId $BoundSessionId }
+    }
+    if (-not $WaitForHumanExitAction) {
+        $WaitForHumanExitAction = { param($Runtime,$Client,$BoundControlPath,$BoundSessionId) Wait-ForHumanClientExit -Runtime $Runtime -ClientInfo $Client -ControlPath $BoundControlPath -ExpectedSessionId $BoundSessionId }
+    }
+    if (-not $StopRuntimeAfterFailureAction) { $StopRuntimeAfterFailureAction = { param($Runtime,$Client) Stop-RuntimeAfterFailure -Runtime $Runtime -ClientInfo $Client } }
+    if (-not $WriteStatusAction) { $WriteStatusAction = { param($Path,$Value) Write-JsonAtomic -LiteralPath $Path -Value $Value } }
+    if (-not $TransitionStatusAction) { $TransitionStatusAction = { param($TerminalStatus) return $null } }
+
+    $logPath = Join-Path $Profile 'logs\latest.log'
+    $holder = [pscustomobject]@{ Runtime=$null; Client=$null; ReadyAt=$null }
+    $operation = {
+        param($Isolation)
+        Assert-InteractiveUatControlAllowsContinue -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId
+        Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+        $holder.Runtime = & $StartRuntimeAction $Jdk
+        try {
+            $holder.Client = & $WaitForClientReadyAction $holder.Runtime $Jdk $logPath $ControlPath $ExpectedSessionId
+            if ($holder.Client.Pid -eq $OnlineClient.Pid -or $holder.Client.Pid -eq $PID -or $holder.Client.Pid -eq $holder.Runtime.Process.Id) {
+                Throw-Failure 'Isolated client PID is not a new distinct client process'
+            }
+            $holder.ReadyAt = [DateTime]::UtcNow.ToString('o')
+            [void](& $WriteStatusAction $StatusPath ([ordered]@{
+                state='ISOLATED_READY'; session_id=$ExpectedSessionId; profile_id='production-client'; distribution_sha256=$Distribution.Sha256;
+                supervisor_pid=$PID; client_pid=$holder.Client.Pid; menu_ready=$true; firewall_group_id=$Isolation.group_id;
+                firewall_membership=$Isolation.member_count_active; updated_utc=$holder.ReadyAt
+            }))
+            [IO.File]::AppendAllText($SupervisorLogPath,"state=ISOLATED_READY`r`n",[Text.UTF8Encoding]::new($false))
+            $result = & $WaitForHumanExitAction $holder.Runtime $holder.Client $ControlPath $ExpectedSessionId
+            [IO.File]::AppendAllText($SupervisorLogPath,"state=ISOLATED_EXIT_NORMAL`r`n",[Text.UTF8Encoding]::new($false))
+            return [pscustomobject]@{ Exit=$result.Exit; ExitCode=$result.ExitCode; Pid=$holder.Client.Pid; ReadyAt=$holder.ReadyAt }
+        }
+        catch {
+            if ($holder.Runtime) { [void](& $StopRuntimeAfterFailureAction $holder.Runtime $holder.Client) }
+            throw
+        }
+    }.GetNewClosure()
+
+    try {
+        $envelope = Invoke-WithFirewallIsolation -Jdk $Jdk -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId -FirewallActions $FirewallActions -Operation $operation
+        [void](& $TransitionStatusAction 'COMPLETE')
+        return [pscustomobject]@{
+            TerminalStatus='COMPLETE'; Failure=$null; Isolation=$envelope.Isolation; Operation=$envelope.Operation;
+            Runtime=$holder.Runtime; Client=$holder.Client
+        }
+    }
+    catch {
+        [void](& $TransitionStatusAction 'FAILED')
+        return [pscustomobject]@{
+            TerminalStatus='FAILED'; Failure=$_; Isolation=$script:LastIsolationRecord; Operation=$null;
+            Runtime=$holder.Runtime; Client=$holder.Client
+        }
+    }
+}
+
 function Invoke-ClientPreflightMode {
     param(
         [Parameter(Mandatory)] $Toolchain,
@@ -2451,39 +2553,12 @@ function Invoke-SuperviseInteractiveUatMode {
         Assert-Equal (Get-Sha256 $runtimeCopy) $distribution.Sha256 'Post-online-UAT runtime-copy SHA-256'
         Write-JsonAtomic -LiteralPath $statusPath -Value ([ordered]@{ state='ISOLATION_STARTING'; session_id=$sessionId; supervisor_pid=$PID; updated_utc=[DateTime]::UtcNow.ToString('o') })
         Assert-InteractiveUatControlAllowsContinue -ControlPath $controlPath -ExpectedSessionId $sessionId
-        $isolationEnvelope = Invoke-WithFirewallIsolation -Jdk $Jdk -ControlPath $controlPath -ExpectedSessionId $sessionId -Operation {
-            param($Isolation)
-            Assert-InteractiveUatControlAllowsContinue -ControlPath $controlPath -ExpectedSessionId $sessionId
-            Remove-Item -LiteralPath (Join-Path $profile 'logs\latest.log') -Force -ErrorAction SilentlyContinue
-            $script:IsolatedRuntimeForCleanup = Start-GradleRuntime -TaskName runProductionClient -Jdk $Jdk -Offline
-            $script:IsolatedClientForCleanup = $null
-            try {
-                $script:IsolatedClientForCleanup = Wait-ForClientReady -Runtime $script:IsolatedRuntimeForCleanup -Jdk $Jdk -LogPath (Join-Path $profile 'logs\latest.log') -ControlPath $controlPath -ExpectedSessionId $sessionId
-                if ($script:IsolatedClientForCleanup.Pid -eq $onlineClient.Pid -or $script:IsolatedClientForCleanup.Pid -eq $PID -or $script:IsolatedClientForCleanup.Pid -eq $script:IsolatedRuntimeForCleanup.Process.Id) {
-                    Throw-Failure 'Isolated client PID is not a new distinct client process'
-                }
-                $script:IsolatedReadyAt = [DateTime]::UtcNow.ToString('o')
-                Write-JsonAtomic -LiteralPath $statusPath -Value ([ordered]@{
-                    state='ISOLATED_READY'; session_id=$sessionId; profile_id='production-client'; distribution_sha256=$distribution.Sha256;
-                    supervisor_pid=$PID; client_pid=$script:IsolatedClientForCleanup.Pid; menu_ready=$true; firewall_group_id=$Isolation.group_id;
-                    firewall_membership=$Isolation.member_count_active; updated_utc=$script:IsolatedReadyAt
-                })
-                [IO.File]::AppendAllText($supervisorLogPath, "state=ISOLATED_READY`r`n", [Text.UTF8Encoding]::new($false))
-                $result = Wait-ForHumanClientExit -Runtime $script:IsolatedRuntimeForCleanup -ClientInfo $script:IsolatedClientForCleanup -ControlPath $controlPath -ExpectedSessionId $sessionId
-                [IO.File]::AppendAllText($supervisorLogPath, "state=ISOLATED_EXIT_NORMAL`r`n", [Text.UTF8Encoding]::new($false))
-                return [pscustomobject]@{ Exit=$result.Exit; ExitCode=$result.ExitCode; Pid=$script:IsolatedClientForCleanup.Pid; ReadyAt=$script:IsolatedReadyAt }
-            }
-            catch {
-                if ($script:IsolatedRuntimeForCleanup) { Stop-RuntimeAfterFailure -Runtime $script:IsolatedRuntimeForCleanup -ClientInfo $script:IsolatedClientForCleanup }
-                throw
-            }
-            finally {
-                Remove-Variable -Scope Script -Name IsolatedRuntimeForCleanup -ErrorAction SilentlyContinue
-                Remove-Variable -Scope Script -Name IsolatedClientForCleanup -ErrorAction SilentlyContinue
-            }
-        }
-        $isolationRecord = $isolationEnvelope.Isolation
-        $isolatedExit = $isolationEnvelope.Operation
+        $isolatedTransition = Invoke-IsolatedInteractiveUatTransition -Jdk $Jdk -ControlPath $controlPath -ExpectedSessionId $sessionId `
+            -Profile $profile -StatusPath $statusPath -SupervisorLogPath $supervisorLogPath -Distribution $distribution -OnlineClient $onlineClient
+        $isolationRecord = $isolatedTransition.Isolation
+        $isolatedRuntime = $isolatedTransition.Runtime
+        if ($isolatedTransition.TerminalStatus -cne 'COMPLETE') { throw $isolatedTransition.Failure }
+        $isolatedExit = $isolatedTransition.Operation
         $isolatedClient = [pscustomobject]@{ Pid = $isolatedExit.Pid }
         $isolatedReadyAt = $isolatedExit.ReadyAt
         Assert-Equal (Get-Sha256 $distribution.Path) $distribution.Sha256 'Post-isolated-UAT distribution SHA-256'
@@ -2909,57 +2984,107 @@ function Invoke-ClientDiscoverySelfCheck {
 function Invoke-ReadinessCancellationSelfCheck {
     $root = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-readiness-cancel-' + [guid]::NewGuid().ToString('N'))
     $controlPath = Join-Path $root 'control.json'
-    $logPath = Join-Path $root 'synthetic.log'
+    $profile = Join-Path $root 'profile'
+    $logPath = Join-Path $profile 'logs\latest.log'
+    $statusPath = Join-Path $root 'status.json'
+    $supervisorLogPath = Join-Path $root 'supervisor.log'
     $sessionId = [guid]::NewGuid().ToString('N')
     $hostProcess = $null
     [void](New-Item -ItemType Directory -Path $root)
     try {
         Assert-NoReparsePoint -LiteralPath $root
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $logPath))
         Write-JsonAtomic -LiteralPath $controlPath -Value ([ordered]@{ action='WAIT'; session_id=$sessionId })
-        [IO.File]::WriteAllText($logPath, "SYNTHETIC_READY`r`n", [Text.UTF8Encoding]::new($false))
         $hostProcess = [Diagnostics.Process]::GetProcessById($PID)
-        $runtime = [pscustomobject]@{ Process=$hostProcess; TaskName='Synthetic readiness' }
-        $pollState = [pscustomobject]@{ Count = 0 }
-        $cancelAtAdditionalCheck = {
-            $pollState.Count = [int]$pollState.Count + 1
-            Write-JsonAtomic -LiteralPath $controlPath -Value ([ordered]@{ action='CANCEL'; session_id=$sessionId })
-            return $false
+        $runtime = [pscustomobject]@{ Process=$hostProcess; TaskName='Synthetic readiness'; LifecycleState='RUNNING'; CancelPollCount=0 }
+        $processCalls = [System.Collections.Generic.List[string]]::new()
+        $startRuntime = {
+            param($ExactJdk)
+            [void]$processCalls.Add('start')
+            [IO.File]::WriteAllText($logPath,"SYNTHETIC_READY`r`n",[Text.UTF8Encoding]::new($false))
+            return $runtime
         }.GetNewClosure()
+        $waitForReady = {
+            param($OwnedRuntime,$ExactJdk,$BoundLogPath,$BoundControlPath,$BoundSessionId)
+            [void]$processCalls.Add('readiness')
+            if ($OwnedRuntime -ne $runtime -or $BoundControlPath -cne $controlPath -or $BoundSessionId -cne $sessionId) { Throw-Failure 'Synthetic supervisor transition lost its bound runtime/control identity' }
+            $cancelAtPoll = { $OwnedRuntime.CancelPollCount++; Write-JsonAtomic -LiteralPath $BoundControlPath -Value ([ordered]@{ action='CANCEL'; session_id=$BoundSessionId }); return $false }.GetNewClosure()
+            [void](Wait-ForRuntimeLog -Runtime $OwnedRuntime -LogPath $BoundLogPath -RequiredPatterns @('SYNTHETIC_READY') -TimeoutSeconds 5 -AdditionalCheck $cancelAtPoll -ControlPath $BoundControlPath -ExpectedSessionId $BoundSessionId)
+            Throw-Failure 'Synthetic supervisor readiness unexpectedly returned after CANCEL'
+        }.GetNewClosure()
+        $waitForExit = { param($OwnedRuntime,$Client,$BoundControlPath,$BoundSessionId) Throw-Failure 'Synthetic supervisor reached human wait after readiness cancellation' }
+        $stopRuntime = {
+            param($OwnedRuntime,$Client)
+            [void]$processCalls.Add('stop')
+            if ($OwnedRuntime -ne $runtime -or $OwnedRuntime.LifecycleState -cne 'RUNNING') { Throw-Failure 'Synthetic supervisor teardown lost the isolated runtime identity' }
+            $OwnedRuntime.LifecycleState = 'CLEANED'
+        }.GetNewClosure()
+        $statusCalls = [System.Collections.Generic.List[string]]::new()
+        $writeStatus = { param($Path,$Value) [void]$statusCalls.Add('write|' + [string]$Value.state) }.GetNewClosure()
+        $recordTerminalStatus = { param($Status) [void]$statusCalls.Add('terminal|' + [string]$Status) }.GetNewClosure()
 
-        $javaRule = 'DevelopersHell.Foundation.Java.ReadinessCancel'
-        $javawRule = 'DevelopersHell.Foundation.Javaw.ReadinessCancel'
-        $group = 'DevelopersHell.Foundation.ReadinessCancel'
+        $firewallState = [pscustomobject]@{
+            Rules=[ordered]@{}
+            Removed=[System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        }
         $cleanupCalls = [System.Collections.Generic.List[string]]::new()
-        $cleanupRecord = [ordered]@{ java_rule_absent=$false; javaw_rule_absent=$false; member_count_after=-1; cleanup_status='FAIL' }
-        $remove = { param([string] $Name) [void]$cleanupCalls.Add("remove|$Name") }.GetNewClosure()
-        $queryName = { param([string] $Name,[string] $Store) [void]$cleanupCalls.Add("name|$Name|$Store"); return @() }.GetNewClosure()
-        $queryGroup = { param([string] $Group,[string] $Store) [void]$cleanupCalls.Add("group|$Group|$Store"); return @() }.GetNewClosure()
-        $terminalStatus = 'STARTING'
-        $failure = $null
-        $cleanupResult = $null
+        $firewallActions = [ordered]@{
+            AssertAvailable = { return $null }
+            RuleExists = { param([string] $Name) return $firewallState.Rules.Contains($Name) }.GetNewClosure()
+            GroupCount = {
+                param([string] $Group,[string] $Store)
+                return @($firewallState.Rules.Values | Where-Object { $_.Group -ceq $Group -and -not $firewallState.Removed.Contains([string]$_.Name) }).Count
+            }.GetNewClosure()
+            NetworkProbe = { param($ExactJdk,[bool] $ExpectReachable) if ($ExpectReachable) { return 'PASS' }; return 'BLOCKED' }
+            CreateRule = {
+                param([string] $Name,[string] $Group,[string] $Program)
+                $firewallState.Rules[$Name] = [pscustomobject]@{ Name=$Name; Group=$Group; Program=$Program; Direction='Outbound'; Action='Block'; Enabled='True' }
+            }.GetNewClosure()
+            GroupRules = {
+                param([string] $Group)
+                return @($firewallState.Rules.Values | Where-Object { $_.Group -ceq $Group -and -not $firewallState.Removed.Contains([string]$_.Name) })
+            }.GetNewClosure()
+            ApplicationFilters = { param($Rule) return @([pscustomobject]@{ Program=$Rule.Program }) }
+            RemoveRule = {
+                param([string] $Name)
+                [void]$cleanupCalls.Add("remove|$Name")
+                [void]$firewallState.Removed.Add($Name)
+            }.GetNewClosure()
+            QueryName = { param([string] $Name,[string] $Store) [void]$cleanupCalls.Add("name|$Name|$Store"); return @() }.GetNewClosure()
+            QueryGroup = { param([string] $Group,[string] $Store) [void]$cleanupCalls.Add("group|$Group|$Store"); return @() }.GetNewClosure()
+        }
+        $jdk = [pscustomobject]@{
+            Java=(Join-Path $root 'java.exe'); Javaw=(Join-Path $root 'javaw.exe');
+            JavaSha256=('a' * 64); JavawSha256=('b' * 64)
+        }
+        $distribution = [pscustomobject]@{ Sha256=('c' * 64) }
         $watch = [Diagnostics.Stopwatch]::StartNew()
         try {
-            [void](Wait-ForRuntimeLog -Runtime $runtime -LogPath $logPath -RequiredPatterns @('SYNTHETIC_READY') -TimeoutSeconds 5 `
-                -AdditionalCheck $cancelAtAdditionalCheck -ControlPath $controlPath -ExpectedSessionId $sessionId)
-            $terminalStatus = 'COMPLETE'
+            $transition = Invoke-IsolatedInteractiveUatTransition -Jdk $jdk -ControlPath $controlPath -ExpectedSessionId $sessionId `
+                -Profile $profile -StatusPath $statusPath -SupervisorLogPath $supervisorLogPath -Distribution $distribution `
+                -OnlineClient ([pscustomobject]@{ Pid=7000 }) -FirewallActions $firewallActions -StartRuntimeAction $startRuntime `
+                -WaitForClientReadyAction $waitForReady -WaitForHumanExitAction $waitForExit -StopRuntimeAfterFailureAction $stopRuntime `
+                -WriteStatusAction $writeStatus -TransitionStatusAction $recordTerminalStatus
         }
-        catch {
-            $failure = $_
-            $terminalStatus = 'FAILED'
+        finally { $watch.Stop() }
+        if ($transition.TerminalStatus -cne 'FAILED' -or -not $transition.Failure -or $transition.Failure.Exception.Message -cne 'Interactive UAT was cancelled by automation control') {
+            $observedFailure = if ($transition.Failure) { $transition.Failure.Exception.Message } else { '<none>' }
+            $observedStack = if ($transition.Failure) { $transition.Failure.ScriptStackTrace -replace '[\r\n]+',' <- ' } else { '<none>' }
+            Throw-Failure "Synthetic readiness cancellation did not return the exact terminal FAILED supervisor result (status=$($transition.TerminalStatus); failure=$observedFailure; stack=$observedStack)"
         }
-        finally {
-            $cleanupResult = Invoke-ExactFirewallIsolationCleanup -JavaRuleId $javaRule -JavawRuleId $javawRule -GroupId $group -Record $cleanupRecord `
-                -RemoveRuleAction $remove -QueryNameAction $queryName -QueryGroupAction $queryGroup -TimeoutSeconds 0 -PollMilliseconds 0
-            $watch.Stop()
-        }
-        if ($terminalStatus -cne 'FAILED' -or -not $failure -or $failure.Exception.Message -cne 'Interactive UAT was cancelled by automation control') {
-            Throw-Failure 'Synthetic readiness cancellation did not produce the exact bounded supervisor failure'
-        }
-        if ($pollState.Count -ne 1 -or $watch.Elapsed.TotalSeconds -gt 2.5) { Throw-Failure 'Synthetic readiness cancellation was not observed on the next bounded poll' }
+        if ($runtime.CancelPollCount -ne 1 -or $watch.Elapsed.TotalSeconds -gt 2.5) { Throw-Failure 'Synthetic readiness cancellation was not observed on the next bounded poll' }
         if (-not (Get-Process -Id $PID -ErrorAction SilentlyContinue)) { Throw-Failure 'Synthetic readiness cancellation terminated its host process' }
-        if (-not $cleanupResult.Success -or $cleanupRecord.cleanup_status -cne 'PASS' -or -not $cleanupRecord.java_rule_absent -or -not $cleanupRecord.javaw_rule_absent -or $cleanupRecord.member_count_after -ne 0) {
-            Throw-Failure 'Synthetic readiness cancellation did not complete strict mocked firewall cleanup'
+        if ($runtime.LifecycleState -cne 'CLEANED' -or @($processCalls | Where-Object { $_ -ceq 'stop' }).Count -ne 1) {
+            Throw-Failure 'Synthetic readiness cancellation did not tear down the isolated runtime exactly once'
         }
+        if (@($statusCalls).Count -ne 1 -or $statusCalls[0] -cne 'terminal|FAILED') { Throw-Failure 'Synthetic supervisor transition did not publish exactly one terminal FAILED status' }
+        $isolation = $transition.Isolation
+        if (-not $isolation -or $isolation.cleanup_status -cne 'PASS' -or -not $isolation.java_rule_absent -or -not $isolation.javaw_rule_absent -or $isolation.member_count_after -ne 0) {
+            Throw-Failure 'Synthetic supervisor transition did not complete the real strict firewall-isolation finally cleanup'
+        }
+        $javaRule = [string]$isolation.java_rule_id
+        $javawRule = [string]$isolation.javaw_rule_id
+        $group = [string]$isolation.group_id
         $expectedCalls = @(
             "remove|$javaRule", "remove|$javawRule",
             "name|$javaRule|PersistentStore", "name|$javaRule|ActiveStore",
@@ -2980,7 +3105,13 @@ function Invoke-ReadinessCancellationSelfCheck {
     }
     finally {
         if ($hostProcess) { $hostProcess.Dispose() }
-        foreach ($file in @($controlPath,$logPath)) { if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force } }
+        foreach ($file in @($controlPath,$logPath,$statusPath,$supervisorLogPath)) { if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force } }
+        foreach ($directory in @((Split-Path -Parent $logPath),$profile)) {
+            if (Test-Path -LiteralPath $directory -PathType Container) {
+                if (@(Get-ChildItem -LiteralPath $directory -Force).Count -ne 0) { Throw-Failure 'Synthetic readiness cancellation profile is not empty' }
+                [IO.Directory]::Delete($directory,$false)
+            }
+        }
         if (Test-Path -LiteralPath $root -PathType Container) {
             if (@(Get-ChildItem -LiteralPath $root -Force).Count -ne 0) { Throw-Failure 'Synthetic readiness cancellation root is not empty' }
             [IO.Directory]::Delete($root,$false)
@@ -3055,7 +3186,32 @@ function Invoke-SelfCheckMode {
     if (-not $startFunction.Success -or $startFunction.Groups['body'].Value -notmatch [regex]::Escape('Assert-ScopedProcessInspectionAvailable')) {
         Throw-Failure 'Runtime start no longer fails before launch when scoped CIM inspection is unavailable'
     }
-    if ([regex]::Matches($source, '(?m)^\s*\[void\]\(New-NetFirewallRule\b').Count -ne 2) { Throw-Failure 'Firewall primitive must contain exactly two rule creations' }
+    $firewallIsolationFunction = [regex]::Match($source, '(?s)function Invoke-WithFirewallIsolation\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Get-ValidatedDistribution')
+    if (-not $firewallIsolationFunction.Success) { Throw-Failure 'Self-check could not isolate the production firewall-isolation implementation' }
+    $firewallIsolationBody = $firewallIsolationFunction.Groups['body'].Value
+    if ([regex]::Matches($firewallIsolationBody, '(?m)^\s*New-NetFirewallRule\b').Count -ne 1 -or
+        [regex]::Matches($firewallIsolationBody, "& \`$FirewallActions\['CreateRule'\]").Count -ne 2) {
+        Throw-Failure 'Firewall provider must retain one exact primitive invoked for exactly the Java and Javaw rules'
+    }
+    if ($firewallIsolationBody -notmatch '(?s)finally\s*\{.*?Invoke-ExactFirewallIsolationCleanup.*?-RemoveRuleAction.*?-QueryNameAction.*?-QueryGroupAction') {
+        Throw-Failure 'Production firewall isolation no longer performs strict provider-backed cleanup from its real finally path'
+    }
+    $isolatedTransitionFunction = [regex]::Match($source, '(?s)function Invoke-IsolatedInteractiveUatTransition\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Invoke-ClientPreflightMode')
+    if (-not $isolatedTransitionFunction.Success) { Throw-Failure 'Self-check could not isolate the production isolated-client transition' }
+    $isolatedTransitionBody = $isolatedTransitionFunction.Groups['body'].Value
+    foreach ($transitionToken in @(
+        'Invoke-WithFirewallIsolation -Jdk $Jdk -ControlPath $ControlPath -ExpectedSessionId $ExpectedSessionId',
+        '& $WaitForClientReadyAction $holder.Runtime $Jdk $logPath $ControlPath $ExpectedSessionId',
+        '& $StopRuntimeAfterFailureAction $holder.Runtime $holder.Client',
+        "& `$TransitionStatusAction 'FAILED'",
+        "TerminalStatus='FAILED'"
+    )) {
+        if ($isolatedTransitionBody -notmatch [regex]::Escape($transitionToken)) { Throw-Failure "Isolated transition mutation guard failed: $transitionToken" }
+    }
+    $supervisorFunction = [regex]::Match($source, '(?s)function Invoke-SuperviseInteractiveUatMode\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Assert-EvidencePassMarker')
+    if (-not $supervisorFunction.Success -or $supervisorFunction.Groups['body'].Value -notmatch [regex]::Escape('Invoke-IsolatedInteractiveUatTransition -Jdk $Jdk -ControlPath $controlPath -ExpectedSessionId $sessionId')) {
+        Throw-Failure 'Interactive supervisor no longer forwards its strict session-bound control into the isolated transition'
+    }
     if ($source -match '(?i)Get-NetFirewallRule\s*\|\s*Remove-NetFirewallRule|Remove-NetFirewallRule\s+-Group') { Throw-Failure 'Broad firewall cleanup pattern found' }
     if ($source -match '(?m)^\s*(?:\[[^\]]+\]\s*)?Get-NetFirewallRule(?![^\r\n]*(?:-Name|-Group))') { Throw-Failure 'Unscoped firewall rule enumeration found' }
     $nameNotFound = [Management.Automation.ErrorRecord]::new(
