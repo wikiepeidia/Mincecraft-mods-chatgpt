@@ -279,10 +279,33 @@ function Invoke-BoundedCapture {
             ProcessTreeSnapshot = @()
             LifecycleState = 'RUNNING'
         }
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        # Retain a continuously validated union while the exact root is live.
+        # A single WaitForExit leaves a race where the parent exits at the
+        # timeout boundary after spawning a child that keeps the redirected
+        # handles (and potentially Java/network activity) alive.
+        $waitWatch = [Diagnostics.Stopwatch]::StartNew()
+        $timedOut = $false
+        try {
+            while ($true) {
+                if (-not $process.HasExited) { [void](Merge-ValidatedRuntimeProcessTreeSnapshot -Runtime $runtime) }
+                if ($process.HasExited) { break }
+                $remainingMilliseconds = ([long]$TimeoutSeconds * 1000L) - [long]$waitWatch.ElapsedMilliseconds
+                if ($remainingMilliseconds -le 0) { $timedOut = $true; break }
+                $pollMilliseconds = [int][Math]::Min(200L, [Math]::Max(1L,$remainingMilliseconds))
+                if ($process.WaitForExit($pollMilliseconds)) { break }
+            }
+        }
+        finally { $waitWatch.Stop() }
+        if ($timedOut) {
             try { $cleanup = Stop-ValidatedGradleRuntimeTree -Runtime $runtime }
             catch { Throw-Failure "$DisplayName timed out after $TimeoutSeconds seconds and scoped process-tree cleanup failed: $($_.Exception.Message)" }
             Throw-Failure "$DisplayName timed out after $TimeoutSeconds seconds; scoped cleanup terminated $(@($cleanup.TerminatedPids).Count) captured processes"
+        }
+        $liveDescendants = @(Wait-CapturedRuntimeProcessesGone -Snapshot @($runtime.ProcessTreeSnapshot | Where-Object { [int]$_.Pid -ne [int]$runtime.RootProcessId }) -TimeoutSeconds 1)
+        if ($liveDescendants.Count -ne 0) {
+            try { $cleanup = Stop-ValidatedGradleRuntimeTree -Runtime $runtime }
+            catch { Throw-Failure "$DisplayName root exited while captured descendants remained and scoped cleanup failed: $($_.Exception.Message)" }
+            Throw-Failure "$DisplayName root exited while captured descendants remained; scoped cleanup terminated $(@($cleanup.TerminatedPids).Count) captured processes"
         }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
@@ -1678,7 +1701,8 @@ function Get-GradleJavaCommandClass {
 function Get-ValidatedGradleRuntimeProcessTree {
     param(
         [Parameter(Mandatory)] $Runtime,
-        [switch] $RequireReadyClasses
+        [switch] $RequireReadyClasses,
+        [switch] $AllowTransientDescendantExit
     )
     $isBoundedCommand = $Runtime.OwnerKind -eq 'BoundedCommand'
     $ownerLabel = if ($isBoundedCommand) { [string]$Runtime.TaskName } else { 'Gradle runtime' }
@@ -1740,7 +1764,10 @@ function Get-ValidatedGradleRuntimeProcessTree {
         $row = $byPid[$pidKey]
         $pidValue = [int]$row.ProcessId
         $startTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId $pidValue
-        if ($null -eq $startTicks) { Throw-Failure "Captured runtime PID $pidValue disappeared during identity validation" }
+        if ($null -eq $startTicks) {
+            if ($AllowTransientDescendantExit -and $pidValue -ne $Runtime.RootProcessId) { continue }
+            Throw-Failure "Captured runtime PID $pidValue disappeared during identity validation"
+        }
         $name = ([string]$row.Name).ToLowerInvariant()
         $executable = if ([string]::IsNullOrWhiteSpace([string]$row.ExecutablePath)) { '' } else { Resolve-CanonicalPath -LiteralPath ([string]$row.ExecutablePath) }
         $commandLine = [string]$row.CommandLine
@@ -1776,6 +1803,28 @@ function Get-ValidatedGradleRuntimeProcessTree {
     return @($snapshot)
 }
 
+function Merge-ValidatedRuntimeProcessTreeSnapshot {
+    param([Parameter(Mandatory)] $Runtime)
+    if ($Runtime.LifecycleState -ne 'RUNNING') { return @($Runtime.ProcessTreeSnapshot) }
+    $current = @()
+    if (-not $Runtime.Process.HasExited) {
+        try { $current = @(Get-ValidatedGradleRuntimeProcessTree -Runtime $Runtime -AllowTransientDescendantExit) }
+        catch {
+            # Root exit during a scoped CIM walk is the race this retained union
+            # exists to close. Preserve prior validated identities; provider or
+            # validation failures while the root remains live still fail closed.
+            if (-not $Runtime.Process.HasExited) { throw }
+        }
+    }
+    $byIdentity = [ordered]@{}
+    foreach ($entry in @($Runtime.ProcessTreeSnapshot) + @($current)) {
+        $key = ([string][int]$entry.Pid) + '|' + ([string][long]$entry.StartTimeUtcTicks)
+        $byIdentity[$key] = $entry
+    }
+    $Runtime.ProcessTreeSnapshot = @($byIdentity.Values)
+    return @($Runtime.ProcessTreeSnapshot)
+}
+
 function Assert-CapturedRuntimeProcessIdentity {
     param(
         [Parameter(Mandatory)] $Entry,
@@ -1802,8 +1851,8 @@ function Assert-CapturedRuntimeProcessIdentity {
     elseif ($isBoundedCommand) {
         $executable = Resolve-CanonicalPath -LiteralPath ([string]$row.ExecutablePath)
         if (-not $executable.Equals([string]$Entry.Executable,[StringComparison]::OrdinalIgnoreCase) -or
-            [string]$row.CommandLine -cne [string]$Entry.CommandLine -or [int]$row.ParentProcessId -ne [int]$Entry.ParentPid) {
-            Throw-Failure "Cleanup bounded-command PID $($Entry.Pid) changed executable, command-line, or parent identity"
+            [string]$row.CommandLine -cne [string]$Entry.CommandLine) {
+            Throw-Failure "Cleanup bounded-command PID $($Entry.Pid) changed executable or command-line identity"
         }
     }
     elseif (([string]$row.Name).ToLowerInvariant() -in @('java.exe','javaw.exe')) {
@@ -1824,7 +1873,7 @@ function Assert-CapturedRuntimeProcessIdentity {
 
 function Wait-CapturedRuntimeProcessesGone {
     param(
-        [Parameter(Mandatory)][object[]] $Snapshot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Snapshot,
         [int] $TimeoutSeconds = 15
     )
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -1843,41 +1892,63 @@ function Stop-ValidatedGradleRuntimeTree {
     param([Parameter(Mandatory)] $Runtime)
     if ($Runtime.LifecycleState -ne 'RUNNING') { return [pscustomobject]@{ TerminatedPids=@(); AlreadyComplete=$true } }
     $rootLive = -not $Runtime.Process.HasExited
-    $snapshot = if ($rootLive) {
-        @(Get-ValidatedGradleRuntimeProcessTree -Runtime $Runtime)
+    if ($rootLive) {
+        try { [void](Merge-ValidatedRuntimeProcessTreeSnapshot -Runtime $Runtime) }
+        catch {
+            if (-not $Runtime.Process.HasExited) { throw }
+        }
+        $rootLive = -not $Runtime.Process.HasExited
     }
-    else {
-        @($Runtime.ProcessTreeSnapshot)
-    }
+    $snapshot = @($Runtime.ProcessTreeSnapshot)
     if ($rootLive -and $snapshot.Count -eq 0) { Throw-Failure 'Scoped cleanup captured an empty live Gradle process tree' }
-    $Runtime.ProcessTreeSnapshot = @($snapshot)
 
     # Closing stdin is allowed only now: the exact process tree has been captured,
     # validated, and this function owns bounded teardown of every captured PID.
     if ($Runtime.Process.StartInfo.RedirectStandardInput) { try { $Runtime.Process.StandardInput.Close() } catch { } }
     $terminated = [System.Collections.Generic.List[int]]::new()
+    $stopCapturedEntries = {
+        param([object[]] $Entries)
+        foreach ($entry in @($Entries | Sort-Object Depth -Descending)) {
+            if (-not (Assert-CapturedRuntimeProcessIdentity -Entry $entry -Runtime $Runtime)) { continue }
+            try { Stop-Process -Id ([int]$entry.Pid) -Force -ErrorAction Stop }
+            catch {
+                $currentTicks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$entry.Pid)
+                if ($null -ne $currentTicks -and [long]$currentTicks -eq [long]$entry.StartTimeUtcTicks) { throw }
+            }
+            if (-not $terminated.Contains([int]$entry.Pid)) { $terminated.Add([int]$entry.Pid) }
+        }
+    }.GetNewClosure()
+
     if ($rootLive) {
         $rootEntry = @($snapshot | Where-Object { [int]$_.Pid -eq [int]$Runtime.RootProcessId })
-        if ($rootEntry.Count -ne 1 -or -not (Assert-CapturedRuntimeProcessIdentity -Entry $rootEntry[0] -Runtime $Runtime)) {
-            Throw-Failure 'Exact Gradle root could not be revalidated immediately before tree termination'
-        }
-        $taskkill = Invoke-NativeCapture -FilePath (Join-Path $env:SystemRoot 'System32\taskkill.exe') -ArgumentList @('/PID',[string]$Runtime.RootProcessId,'/T','/F') -WorkingDirectory $script:RepositoryRoot -AllowFailure -TimeoutSeconds 30
-        if ($taskkill.ExitCode -ne 0) {
-            $remainingAfterTaskkill = @(Wait-CapturedRuntimeProcessesGone -Snapshot $snapshot -TimeoutSeconds 1)
-            if ($remainingAfterTaskkill.Count -ne 0) { Throw-Failure "Exact-root taskkill failed with exit $($taskkill.ExitCode)" }
-        }
-        foreach ($entry in $snapshot) { $terminated.Add([int]$entry.Pid) }
-    }
-    else {
-        foreach ($entry in @($snapshot | Sort-Object Depth -Descending)) {
-            if (Assert-CapturedRuntimeProcessIdentity -Entry $entry -Runtime $Runtime) {
-                Stop-Process -Id ([int]$entry.Pid) -Force -ErrorAction Stop
-                $terminated.Add([int]$entry.Pid)
+        $rootRevalidated = $false
+        if ($rootEntry.Count -eq 1) {
+            try { $rootRevalidated = Assert-CapturedRuntimeProcessIdentity -Entry $rootEntry[0] -Runtime $Runtime }
+            catch {
+                if (-not $Runtime.Process.HasExited) { throw }
             }
         }
+        $rootLive = -not $Runtime.Process.HasExited
+        if ($rootLive -and -not $rootRevalidated) {
+            Throw-Failure 'Exact Gradle root could not be revalidated immediately before tree termination'
+        }
+        if ($rootLive) {
+            # `/T` is the fast path, but the exact root may disappear between
+            # revalidation and taskkill. Any still-live retained identities are
+            # therefore handled independently below instead of abandoning them.
+            try {
+                [void](Invoke-NativeCapture -FilePath (Join-Path $env:SystemRoot 'System32\taskkill.exe') -ArgumentList @('/PID',[string]$Runtime.RootProcessId,'/T','/F') -WorkingDirectory $script:RepositoryRoot -AllowFailure -TimeoutSeconds 30)
+            }
+            catch { Write-Detail "exact-root taskkill could not complete; using retained per-entry cleanup: $($_.Exception.Message)" }
+        }
     }
+    $remainingAfterTreeStop = @(Wait-CapturedRuntimeProcessesGone -Snapshot $snapshot -TimeoutSeconds 1)
+    if ($remainingAfterTreeStop.Count -ne 0) { & $stopCapturedEntries $remainingAfterTreeStop }
     $remaining = @(Wait-CapturedRuntimeProcessesGone -Snapshot $snapshot -TimeoutSeconds 20)
     if ($remaining.Count -ne 0) { Throw-Failure "Scoped runtime cleanup left captured PIDs alive: $((@($remaining | ForEach-Object { $_.Pid })) -join ',')" }
+    foreach ($entry in $snapshot) {
+        if (-not $terminated.Contains([int]$entry.Pid)) { $terminated.Add([int]$entry.Pid) }
+    }
     if (-not $Runtime.StdOutTask.Wait(15000) -or -not $Runtime.StdErrTask.Wait(15000)) {
         Throw-Failure 'Scoped runtime cleanup left redirected output streams open'
     }
@@ -2690,7 +2761,10 @@ function Invoke-BoundedCaptureSelfCheck {
     $root = Join-Path ([IO.Path]::GetTempPath()) ('developers-hell-timeout-tree-' + [guid]::NewGuid().ToString('N'))
     $runner = Join-Path $root 'runner.ps1'
     $marker = Join-Path $root 'identities.json'
+    $rootExitRunner = Join-Path $root 'root-exits-first.ps1'
+    $rootExitMarker = Join-Path $root 'root-exits-first-identities.json'
     $identities = @()
+    $rootExitIdentities = @()
     [void](New-Item -ItemType Directory -Path $root)
     try {
         Assert-NoReparsePoint -LiteralPath $root
@@ -2723,13 +2797,45 @@ Wait-Process -Id $child.Id
             $ticks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$identity.pid)
             if ($null -ne $ticks -and [long]$ticks -eq [long]$identity.ticks) { Throw-Failure "Bounded timeout-tree cleanup left exact PID $($identity.pid) alive" }
         }
+
+        $rootExitSource = @'
+param([string] $Marker)
+$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60') -WindowStyle Hidden -PassThru
+$self = [Diagnostics.Process]::GetCurrentProcess()
+$childProcess = [Diagnostics.Process]::GetProcessById($child.Id)
+try {
+    @(
+        [ordered]@{ pid=$self.Id; ticks=$self.StartTime.ToUniversalTime().Ticks },
+        [ordered]@{ pid=$childProcess.Id; ticks=$childProcess.StartTime.ToUniversalTime().Ticks }
+    ) | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8
+}
+finally { $self.Dispose(); $childProcess.Dispose() }
+Start-Sleep -Milliseconds 1500
+exit 0
+'@
+        [IO.File]::WriteAllText($rootExitRunner,$rootExitSource,[Text.UTF8Encoding]::new($false))
+        $rootExitedFirst = $false
+        try { [void](Invoke-NativeCapture -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$rootExitRunner,$rootExitMarker) -WorkingDirectory $root -TimeoutSeconds 10) }
+        catch {
+            if ($_.Exception.Message -notmatch '^Native command root exited while captured descendants remained; scoped cleanup terminated ([2-9]|[1-9][0-9]+) captured processes$') { throw }
+            $rootExitedFirst = $true
+        }
+        if (-not $rootExitedFirst -or -not (Test-Path -LiteralPath $rootExitMarker -PathType Leaf)) {
+            Throw-Failure 'Bounded root-exits-first self-check did not exercise retained descendant cleanup'
+        }
+        $rootExitIdentities = @((Get-Content -LiteralPath $rootExitMarker -Raw | ConvertFrom-Json) | ForEach-Object { $_ })
+        if ($rootExitIdentities.Count -ne 2) { Throw-Failure 'Bounded root-exits-first self-check did not capture root and child identities' }
+        foreach ($identity in $rootExitIdentities) {
+            $ticks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$identity.pid)
+            if ($null -ne $ticks -and [long]$ticks -eq [long]$identity.ticks) { Throw-Failure "Bounded root-exits-first cleanup left exact PID $($identity.pid) alive" }
+        }
     }
     finally {
-        foreach ($identity in $identities) {
+        foreach ($identity in @($identities) + @($rootExitIdentities)) {
             $ticks = Get-LiveProcessStartTimeUtcTicks -ProcessId ([int]$identity.pid)
             if ($null -ne $ticks -and [long]$ticks -eq [long]$identity.ticks) { Stop-Process -Id ([int]$identity.pid) -Force -ErrorAction SilentlyContinue }
         }
-        foreach ($file in @($runner,$marker)) { if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force } }
+        foreach ($file in @($runner,$marker,$rootExitRunner,$rootExitMarker)) { if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force } }
         if (Test-Path -LiteralPath $root -PathType Container) {
             if (@(Get-ChildItem -LiteralPath $root -Force).Count -ne 0) { Throw-Failure 'Bounded timeout-tree self-check root is not empty' }
             [IO.Directory]::Delete($root,$false)
@@ -2848,13 +2954,13 @@ function Invoke-SelfCheckMode {
     if ($stdinSequence.Groups['between'].Value -match 'StandardInput\.Close\(') { Throw-Failure 'Server stdin closes before Gradle/root completion owns teardown' }
     $cleanupFunction = [regex]::Match($source, '(?s)function Stop-ValidatedGradleRuntimeTree\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Complete-GradleRuntime')
     if (-not $cleanupFunction.Success) { Throw-Failure 'Self-check could not isolate scoped process-tree cleanup' }
-    foreach ($cleanupToken in @('Get-ValidatedGradleRuntimeProcessTree','Assert-CapturedRuntimeProcessIdentity','taskkill.exe',"@('/PID',[string]`$Runtime.RootProcessId,'/T','/F')",'Wait-CapturedRuntimeProcessesGone','StdOutTask.Wait','StdErrTask.Wait')) {
+    foreach ($cleanupToken in @('Merge-ValidatedRuntimeProcessTreeSnapshot','Assert-CapturedRuntimeProcessIdentity','taskkill.exe',"@('/PID',[string]`$Runtime.RootProcessId,'/T','/F')",'Wait-CapturedRuntimeProcessesGone','stopCapturedEntries','StdOutTask.Wait','StdErrTask.Wait')) {
         if ($cleanupFunction.Groups['body'].Value -notmatch [regex]::Escape($cleanupToken)) { Throw-Failure "Scoped cleanup contract token missing: $cleanupToken" }
     }
     if ($cleanupFunction.Groups['body'].Value -match '\.Process\.Kill\(') { Throw-Failure 'Scoped cleanup kills only the wrapper and can strand descendants' }
     if ($source -match '(?i)(Stop-Process\s+-Name\s+java|Get-Process\s+(?:-Name\s+)?java)') { Throw-Failure 'Broad Java process cleanup pattern found' }
     $boundedCapture = [regex]::Match($source, '(?s)function Invoke-BoundedCapture\s*\{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Invoke-NativeCapture')
-    foreach ($token in @('Assert-ScopedProcessInspectionAvailable','RootStartTimeUtcTicks','ExpectedRootExecutable','RootCommandLineAnchors','Stop-ValidatedGradleRuntimeTree','scoped process-tree cleanup failed','Dispose()')) {
+    foreach ($token in @('Assert-ScopedProcessInspectionAvailable','RootStartTimeUtcTicks','ExpectedRootExecutable','RootCommandLineAnchors','Merge-ValidatedRuntimeProcessTreeSnapshot','ElapsedMilliseconds','Stop-ValidatedGradleRuntimeTree','scoped process-tree cleanup failed','Dispose()')) {
         if (-not $boundedCapture.Success -or $boundedCapture.Groups['body'].Value -notmatch [regex]::Escape($token)) { Throw-Failure "Bounded capture contract token missing: $token" }
     }
     foreach ($captureName in @('Invoke-NativeCapture','Invoke-BatchCapture')) {
