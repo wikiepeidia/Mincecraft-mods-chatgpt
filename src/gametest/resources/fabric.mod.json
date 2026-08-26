@@ -7,7 +7,8 @@
   "entrypoints": {
     "fabric-gametest": [
       "dev.developershell.gametest.FoundationGameTests",
-      "dev.developershell.gametest.LectureLifecycleGameTests"
+      "dev.developershell.gametest.LectureLifecycleGameTests",
+      "dev.developershell.gametest.ContractArenaGameTests"
     ]
   }
 }
