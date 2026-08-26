@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-08-26T21:59:12.739Z"
+stopped_at: Completed 02-11-PLAN.md
+last_updated: "2026-08-26T22:11:32.733Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 2ec4347a7b90f7d10a96832e8cd843064be5389e
+state_head: f11be5ac65d047528b6a4453e97dc4b8125cdcdb
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 17
+  completed_plans: 18
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 14 of 18
+Plan: 15 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -75,6 +75,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P08 | 23min | 2 tasks | 11 files |
 | Phase 02-persistent-lecture-vertical-slice P09 | 16min | 2 tasks | 7 files |
 | Phase 02-persistent-lecture-vertical-slice P10 | 29min | 2 tasks | 12 files |
+| Phase 02-persistent-lecture-vertical-slice P11 | 9min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Lecture presentation remains a one-way owner-only projection of recorded server state with bounded redundant semantic cues.
 - [Phase 02]: Homework adds are ephemeral exact-owner/exact-encounter helpers with one-active cap, no loot, bounded lifetime, and fail-closed reload behavior.
 - [Phase 02]: LectureRules keeps its seven-value constructor and equality contract while configured sessions store all accepted combat tuning and reduced-effects mode.
+- [Phase 02]: Use the persisted ACTIVE encounter reference as the first-terminal-wins latch; no campaign schema field is added.
+- [Phase 02]: Expose CampaignService.commitVictory as the accepted transition handoff while retaining the boolean compatibility wrapper until Plan 02-17.
+- [Phase 02]: Route Terminal, NormalizeReload, and Victory through one sealed EncounterTerminal admission gate.
 
 ### Pending Todos
 
@@ -148,6 +152,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T21:59:12.591Z
-Stopped at: Completed 02-10-PLAN.md
+Last session: 2026-08-26T22:11:32.628Z
+Stopped at: Completed 02-11-PLAN.md
 Resume file: None
