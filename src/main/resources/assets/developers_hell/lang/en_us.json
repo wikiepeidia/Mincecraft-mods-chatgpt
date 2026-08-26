@@ -33,8 +33,18 @@
   "command.developers_hell.status.value.enabled": "enabled",
   "config.developers_hell.issue": "Config issue at %s: rejected %s; expected %s",
   "direction.developers_hell.lane.center": "CENTER",
+  "advancement.developers_hell.a_suspicious_opportunity.description": "Craft the contract. It has absolutely no benefits.",
+  "advancement.developers_hell.a_suspicious_opportunity.title": "A Suspicious Opportunity",
+  "item.developers_hell.attendance_sheet": "Attendance Sheet",
+  "item.developers_hell.cursed_unpaid_internship_contract": "Cursed Unpaid Internship Contract",
   "item.developers_hell.foundation_token": "Foundation Token",
+  "item.developers_hell.infinite_slides_remote": "Infinite Slides Remote",
+  "item.developers_hell.retake_form": "Retake Form",
+  "message.developers_hell.contract.find_lectern": "Find a lectern. It becomes the Internship Desk.",
   "message.developers_hell.campaign.disabled": "The cursed contract refuses to activate because the campaign is disabled for this session.",
   "message.developers_hell.lecture.objective": "Objective: Pass Professor Infinite Slides.",
-  "message.developers_hell.lecture.slide_start": "Slide Deck started. Hold the named safe lane until cooldown."
+  "message.developers_hell.lecture.slide_start": "Slide Deck started. Hold the named safe lane until cooldown.",
+  "tooltip.developers_hell.contract.blocks": "No blocks are changed by default.",
+  "tooltip.developers_hell.contract.lecture": "Starts Lecture 1: Professor Infinite Slides.",
+  "tooltip.developers_hell.contract.lectern": "Use on a lectern facing a clear Overworld area."
 }

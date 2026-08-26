@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:paper",
+    "minecraft:ink_sac"
+  ],
+  "result": {
+    "count": 1,
+    "id": "developers_hell:cursed_unpaid_internship_contract"
+  }
+}

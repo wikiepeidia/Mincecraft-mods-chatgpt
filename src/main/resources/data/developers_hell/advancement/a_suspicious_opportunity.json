@@ -1,0 +1,44 @@
+{
+  "criteria": {
+    "has_paper_and_ink": {
+      "conditions": {
+        "items": [
+          {
+            "items": "minecraft:paper"
+          },
+          {
+            "items": "minecraft:ink_sac"
+          }
+        ]
+      },
+      "trigger": "minecraft:inventory_changed"
+    }
+  },
+  "display": {
+    "announce_to_chat": false,
+    "background": "minecraft:gui/advancements/backgrounds/stone",
+    "description": {
+      "translate": "advancement.developers_hell.a_suspicious_opportunity.description"
+    },
+    "frame": "task",
+    "hidden": false,
+    "icon": {
+      "id": "developers_hell:cursed_unpaid_internship_contract"
+    },
+    "show_toast": true,
+    "title": {
+      "translate": "advancement.developers_hell.a_suspicious_opportunity.title"
+    }
+  },
+  "requirements": [
+    [
+      "has_paper_and_ink"
+    ]
+  ],
+  "rewards": {
+    "recipes": [
+      "developers_hell:cursed_unpaid_internship_contract"
+    ]
+  },
+  "sends_telemetry_event": false
+}
