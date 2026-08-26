@@ -6,7 +6,8 @@
   "environment": "*",
   "entrypoints": {
     "fabric-gametest": [
-      "dev.developershell.gametest.FoundationGameTests"
+      "dev.developershell.gametest.FoundationGameTests",
+      "dev.developershell.gametest.LectureLifecycleGameTests"
     ]
   }
 }
