@@ -5,6 +5,8 @@ import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.config.DevHellConfig;
 import dev.developershell.config.DevHellConfigLoader;
+import dev.developershell.lecture.ArenaRejection;
+import dev.developershell.lecture.ArenaValidationResult;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureRules;
 import dev.developershell.module.ModuleGate;
@@ -12,8 +14,6 @@ import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -193,17 +193,16 @@ public final class DevelopersHellRuntime {
 			return campaignEnabled;
 		}
 
-		public boolean start(
+		public ArenaValidationResult start(
 				ServerPlayer player,
-				BlockPos deskPos,
-				Direction deskFacing,
+				ArenaValidationResult.Accepted arena,
 				ItemStack contract
 		) {
 			if (!campaignEnabled) {
 				player.sendSystemMessage(Component.translatable(CAMPAIGN_DISABLED_KEY));
-				return false;
+				return new ArenaValidationResult.Rejected(ArenaRejection.SPAWN_CAPACITY);
 			}
-			return CampaignService.start(player, deskPos, deskFacing, contract);
+			return CampaignService.start(player, arena, contract);
 		}
 	}
 

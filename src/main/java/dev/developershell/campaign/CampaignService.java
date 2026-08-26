@@ -1,5 +1,8 @@
 package dev.developershell.campaign;
 
+import dev.developershell.lecture.ArenaRejection;
+import dev.developershell.lecture.ArenaValidationResult;
+import dev.developershell.lecture.ArenaValidator;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.registry.ModItems;
 import java.util.Optional;
@@ -7,36 +10,52 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LecternBlock;
-import net.minecraft.world.level.block.state.BlockState;
 
 /** Logical-server transaction boundary for accepted campaign events and their effects. */
 public final class CampaignService {
-	private static final int ARENA_FORWARD = 17;
-	private static final int ARENA_HALF_WIDTH = 8;
-	private static final int REQUIRED_HEADROOM = 4;
+	private static final String CONTRACT_SIGNED_KEY = "message.developers_hell.contract.signed";
 
+	/**
+	 * Compatibility seam for server-side lifecycle callers. It delegates to the sole arena
+	 * validator and passes its immutable acceptance into the transaction overload below.
+	 */
 	public static boolean start(
 			ServerPlayer player,
 			BlockPos deskPos,
 			Direction deskFacing,
 			ItemStack contract
 	) {
+		if (!(player.level() instanceof ServerLevel level)) {
+			return false;
+		}
+		ArenaValidationResult validation = ArenaValidator.validate(level, player, deskPos, deskFacing);
+		return validation instanceof ArenaValidationResult.Accepted accepted
+				&& start(player, accepted, contract).accepted();
+	}
+
+	/**
+	 * Commits one already-validated arena exactly once. Geometry is never probed again here: the
+	 * accepted value is the transaction's immutable input, so validation and persistence cannot
+	 * disagree about retry coordinates or interior headroom.
+	 */
+	public static ArenaValidationResult start(
+			ServerPlayer player,
+			ArenaValidationResult.Accepted arena,
+			ItemStack contract
+	) {
+		java.util.Objects.requireNonNull(player, "player");
+		java.util.Objects.requireNonNull(arena, "arena");
+		java.util.Objects.requireNonNull(contract, "contract");
 		if (!(player.level() instanceof ServerLevel level)
 				|| !level.getServer().isSameThread()
 				|| player.isSpectator()
 				|| contract.isEmpty()
 				|| contract.getItem() != ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT) {
-			return false;
-		}
-		Optional<BlockPos> retryPos = validateArena(level, deskPos, deskFacing);
-		if (retryPos.isEmpty()) {
-			return false;
+			return rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
 
 		CampaignSavedData data = CampaignSavedData.get(level);
@@ -47,23 +66,30 @@ public final class CampaignService {
 					.orElse(1);
 		}
 		catch (ArithmeticException exception) {
-			return false;
+			return rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
 		UUID ownerUuid = player.getUUID();
+		var layout = arena.layout();
+		var deskPos = layout.deskPos();
+		var deskFacing = layout.forward();
 		UUID encounterUuid = CampaignSavedData.deterministicUuid("encounter", ownerUuid, deskPos, nextAttempt);
 		UUID professorUuid = CampaignSavedData.deterministicUuid("professor", ownerUuid, deskPos, nextAttempt);
+		if (level.getEntityInAnyDimension(professorUuid) != null) {
+			return rejected(ArenaRejection.SPAWN_CAPACITY);
+		}
 		CampaignEvent.Start start = new CampaignEvent.Start(
 				ownerUuid,
 				PlayerCampaignState.OVERWORLD_DIMENSION,
 				deskPos,
 				deskFacing,
-				retryPos.get(),
+				arena.retryPos(),
 				encounterUuid,
 				professorUuid
 		);
 		boolean[] runtimeStarted = {false};
 		CampaignTransition transition = apply(data, start, effect -> {
 			if (effect instanceof CampaignTransition.EffectIntent.StartEncounter) {
+				player.sendSystemMessage(Component.translatable(CONTRACT_SIGNED_KEY));
 				runtimeStarted[0] = LectureEncounterManager.start(
 						level,
 						player,
@@ -72,7 +98,9 @@ public final class CampaignService {
 			}
 		});
 		if (!transition.accepted()) {
-			return false;
+			return rejected(isActiveRejection(transition.reason())
+					? ArenaRejection.ACTIVE_ENCOUNTER
+					: ArenaRejection.SPAWN_CAPACITY);
 		}
 		if (!runtimeStarted[0]) {
 			apply(
@@ -84,10 +112,10 @@ public final class CampaignService {
 						}
 					}
 			);
-			return false;
+			return rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
 		contract.shrink(1);
-		return true;
+		return arena;
 	}
 
 	/**
@@ -202,64 +230,14 @@ public final class CampaignService {
 						.orElse(false);
 	}
 
-	private static Optional<BlockPos> validateArena(ServerLevel level, BlockPos deskPos, Direction deskFacing) {
-		if (!level.dimension().equals(Level.OVERWORLD) || !deskFacing.getAxis().isHorizontal()) {
-			return Optional.empty();
-		}
-		BlockState deskState = level.getBlockState(deskPos);
-		if (!deskState.is(Blocks.LECTERN) || deskState.getValue(LecternBlock.FACING) != deskFacing) {
-			return Optional.empty();
-		}
-
-		Direction right = deskFacing.getClockWise();
-		for (int forward = 1; forward <= ARENA_FORWARD; forward++) {
-			for (int lateral = -ARENA_HALF_WIDTH; lateral <= ARENA_HALF_WIDTH; lateral++) {
-				BlockPos floor = deskPos.relative(deskFacing, forward).relative(right, lateral).below();
-				if (!isLoadedAndInside(level, floor)
-						|| !level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)) {
-					return Optional.empty();
-				}
-				for (int height = 1; height <= REQUIRED_HEADROOM; height++) {
-					BlockPos headroom = floor.above(height);
-					if (!isLoadedAndInside(level, headroom)
-							|| !level.getBlockState(headroom).getCollisionShape(level, headroom).isEmpty()
-							|| !level.getFluidState(headroom).isEmpty()) {
-						return Optional.empty();
-					}
-				}
-			}
-		}
-		return findRetryPos(level, deskPos, deskFacing);
+	private static boolean isActiveRejection(String reason) {
+		return reason.equals("start_not_ready")
+				|| reason.equals("desk_occupied")
+				|| reason.equals("wrong_owner");
 	}
 
-	private static Optional<BlockPos> findRetryPos(ServerLevel level, BlockPos deskPos, Direction deskFacing) {
-		Direction right = deskFacing.getClockWise();
-		for (int distance = 2; distance <= 5; distance++) {
-			for (int lateral = 0; lateral <= 2; lateral++) {
-				for (int sign : new int[] {1, -1}) {
-					BlockPos candidate = deskPos.relative(deskFacing.getOpposite(), distance).relative(right, lateral * sign);
-					if (isSafeRetry(level, candidate)) {
-						return Optional.of(candidate.immutable());
-					}
-				}
-			}
-		}
-		return Optional.empty();
-	}
-
-	private static boolean isSafeRetry(ServerLevel level, BlockPos position) {
-		BlockPos floor = position.below();
-		return isLoadedAndInside(level, floor)
-				&& isLoadedAndInside(level, position.above())
-				&& level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)
-				&& level.getBlockState(position).getCollisionShape(level, position).isEmpty()
-				&& level.getBlockState(position.above()).getCollisionShape(level, position.above()).isEmpty()
-				&& level.getFluidState(position).isEmpty()
-				&& level.getFluidState(position.above()).isEmpty();
-	}
-
-	private static boolean isLoadedAndInside(ServerLevel level, BlockPos position) {
-		return level.isLoaded(position) && level.getWorldBorder().isWithinBounds(position);
+	private static ArenaValidationResult.Rejected rejected(ArenaRejection rejection) {
+		return new ArenaValidationResult.Rejected(rejection);
 	}
 
 	private CampaignService() {

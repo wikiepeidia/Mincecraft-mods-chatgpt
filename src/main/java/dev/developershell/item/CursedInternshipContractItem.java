@@ -1,5 +1,7 @@
 package dev.developershell.item;
 
+import dev.developershell.lecture.ArenaValidationResult;
+import dev.developershell.lecture.ArenaValidator;
 import dev.developershell.server.DevelopersHellRuntime.CampaignServiceAdapter;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -24,6 +26,7 @@ import net.minecraft.world.phys.BlockHitResult;
 
 public final class CursedInternshipContractItem extends Item {
 	private static final String WRONG_TARGET_KEY = "message.developers_hell.contract.find_lectern";
+	private static final String CAMPAIGN_DISABLED_KEY = "message.developers_hell.campaign.disabled";
 	private static final String LECTERN_TOOLTIP_KEY = "tooltip.developers_hell.contract.lectern";
 	private static final String LECTURE_TOOLTIP_KEY = "tooltip.developers_hell.contract.lecture";
 	private static final String BLOCKS_TOOLTIP_KEY = "tooltip.developers_hell.contract.blocks";
@@ -114,9 +117,30 @@ public final class CursedInternshipContractItem extends Item {
 		if (service == null) {
 			return InteractionResult.FAIL;
 		}
+		if (!service.campaignEnabled()) {
+			serverPlayer.sendSystemMessage(Component.translatable(CAMPAIGN_DISABLED_KEY));
+			return InteractionResult.FAIL;
+		}
 		Direction facing = state.getValue(LecternBlock.FACING);
-		return service.start(serverPlayer, hit.getBlockPos(), facing, stack)
-				? InteractionResult.SUCCESS_SERVER
-				: InteractionResult.FAIL;
+		ArenaValidationResult validation = ArenaValidator.validate(
+				(ServerLevel) level,
+				serverPlayer,
+				hit.getBlockPos(),
+				facing
+		);
+		if (validation instanceof ArenaValidationResult.Rejected rejected) {
+			serverPlayer.sendSystemMessage(Component.translatable(rejected.reason().translationKey()));
+			return InteractionResult.FAIL;
+		}
+		ArenaValidationResult start = service.start(
+				serverPlayer,
+				(ArenaValidationResult.Accepted) validation,
+				stack
+		);
+		if (start instanceof ArenaValidationResult.Rejected rejected) {
+			serverPlayer.sendSystemMessage(Component.translatable(rejected.reason().translationKey()));
+			return InteractionResult.FAIL;
+		}
+		return InteractionResult.SUCCESS_SERVER;
 	}
 }
