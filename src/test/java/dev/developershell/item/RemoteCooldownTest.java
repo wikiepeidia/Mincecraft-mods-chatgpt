@@ -9,6 +9,7 @@ import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignReducer;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
+import dev.developershell.lecture.RewardService;
 import java.util.Optional;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -110,6 +111,26 @@ final class RemoteCooldownTest {
 		assertTrue(InfiniteSlidesRemoteItem.VERTICAL_IMPULSE <= 0.25D);
 		assertTrue(InfiniteSlidesRemoteItem.MAX_CUE_PARTICLES > 0);
 		assertTrue(InfiniteSlidesRemoteItem.MAX_CUE_PARTICLES <= 16);
+	}
+
+	@Test
+	void readyCuePolicyRequiresAPresentRemoteAndYieldsToCriticalBossInstructions() {
+		assertEquals(
+				RewardService.ReadyCueDecision.ITEM_ABSENT,
+				RewardService.readyCueDecision(false, false)
+		);
+		assertEquals(
+				RewardService.ReadyCueDecision.ITEM_ABSENT,
+				RewardService.readyCueDecision(false, true)
+		);
+		assertEquals(
+				RewardService.ReadyCueDecision.DEFERRED,
+				RewardService.readyCueDecision(true, true)
+		);
+		assertEquals(
+				RewardService.ReadyCueDecision.PRESENT,
+				RewardService.readyCueDecision(true, false)
+		);
 	}
 
 	private static PlayerCampaignState passedState() {
