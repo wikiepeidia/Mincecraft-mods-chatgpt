@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 current_phase: 02
 current_phase_name: Persistent Lecture Vertical Slice
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-08-26T18:45:11.110Z"
+stopped_at: Completed 02-16-PLAN.md
+last_updated: "2026-08-26T19:00:31.178Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 02 execution started
-state_head: 97c6f62353b464187808cda27a3c682ef0e13499
+state_head: 18b273b3bbe44d4c4f2630016c5269733483c5ff
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 22
-  completed_plans: 10
+  completed_plans: 11
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-26)
 ## Current Position
 
 Phase: 02 (Persistent Lecture Vertical Slice) — EXECUTING
-Plan: 7 of 18
+Plan: 8 of 18
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 02 execution started
 
@@ -68,6 +68,7 @@ Progress: [████████████████████] 4/4 pla
 | Phase 02 P02 | 22 min | 2 tasks | 9 files |
 | Phase 02 P03 | 4min | 1 tasks | 8 files |
 | Phase 02 P04 | 25min | 2 tasks | 8 files |
+| Phase 02 P16 | 12min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Compose flat MapCodec groups to preserve established schema-1 field names beyond the 16-field builder limit.
 - [Phase 02]: Record encounter materialization failure as ABORT so attempt counters never roll back.
 - [Phase 02]: Persist replacement and mark SavedData dirty before CampaignService dispatches any effect.
+- [Phase 02]: Plan 02-16: Require paper and ink together in one local advancement, then reward exactly the namespaced Contract recipe.
+- [Phase 02]: Plan 02-16: Handle wrong-target Contract use with Fabric SUCCESS/SUCCESS_SERVER semantics, server-only localized guidance, and no consumption or persistence.
+- [Phase 02]: Plan 02-16: Feed recipe-assembled output into the retained lifecycle tracer and keep the separate discovery GameTest runtime-free.
 
 ### Pending Todos
 
@@ -117,6 +121,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-26T18:45:10.988Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-08-26T19:00:31.006Z
+Stopped at: Completed 02-16-PLAN.md
 Resume file: None
