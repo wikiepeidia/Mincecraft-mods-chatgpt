@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.developershell.campaign.CampaignEvent.EncounterTerminal;
 import dev.developershell.campaign.CampaignEvent.FallbackOperation;
 import dev.developershell.campaign.CampaignEvent.TerminalReason;
 import dev.developershell.campaign.CampaignTransition.EffectIntent;
@@ -269,6 +270,154 @@ final class CampaignReducerTest {
 				passed,
 				"no_active_encounter"
 		);
+	}
+
+	@Test
+	void everyFailureAndReloadRaceVictoryWithTheFirstPersistedTerminalWinning() {
+		CampaignEvent.Victory victory = new CampaignEvent.Victory(OWNER, ENCOUNTER);
+		List<TerminalCase> competingTerminals = competingTerminals();
+		assertEquals(TerminalReason.values().length + 1, competingTerminals.size());
+
+		for (TerminalCase terminalCase : competingTerminals) {
+			PlayerCampaignState active = activeState(OWNER, ENCOUNTER, PROFESSOR, 5);
+
+			CampaignTransition victoryFirst = CampaignReducer.reduce(Optional.of(active), victory);
+			assertAccepted(victoryFirst, "victory_accepted");
+			PlayerCampaignState passed = victoryFirst.nextState().orElseThrow();
+			assertEquals(PlayerCampaignState.LectureStatus.PASSED, passed.status(), terminalCase.name());
+			assertTrue(passed.sheetEntitled(), terminalCase.name());
+			assertTrue(passed.remoteIssued(), terminalCase.name());
+			assertEquals(List.of(
+					new EffectIntent.CleanupEncounter(OWNER, ENCOUNTER, "victory"),
+					new EffectIntent.GrantFirstRewards(OWNER)
+			), victoryFirst.intents(), terminalCase.name());
+			assertNoOp(
+					CampaignReducer.reduce(victoryFirst.nextState(), terminalCase.event()),
+					passed,
+					"no_active_encounter"
+			);
+
+			CampaignTransition failureFirst = CampaignReducer.reduce(
+					Optional.of(active),
+					terminalCase.event()
+			);
+			assertAccepted(failureFirst, terminalCase.acceptedReason());
+			PlayerCampaignState failed = failureFirst.nextState().orElseThrow();
+			assertEquals(PlayerCampaignState.LectureStatus.RETAKE_READY, failed.status(), terminalCase.name());
+			assertFalse(failed.sheetEntitled(), terminalCase.name());
+			assertFalse(failed.remoteIssued(), terminalCase.name());
+			assertEquals(
+					new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER),
+					failed.retakeKey().orElseThrow(),
+					terminalCase.name()
+			);
+			assertNoOp(
+					CampaignReducer.reduce(failureFirst.nextState(), victory),
+					failed,
+					"no_active_encounter"
+			);
+		}
+	}
+
+	@Test
+	void servicePersistsVictoryBeforeEffectsAndSuppressesLateReconciliation() {
+		PlayerCampaignState active = activeState(OWNER, ENCOUNTER, PROFESSOR, 5);
+		CampaignSavedData data = CampaignSavedData.createForTesting(java.util.Map.of(OWNER, active));
+		CampaignEvent.Victory victory = new CampaignEvent.Victory(OWNER, ENCOUNTER);
+		List<EffectIntent> dispatched = new ArrayList<>();
+		List<EffectIntent> reentrant = new ArrayList<>();
+
+		CampaignTransition accepted = CampaignService.applyTerminal(data, victory, effect -> {
+			PlayerCampaignState persisted = data.player(OWNER).orElseThrow();
+			assertEquals(PlayerCampaignState.LectureStatus.PASSED, persisted.status());
+			assertTrue(persisted.sheetEntitled());
+			assertTrue(persisted.remoteIssued());
+			dispatched.add(effect);
+			if (effect instanceof EffectIntent.CleanupEncounter) {
+				CampaignTransition lateCleanup = CampaignService.applyTerminal(
+						data,
+						new CampaignEvent.Terminal(OWNER, ENCOUNTER, TerminalReason.ENTITY_UNLOAD),
+						reentrant::add
+				);
+				assertNoOp(lateCleanup, persisted, "no_active_encounter");
+			}
+		});
+
+		assertAccepted(accepted, "victory_accepted");
+		PlayerCampaignState passed = accepted.nextState().orElseThrow();
+		assertEquals(List.of(
+				new EffectIntent.CleanupEncounter(OWNER, ENCOUNTER, "victory"),
+				new EffectIntent.GrantFirstRewards(OWNER)
+		), dispatched);
+		assertTrue(reentrant.isEmpty());
+
+		assertNoOp(
+				CampaignService.applyTerminal(data, victory, dispatched::add),
+				passed,
+				"no_active_encounter"
+		);
+		assertEquals(2, dispatched.size());
+
+		PlayerCampaignState.RetakeKey staleKey = new PlayerCampaignState.RetakeKey(OWNER, ENCOUNTER);
+		assertNoOp(
+				CampaignService.apply(
+						data,
+						new CampaignEvent.ReconcileRetake(OWNER, staleKey, FALLBACK),
+						dispatched::add
+				),
+				passed,
+				"retake_not_entitled"
+		);
+		assertNoOp(
+				CampaignService.apply(
+						data,
+						new CampaignEvent.RetakeFallback(
+								OWNER,
+								staleKey,
+								FALLBACK,
+								FallbackOperation.MATERIALIZED
+						),
+						dispatched::add
+				),
+				passed,
+				"retake_not_entitled"
+		);
+
+		CampaignEvent.RecoverSheet recover = new CampaignEvent.RecoverSheet(
+				OWNER,
+				passed.sheetRecoverySequence()
+		);
+		List<EffectIntent> recoveryEffects = new ArrayList<>();
+		CampaignTransition recovered = CampaignService.apply(data, recover, effect -> {
+			assertEquals(
+					passed.sheetRecoverySequence() + 1L,
+					data.player(OWNER).orElseThrow().sheetRecoverySequence()
+			);
+			recoveryEffects.add(effect);
+		});
+		assertAccepted(recovered, "sheet_recovery_accepted");
+		PlayerCampaignState recoveredState = recovered.nextState().orElseThrow();
+		assertEquals(
+				List.of(new EffectIntent.RecoverAttendanceSheet(OWNER, recoveredState.sheetRecoverySequence())),
+				recoveryEffects
+		);
+		assertNoOp(
+				CampaignService.apply(data, recover, recoveryEffects::add),
+				recoveredState,
+				"stale_sheet_recovery"
+		);
+		assertEquals(1, recoveryEffects.size());
+
+		CampaignTransition wrongOwner = CampaignService.apply(
+				data,
+				new CampaignEvent.RecoverSheet(OTHER_OWNER, recoveredState.sheetRecoverySequence()),
+				recoveryEffects::add
+		);
+		assertFalse(wrongOwner.accepted());
+		assertEquals(Optional.empty(), wrongOwner.nextState());
+		assertEquals("missing_state", wrongOwner.reason());
+		assertTrue(wrongOwner.intents().isEmpty());
+		assertEquals(1, recoveryEffects.size());
 	}
 
 	@Test
@@ -757,6 +906,26 @@ final class CampaignReducerTest {
 				encounterUuid,
 				professorUuid
 		);
+	}
+
+	private static List<TerminalCase> competingTerminals() {
+		List<TerminalCase> events = new ArrayList<>();
+		for (TerminalReason reason : TerminalReason.values()) {
+			events.add(new TerminalCase(
+					reason.serializedName(),
+					new CampaignEvent.Terminal(OWNER, ENCOUNTER, reason),
+					"terminal_" + reason.serializedName()
+			));
+		}
+		events.add(new TerminalCase(
+				"reload",
+				new CampaignEvent.NormalizeReload(OWNER, ENCOUNTER),
+				"reload_normalized"
+		));
+		return List.copyOf(events);
+	}
+
+	private record TerminalCase(String name, EncounterTerminal event, String acceptedReason) {
 	}
 
 	private static ArenaValidationResult.Accepted acceptedArena(BlockPos deskPos) {
