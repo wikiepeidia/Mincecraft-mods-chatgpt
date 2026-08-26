@@ -18,6 +18,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -550,14 +551,17 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		context.assertValueEqual(after.deskPos(), before.deskPos(), "recovery desk position");
 		context.assertValueEqual(after.deskFacing(), before.deskFacing(), "recovery desk facing");
 		context.assertValueEqual(after.retryPos(), before.retryPos(), "recovery retry position");
-		context.assertValueEqual(after.activeEncounterRef(), before.activeEncounterRef(), "recovery active encounter");
+		context.assertTrue(Objects.equals(after.activeEncounterRef(), before.activeEncounterRef()),
+				"recovery active encounter");
 		context.assertValueEqual(after.sheetEntitled(), before.sheetEntitled(), "recovery Sheet entitlement");
 		context.assertValueEqual(after.remoteIssued(), before.remoteIssued(), "recovery Remote ledger");
 		context.assertValueEqual(after.retakeEntitled(), before.retakeEntitled(), "recovery Retake entitlement");
-		context.assertValueEqual(after.retakeEncounterUuid(), before.retakeEncounterUuid(), "recovery Retake identity");
-		context.assertValueEqual(after.retakeFallbackReservationUuid(), before.retakeFallbackReservationUuid(),
+		context.assertTrue(Objects.equals(after.retakeEncounterUuid(), before.retakeEncounterUuid()),
+				"recovery Retake identity");
+		context.assertTrue(Objects.equals(
+				after.retakeFallbackReservationUuid(), before.retakeFallbackReservationUuid()),
 				"recovery Retake reservation");
-		context.assertValueEqual(after.retakeFallbackEntityUuid(), before.retakeFallbackEntityUuid(),
+		context.assertTrue(Objects.equals(after.retakeFallbackEntityUuid(), before.retakeFallbackEntityUuid()),
 				"recovery Retake fallback");
 		context.assertValueEqual(after.remoteCooldownUntilGameTime(), before.remoteCooldownUntilGameTime(),
 				"recovery Remote cooldown");

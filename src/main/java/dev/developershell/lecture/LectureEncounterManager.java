@@ -3,6 +3,7 @@ package dev.developershell.lecture;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.entity.HomeworkAddEntity;
 import dev.developershell.registry.ModEntities;
 import java.util.ArrayList;
@@ -166,6 +167,20 @@ public final class LectureEncounterManager {
 		return runtime == null ? Optional.empty() : Optional.of(runtime.professor);
 	}
 
+	/**
+	 * Consumes health changed by one admitted entity hit immediately. The exact runtime Professor
+	 * identity is required, so stale or manually-created entities can never reach victory.
+	 */
+	public static synchronized boolean onProfessorDamage(ModEntities.ProfessorEntity professor) {
+		java.util.Objects.requireNonNull(professor, "professor");
+		UUID encounterUuid = professor.encounterUuid();
+		LectureRuntime runtime = encounterUuid == null ? null : RUNTIMES.get(encounterUuid);
+		if (runtime == null || runtime.professor != professor || runtime.closed) {
+			return false;
+		}
+		return runtime.synchronizeProfessorDamage(runtime.lastObservedGameTime);
+	}
+
 	/** Immutable pure state view for tests/debugging; never exposes mutable runtime ownership. */
 	public static synchronized Optional<LectureStateMachine.State> combatState(UUID encounterUuid) {
 		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
@@ -226,7 +241,7 @@ public final class LectureEncounterManager {
 		if (runtime == null) {
 			return;
 		}
-		runtime.close(false);
+		runtime.close(true);
 	}
 
 	/** Idempotent materialized cleanup for failed starts and lifecycle teardown. */
@@ -276,6 +291,7 @@ public final class LectureEncounterManager {
 		private int homeworkAddsSpawned;
 		private boolean closed;
 		private boolean vulnerabilityOpen;
+		private long lastObservedGameTime;
 
 		private LectureRuntime(
 				ServerLevel level,
@@ -302,6 +318,7 @@ public final class LectureEncounterManager {
 			this.ownedEntities.add(professor);
 			this.rules = rules;
 			this.state = initialState;
+			this.lastObservedGameTime = startedAtGameTime;
 		}
 
 		private UUID encounterUuid() {
@@ -374,6 +391,7 @@ public final class LectureEncounterManager {
 			if (closed) {
 				return;
 			}
+			lastObservedGameTime = Math.max(lastObservedGameTime, observedGameTime);
 			maintainHomeworkAdd(observedGameTime);
 			synchronizeProfessorDamage(observedGameTime);
 			if (closed || !isCurrent(this)) {
@@ -390,11 +408,11 @@ public final class LectureEncounterManager {
 			applyOutput(output, observedGameTime);
 		}
 
-		private void synchronizeProfessorDamage(long observedGameTime) {
+		private boolean synchronizeProfessorDamage(long observedGameTime) {
 			int observedHealth = Math.max(0, Math.round(professor.getHealth()));
 			int acceptedDamage = state.bossHealth() - observedHealth;
 			if (acceptedDamage <= 0 || state.stage() == LectureStateMachine.Stage.COMPLETE) {
-				return;
+				return false;
 			}
 			LectureStateMachine.Output output = LectureStateMachine.step(
 					state,
@@ -406,6 +424,7 @@ public final class LectureEncounterManager {
 					)
 			);
 			applyOutput(output, observedGameTime);
+			return true;
 		}
 
 		private void applyOutput(LectureStateMachine.Output output, long observedGameTime) {
@@ -422,7 +441,7 @@ public final class LectureEncounterManager {
 					setVulnerabilityOpen(vulnerability.open());
 				}
 				else if (intent instanceof LectureStateMachine.Intent.Victory victory) {
-					CampaignService.victory(level, victory.ownerUuid(), victory.encounterUuid());
+					commitVictory(victory);
 				}
 			}
 			if (!closed && isCurrent(this)) {
@@ -434,6 +453,37 @@ public final class LectureEncounterManager {
 						professor.getMaxHealth()
 				);
 			}
+		}
+
+		private void commitVictory(LectureStateMachine.Intent.Victory victory) {
+			CampaignTransition transition = CampaignService.commitVictory(
+					level,
+					victory.ownerUuid(),
+					victory.encounterUuid(),
+					effect -> {
+					}
+			);
+			if (!transition.accepted()) {
+				LectureEncounterManager.cleanup(victory.encounterUuid());
+				return;
+			}
+			boolean matchingCleanup = transition.intents().stream().anyMatch(effect ->
+					effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup
+							&& cleanup.ownerUuid().equals(victory.ownerUuid())
+							&& cleanup.encounterUuid().equals(victory.encounterUuid())
+							&& cleanup.reason().equals("victory")
+			);
+			if (!matchingCleanup) {
+				LectureEncounterManager.cleanup(victory.encounterUuid());
+				return;
+			}
+			RewardService.reconcileVictory(
+					level,
+					victory.ownerUuid(),
+					victory.encounterUuid(),
+					transition
+			);
+			LectureEncounterManager.finishVictory(victory.encounterUuid());
 		}
 
 		private LectureGeometry.LocalPosition ownerLocalPosition() {

@@ -1,6 +1,7 @@
 package dev.developershell.registry;
 
 import dev.developershell.item.CursedInternshipContractItem;
+import dev.developershell.item.AttendanceSheetItem;
 import dev.developershell.item.RetakeFormItem;
 import java.util.function.Function;
 import net.minecraft.core.Registry;
@@ -22,8 +23,11 @@ public final class ModItems {
 			RetakeFormItem::new,
 			new Item.Properties().stacksTo(1)
 	);
-	public static final Item ATTENDANCE_SHEET =
-			register(ModItemIds.ATTENDANCE_SHEET, Item::new, new Item.Properties());
+	public static final AttendanceSheetItem ATTENDANCE_SHEET = register(
+			ModItemIds.ATTENDANCE_SHEET,
+			AttendanceSheetItem::new,
+			new Item.Properties().stacksTo(1)
+	);
 	public static final Item INFINITE_SLIDES_REMOTE =
 			register(ModItemIds.INFINITE_SLIDES_REMOTE, Item::new, new Item.Properties().stacksTo(1));
 

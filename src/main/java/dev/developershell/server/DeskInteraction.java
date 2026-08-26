@@ -3,6 +3,7 @@ package dev.developershell.server;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.RetakeFormItem;
+import dev.developershell.lecture.RewardService;
 import dev.developershell.lecture.RetakeService;
 import java.util.Optional;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -24,12 +25,16 @@ public final class DeskInteraction {
 	private static final String FALLBACK_KEY = "message.developers_hell.retake.fallback";
 	private static final String ALREADY_KEY = "message.developers_hell.retake.already";
 	private static final String NOTHING_KEY = "message.developers_hell.retake.nothing";
+	private static final String SHEET_RECOVERED_KEY = "message.developers_hell.attendance_sheet.recovered";
+	private static final String SHEET_ALREADY_KEY = "message.developers_hell.attendance_sheet.already";
+	private static final String SHEET_NOTHING_KEY = "message.developers_hell.attendance_sheet.nothing";
 	private static boolean registered;
 
 	public static synchronized void register() {
 		if (registered) {
 			return;
 		}
+		RewardService.registerSheetLifecycle();
 		UseBlockCallback.EVENT.register(DeskInteraction::interact);
 		registered = true;
 	}
@@ -69,18 +74,40 @@ public final class DeskInteraction {
 				&& serverLevel.dimension().equals(Level.OVERWORLD)
 				&& state.deskPos().equals(hit.getBlockPos())
 				&& state.deskFacing() == block.getValue(LecternBlock.FACING);
-		if (!matchingDesk || state.status() != PlayerCampaignState.LectureStatus.RETAKE_READY) {
-			serverPlayer.sendSystemMessage(Component.translatable(NOTHING_KEY));
+		if (!matchingDesk) {
+			serverPlayer.sendSystemMessage(Component.translatable(
+					state.status() == PlayerCampaignState.LectureStatus.PASSED
+							? SHEET_NOTHING_KEY
+							: NOTHING_KEY
+			));
 			return InteractionResult.SUCCESS_SERVER;
 		}
 
-		RetakeService.Outcome outcome = RetakeService.forLevel(serverLevel).recover(player.getUUID());
-		String messageKey = switch (outcome) {
-			case INVENTORY_ISSUED -> RECOVERED_KEY;
-			case FALLBACK_ISSUED -> FALLBACK_KEY;
-			case ALREADY_PRESENT -> ALREADY_KEY;
-			default -> NOTHING_KEY;
-		};
+		String messageKey;
+		if (state.status() == PlayerCampaignState.LectureStatus.RETAKE_READY) {
+			RetakeService.Outcome outcome = RetakeService.forLevel(serverLevel).recover(player.getUUID());
+			messageKey = switch (outcome) {
+				case INVENTORY_ISSUED -> RECOVERED_KEY;
+				case FALLBACK_ISSUED -> FALLBACK_KEY;
+				case ALREADY_PRESENT -> ALREADY_KEY;
+				default -> NOTHING_KEY;
+			};
+		}
+		else if (state.status() == PlayerCampaignState.LectureStatus.PASSED) {
+			RewardService.Outcome outcome = RewardService.recoverSheet(
+					serverPlayer,
+					hit.getBlockPos(),
+					block.getValue(LecternBlock.FACING)
+			);
+			messageKey = switch (outcome) {
+				case SHEET_RECOVERED, SHEET_FALLBACK_RECOVERED -> SHEET_RECOVERED_KEY;
+				case ALREADY_PRESENT -> SHEET_ALREADY_KEY;
+				default -> SHEET_NOTHING_KEY;
+			};
+		}
+		else {
+			messageKey = NOTHING_KEY;
+		}
 		serverPlayer.sendSystemMessage(Component.translatable(messageKey));
 		return InteractionResult.SUCCESS_SERVER;
 	}

@@ -119,40 +119,17 @@ public final class CampaignService {
 	}
 
 	/**
-	 * Compatibility wrapper that projects the accepted first-reward intent through the existing
-	 * direct inventory path. Plan 17 may consume {@link #commitVictory} instead without losing the
-	 * accepted/no-op result that owns physical reconciliation.
+	 * Deauthorized source-compatibility seam. Victory must flow from the live encounter manager
+	 * through {@link #commitVictory}; calling this method never writes state or dispatches effects.
+	 *
+	 * @deprecated use {@link #commitVictory} only from the manager-owned final-window transition
 	 */
+	@Deprecated(forRemoval = true)
 	public static boolean victory(ServerLevel level, UUID ownerUuid, UUID encounterUuid) {
 		java.util.Objects.requireNonNull(level, "level");
 		java.util.Objects.requireNonNull(ownerUuid, "ownerUuid");
 		java.util.Objects.requireNonNull(encounterUuid, "encounterUuid");
-		if (!level.getServer().isSameThread()) {
-			return false;
-		}
-		Optional<ServerPlayer> participant = LectureEncounterManager.participant(encounterUuid);
-		if (participant.isEmpty()
-				|| !participant.get().getUUID().equals(ownerUuid)
-				|| participant.get().level() != level) {
-			return false;
-		}
-
-		ServerPlayer player = participant.get();
-		CampaignTransition transition = commitVictory(
-				level,
-				ownerUuid,
-				encounterUuid,
-				effect -> {
-					if (effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
-						LectureEncounterManager.finishVictory(cleanup.encounterUuid());
-					}
-					else if (effect instanceof CampaignTransition.EffectIntent.GrantFirstRewards) {
-						player.getInventory().add(new ItemStack(ModItems.ATTENDANCE_SHEET));
-						player.getInventory().add(new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
-					}
-				}
-		);
-		return transition.accepted();
+		return false;
 	}
 
 	/**

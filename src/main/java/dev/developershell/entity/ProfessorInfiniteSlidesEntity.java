@@ -32,7 +32,6 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 	private UUID ownerUuid;
 	private UUID encounterUuid;
 	private boolean vulnerabilityOpen;
-	private boolean victoryCommitted;
 	private boolean loadedFromDisk;
 
 	public ProfessorInfiniteSlidesEntity(EntityType<? extends Vindicator> type, Level level) {
@@ -49,7 +48,6 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 		}
 		setHealth(LectureRules.standard().bossMaxHealth());
 		vulnerabilityOpen = false;
-		victoryCommitted = false;
 		setNoAi(true);
 	}
 
@@ -77,7 +75,7 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 
 	@Override
 	public void setVulnerabilityOpen(boolean vulnerabilityOpen) {
-		this.vulnerabilityOpen = vulnerabilityOpen && !victoryCommitted && getHealth() > 0.0F;
+		this.vulnerabilityOpen = vulnerabilityOpen && getHealth() > 0.0F;
 	}
 
 	@Override
@@ -112,6 +110,7 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 		if (!damaged) {
 			return false;
 		}
+		LectureEncounterManager.onProfessorDamage(this);
 		if (!isRemoved() && getHealth() < admission.thresholdHealth()) {
 			setHealth(admission.thresholdHealth());
 		}
@@ -123,18 +122,8 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 
 	@Override
 	public void die(DamageSource source) {
-		if (!(level() instanceof ServerLevel serverLevel) || ownerUuid == null || encounterUuid == null) {
-			return;
-		}
-		if (!victoryCommitted) {
-			victoryCommitted = CampaignService.victory(serverLevel, ownerUuid, encounterUuid);
-		}
-		if (!victoryCommitted) {
-			setHealth(Math.max(1.0F, getHealth()));
-			return;
-		}
-		super.die(source);
-		discard();
+		// Entity death is deliberately inert. The manager consumes accepted damage synchronously,
+		// commits the matching campaign victory, then owns cleanup of this exact runtime entity.
 	}
 
 	@Override
@@ -142,7 +131,6 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 		super.readAdditionalSaveData(input);
 		loadedFromDisk = true;
 		vulnerabilityOpen = false;
-		victoryCommitted = false;
 		UUID persistedOwner = input.read(OWNER_SAVE_KEY, UUIDUtil.CODEC).orElse(null);
 		UUID persistedEncounter = input.read(ENCOUNTER_SAVE_KEY, UUIDUtil.CODEC).orElse(null);
 		if (persistedOwner == null || persistedEncounter == null) {
