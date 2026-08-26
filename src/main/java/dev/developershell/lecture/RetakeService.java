@@ -78,13 +78,13 @@ public final class RetakeService {
 			ArenaValidationResult.Accepted arena,
 			UUID encounterUuid,
 			UUID professorUuid,
-			Consumer<CampaignTransition.EffectIntent> effectConsumer
+			StartRuntimePort runtime
 	) {
 		Objects.requireNonNull(ownerUuid, "ownerUuid");
 		Objects.requireNonNull(arena, "arena");
 		Objects.requireNonNull(encounterUuid, "encounterUuid");
 		Objects.requireNonNull(professorUuid, "professorUuid");
-		Objects.requireNonNull(effectConsumer, "effectConsumer");
+		Objects.requireNonNull(runtime, "runtime");
 
 		Optional<PlayerCampaignState> current = campaign.state(ownerUuid);
 		if (current.isEmpty()) {
@@ -97,10 +97,13 @@ public final class RetakeService {
 		}
 		PlayerCampaignState.RetakeKey key = keyView.get();
 		boolean inventoryPresent = representations.hasInventoryForm(key);
+		UUID reservationUuid = state.retakeFallbackReservationUuid();
+		boolean reservationPresent = reservationUuid != null
+				&& representations.hasFallback(key, reservationUuid);
 		UUID fallbackUuid = state.retakeFallbackEntityUuid();
 		boolean fallbackPresent = fallbackUuid != null
 				&& representations.hasFallback(key, fallbackUuid);
-		if (!inventoryPresent && !fallbackPresent) {
+		if (!inventoryPresent && !reservationPresent && !fallbackPresent) {
 			return Outcome.REPRESENTATION_MISSING;
 		}
 
@@ -115,17 +118,70 @@ public final class RetakeService {
 				professorUuid,
 				key
 		);
-		CampaignTransition transition = campaign.apply(start, effectConsumer);
+		boolean[] runtimeIntentSeen = {false};
+		boolean[] runtimeStarted = {false};
+		CampaignTransition transition = campaign.apply(start, effect -> {
+			if (effect instanceof CampaignTransition.EffectIntent.StartEncounter startIntent
+					&& startIntent.encounter().ownerUuid().equals(ownerUuid)
+					&& startIntent.encounter().encounterUuid().equals(encounterUuid)) {
+				runtimeIntentSeen[0] = true;
+				runtimeStarted[0] = runtime.start(startIntent);
+			}
+		});
 		if (!transition.accepted()) {
 			return Outcome.RETRY_REJECTED;
 		}
+		if (!runtimeIntentSeen[0] || !runtimeStarted[0]) {
+			CampaignTransition compensated = campaign.apply(
+					new CampaignEvent.Terminal(
+							ownerUuid,
+							encounterUuid,
+							CampaignEvent.TerminalReason.ABORT
+					),
+					IGNORE_EFFECT
+			);
+			if (!compensated.accepted()) {
+				return Outcome.STALE_STATE;
+			}
+			clearPhysicalRepresentations(
+					key,
+					inventoryPresent,
+					reservationPresent,
+					reservationUuid,
+					fallbackPresent,
+					fallbackUuid
+			);
+			ensureRepresentation(ownerUuid);
+			return Outcome.RUNTIME_START_FAILED;
+		}
+		clearPhysicalRepresentations(
+				key,
+				inventoryPresent,
+				reservationPresent,
+				reservationUuid,
+				fallbackPresent,
+				fallbackUuid
+		);
+		return Outcome.RETRY_ACCEPTED;
+	}
+
+	private void clearPhysicalRepresentations(
+			PlayerCampaignState.RetakeKey key,
+			boolean inventoryPresent,
+			boolean reservationPresent,
+			UUID reservationUuid,
+			boolean fallbackPresent,
+			UUID fallbackUuid
+	) {
 		if (inventoryPresent) {
 			representations.consumeInventoryForm(key);
 		}
-		if (fallbackPresent) {
+		if (reservationPresent) {
+			representations.discardFallback(key, reservationUuid);
+		}
+		if (fallbackPresent && !Objects.equals(fallbackUuid, reservationUuid)) {
 			representations.discardFallback(key, fallbackUuid);
 		}
-		return Outcome.RETRY_ACCEPTED;
 	}
 
 	private Outcome ensureRepresentation(UUID ownerUuid) {
@@ -272,7 +328,17 @@ public final class RetakeService {
 				),
 				IGNORE_EFFECT
 		);
-		return committed.accepted() ? Outcome.FALLBACK_ISSUED : Outcome.STALE_STATE;
+		if (committed.accepted()) {
+			return Outcome.FALLBACK_ISSUED;
+		}
+		boolean stillTracked = campaign.state(key.ownerUuid())
+				.map(current -> fallbackUuid.equals(current.retakeFallbackReservationUuid())
+						|| fallbackUuid.equals(current.retakeFallbackEntityUuid()))
+				.orElse(false);
+		if (!stillTracked) {
+			representations.discardFallback(key, fallbackUuid);
+		}
+		return Outcome.STALE_STATE;
 	}
 
 	public enum Outcome {
@@ -284,7 +350,14 @@ public final class RetakeService {
 		STALE_STATE,
 		REPRESENTATION_MISSING,
 		RETRY_ACCEPTED,
-		RETRY_REJECTED
+		RETRY_REJECTED,
+		RUNTIME_START_FAILED
+	}
+
+	/** Runtime materialization result for the already-persisted immutable START intent. */
+	@FunctionalInterface
+	public interface StartRuntimePort {
+		boolean start(CampaignTransition.EffectIntent.StartEncounter intent);
 	}
 
 	/** Durable campaign access, injected in tests and bound to CampaignService in production. */
