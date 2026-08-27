@@ -677,6 +677,9 @@ public final class RewardService {
 			AttendanceSheetItem.Binding binding
 	) {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.getUUID().equals(binding.ownerUuid())) {
+				continue;
+			}
 			for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
 				if (AttendanceSheetItem.binding(player.getInventory().getItem(slot))
 						.filter(binding::equals).isPresent()) {
@@ -694,6 +697,9 @@ public final class RewardService {
 			InfiniteSlidesRemoteItem.Binding binding
 	) {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.getUUID().equals(binding.ownerUuid())) {
+				continue;
+			}
 			for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
 				if (InfiniteSlidesRemoteItem.binding(player.getInventory().getItem(slot))
 						.filter(binding::equals).isPresent()) {

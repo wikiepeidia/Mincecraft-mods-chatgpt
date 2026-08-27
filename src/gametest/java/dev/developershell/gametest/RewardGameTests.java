@@ -608,6 +608,112 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest(maxTicks = 100, padding = 24)
+	public void intruderExactBindingsCannotAcknowledgeOwnerDelivery(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1709), desk, level.getGameTime());
+		UUID intruderUuid = invocationOwnerUuid(owner(9709), desk, level.getGameTime());
+		ConnectedPlayer ownerConnection = null;
+		ConnectedPlayer intruderConnection = null;
+		try {
+			buildArena(level, desk, FACING);
+			ownerConnection = createSurvivalPlayer(context, ownerUuid, "reward-holder-owner");
+			intruderConnection = createSurvivalPlayer(context, intruderUuid, "reward-holder-intruder");
+			RecordingServerPlayer owner = ownerConnection.player();
+			RecordingServerPlayer intruder = intruderConnection.player();
+			PlayerCampaignState pending = persistPendingVictory(context, owner, desk, FACING);
+			intruder.getInventory().setItem(0, AttendanceSheetItem.bound(
+					new AttendanceSheetItem.Binding(ownerUuid, pending.sheetRecoverySequence())));
+			intruder.getInventory().setItem(1, InfiniteSlidesRemoteItem.bound(
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, pending.remoteProjectionUuid())));
+
+			context.assertValueEqual(
+					RewardServiceGameTestAccess.reconcilePending(owner, ignored -> true),
+					RewardService.Outcome.MATERIALIZATION_FAILED,
+					"intruder-held exact bindings cannot acknowledge failed owner delivery"
+			);
+			context.assertValueEqual(state(level, ownerUuid), pending,
+					"intruder inventory leaves both owner projections durably pending");
+			context.assertValueEqual(countBoundSheets(owner, ownerUuid, pending.sheetRecoverySequence()), 0,
+					"the owner still has no Sheet representation after the forced failure");
+			context.assertValueEqual(countBoundRemotes(owner, ownerUuid, pending.remoteProjectionUuid()), 0,
+					"the owner still has no Remote representation after the forced failure");
+
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.INVENTORY_ISSUED,
+					"normal retry delivers both projections to their binding owner");
+			PlayerCampaignState complete = state(level, ownerUuid);
+			context.assertFalse(complete.sheetProjectionPending(),
+					"owner-held Sheet confirms after physical delivery");
+			context.assertFalse(complete.remoteProjectionPending(),
+					"owner-held Remote confirms after physical delivery");
+			context.assertValueEqual(countBoundSheets(owner, ownerUuid, complete.sheetRecoverySequence()), 1,
+					"the owner receives one exact Sheet despite the intruder copy");
+			context.assertValueEqual(countBoundRemotes(owner, ownerUuid, complete.remoteProjectionUuid()), 1,
+					"the owner receives one exact Remote despite the intruder copy");
+			context.assertValueEqual(countBoundSheets(intruder, ownerUuid, pending.sheetRecoverySequence()), 1,
+					"the intruder's mutable Sheet tag never becomes owner authority");
+			context.assertValueEqual(countBoundRemotes(intruder, ownerUuid, pending.remoteProjectionUuid()), 1,
+					"the intruder's mutable Remote tag never becomes owner authority");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(intruderConnection);
+			close(ownerConnection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void intruderExactSheetCannotBlockOwnerRecovery(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1714), desk, level.getGameTime());
+		UUID intruderUuid = invocationOwnerUuid(owner(9714), desk, level.getGameTime());
+		ConnectedPlayer ownerConnection = null;
+		ConnectedPlayer intruderConnection = null;
+		try {
+			buildArena(level, desk, FACING);
+			ownerConnection = createSurvivalPlayer(context, ownerUuid, "sheet-holder-owner");
+			RecordingServerPlayer owner = ownerConnection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.INVENTORY_ISSUED,
+					"recovery fixture first completes the owner's reward delivery");
+			PlayerCampaignState passed = state(level, ownerUuid);
+			removeBoundSheets(level.getServer(), ownerUuid);
+
+			intruderConnection = createSurvivalPlayer(context, intruderUuid, "sheet-holder-intruder");
+			RecordingServerPlayer intruder = intruderConnection.player();
+			intruder.getInventory().setItem(0, AttendanceSheetItem.bound(
+					new AttendanceSheetItem.Binding(ownerUuid, passed.sheetRecoverySequence())));
+			owner.clearRecordedSystemMessages();
+			context.assertValueEqual(useEmptyHand(level, owner, desk), InteractionResult.SUCCESS_SERVER,
+					"intruder-held exact binding cannot block matching-owner Desk recovery");
+
+			PlayerCampaignState recovered = state(level, ownerUuid);
+			context.assertValueEqual(recovered.sheetRecoverySequence(), passed.sheetRecoverySequence() + 1L,
+					"owner recovery advances to a fresh Sheet generation");
+			context.assertFalse(recovered.sheetProjectionPending(),
+					"the fresh owner-held Sheet confirms normally");
+			context.assertValueEqual(countBoundSheets(owner, ownerUuid, recovered.sheetRecoverySequence()), 1,
+					"recovery delivers one fresh Sheet to the owner");
+			context.assertValueEqual(countBoundSheets(intruder, ownerUuid, passed.sheetRecoverySequence()), 1,
+					"the intruder's old mutable binding remains non-authoritative");
+			context.assertValueEqual(countBoundRemotes(owner, ownerUuid, recovered.remoteProjectionUuid()), 1,
+					"Sheet recovery never duplicates the owner's Remote");
+			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(RECOVERED_KEY),
+					"owner recovery reports the exact recovered result, not already-present");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(intruderConnection);
+			close(ownerConnection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
 	public void sheetSuccessRemoteFailureRetriesOnlyRemoteOnJoin(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(RELATIVE_DESK);
