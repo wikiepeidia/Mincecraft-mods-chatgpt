@@ -27,6 +27,8 @@ $script:ServerRunRelativePath = 'run/production-server'
 $script:TestManifestRelativePath = 'scripts/lecture-test-manifest.json'
 $script:UnitTestReportRelativePath = 'build/test-results/test'
 $script:GameTestReportRelativePath = 'build/test-results/gametest/TEST-gametest.xml'
+$script:EvidenceBlockStart = '<!-- DEVELOPERS_HELL_PHASE2_EVIDENCE_V1_BEGIN -->'
+$script:EvidenceBlockEnd = '<!-- DEVELOPERS_HELL_PHASE2_EVIDENCE_V1_END -->'
 $script:RequiredAutomatedRows = @('02-CFG-01','02-STATE-01','02-GEO-01','02-ITEM-01','02-BOSS-01','02-LIFE-01','02-REWARD-01','02-DISC-01','02-GATE-01')
 $script:ManualRows = @(
     'MANUAL-UI-01',
@@ -625,14 +627,54 @@ function Assert-EvidenceContract {
     )
     if ($DistributionHash -notmatch '^[0-9a-fA-F]{64}$') { throw 'Distribution hash is not SHA-256.' }
     $normalizedHash = $DistributionHash.ToLowerInvariant()
-    foreach ($marker in @('source_jar_sha256','build_jar_sha256','distribution_sha256')) {
-        if ((Get-EvidenceMarker -Text $EvidenceText -Name $marker).ToLowerInvariant() -cne $normalizedHash) {
-            throw "Evidence hash mismatch: $marker"
-        }
+    $fields = Get-StructuredEvidenceFields -Text $EvidenceText
+    if ([string]$fields['evidence_schema'] -cne 'developers_hell_phase2_v1') { throw 'Evidence schema identity is not exact.' }
+    $timestamp = [string]$fields['evidence_timestamp_utc']
+    if ($timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.]\d{7}Z$') { throw 'Evidence timestamp is not canonical UTC round-trip format.' }
+    try { [void][DateTime]::ParseExact($timestamp, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+    catch { throw 'Evidence timestamp is not a valid UTC timestamp.' }
+    $exactFields = [ordered]@{
+        java_runtime = 'Eclipse Temurin 25.0.4+7 checksum-bound'
+        gradle_command = 'gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle'
+        gradle_transaction_exit = '0'
+        foundation_audit_command = 'powershell.exe scripts/audit-foundation.ps1 -SourceAndDependencies -JarPath build/libs/developers-hell-0.1.0.jar'
+        foundation_audit_exit = '0'
+        foundation_audit_status = 'PASS'
+        production_server_profile = 'local_automated_loopback_offline_no_query_no_rcon_no_resource_pack'
+        hash_equality_status = 'PASS'
+        hash_equality_detail = 'source_build_distribution_sha256_equal'
+        source_archive_audit_status = 'PASS'
+        source_archive_audit_detail = 'dependency_source_archive_policy'
+        phase2_archive_audit_status = 'PASS'
+        phase2_archive_audit_detail = 'production_contract_present_forbidden_residue_absent'
+        server_ready_status = 'PASS'
+        server_ready_detail = $script:ExpectedReadyMarker
+        server_stop_cleanup_status = 'PASS'
+        server_stop_cleanup_detail = $script:ExpectedStopCleanupMarker
+        server_ordered_shutdown_status = 'PASS'
+        server_ordered_shutdown_detail = 'first_tick_then_cleanup_then_stop_then_all_dimensions_saved'
+        production_server_exit = '0'
+        clean_exit_status = 'PASS'
+        clean_exit_detail = 'production_server_exit_zero'
+        owned_child_cleanup_status = 'PASS'
+        owned_child_cleanup_detail = 'zero_owned_child_residue'
     }
-    foreach ($marker in @('gradle_transaction_exit','foundation_audit_exit','production_server_exit')) {
-        if ((Get-EvidenceMarker -Text $EvidenceText -Name $marker) -cne '0') { throw "Evidence exit is not zero: $marker" }
+    foreach ($entry in $exactFields.GetEnumerator()) {
+        if ([string]$fields[[string]$entry.Key] -cne [string]$entry.Value) { throw "Evidence field is not the exact allowed value: $($entry.Key)" }
     }
+    foreach ($field in @('source_jar_sha256','build_jar_sha256','distribution_sha256')) {
+        if ([string]$fields[$field] -cne $normalizedHash) { throw "Evidence hash mismatch: $field" }
+    }
+    foreach ($field in @('gradle_log_sha256','foundation_audit_log_sha256','ordinary_jar_entries_sha256','production_server_log_sha256')) {
+        if ([string]$fields[$field] -notmatch '^[0-9a-f]{64}$') { throw "Evidence hash field is not canonical SHA-256: $field" }
+    }
+    if ([string]$fields['previous_distribution_sha256'] -cne 'absent' -and [string]$fields['previous_distribution_sha256'] -notmatch '^[0-9a-f]{64}$') {
+        throw 'Previous distribution hash is neither absent nor canonical SHA-256.'
+    }
+    foreach ($field in @('ordinary_jar_size','ordinary_jar_entries','owned_server_root_pid')) {
+        if ([string]$fields[$field] -notmatch '^[1-9][0-9]*$') { throw "Evidence positive integer field is invalid: $field" }
+    }
+    if ([string]$fields['owned_child_count'] -notmatch '^[0-9]+$') { throw 'Evidence owned-child count is invalid.' }
     $receiptMarkers = [ordered]@{
         test_manifest_sha256 = [string]$Manifest.Sha256
         unit_test_report_files = [string]$TestReceipts.UnitFiles
@@ -649,13 +691,9 @@ function Assert-EvidenceContract {
         gametest_receipt_sha256 = [string]$TestReceipts.GameTestSha256
     }
     foreach ($entry in $receiptMarkers.GetEnumerator()) {
-        if ((Get-EvidenceMarker -Text $EvidenceText -Name ([string]$entry.Key)) -cne [string]$entry.Value) {
+        if ([string]$fields[[string]$entry.Key] -cne [string]$entry.Value) {
             throw "Evidence execution receipt mismatch: $($entry.Key)"
         }
-    }
-    foreach ($marker in @('server_ready','server_stop_cleanup_callback','server_ordered_shutdown','clean_exit','owned_child_cleanup','source_archive_audit','phase2_archive_audit','hash_equality')) {
-        $value = Get-EvidenceMarker -Text $EvidenceText -Name $marker
-        if ($value -notmatch '(?i)(?:PASS|equal|clean|zero)') { throw "Evidence PASS marker is not green: $marker" }
     }
     $rows = @($ValidationRows)
     if ($rows.Count -ne $script:RequiredAutomatedRows.Count) { throw 'Evidence validation-row receipt count is not exact.' }
@@ -663,9 +701,11 @@ function Assert-EvidenceContract {
         if ([string]$row.Status -cne 'PASS' -or [string]$row.Sha256 -notmatch '^[0-9a-f]{64}$') { throw "Validation row receipt is not green and canonical: $($row.Id)" }
         $receipt = 'unit=' + $row.UnitCount + '; gametest=' + $row.GameTestCount + '; gates=' + $row.Gates + '; receipt_sha256=' + $row.Sha256
         $expectedLine = '| ' + $row.Id + ' | ' + $row.Description + ' | ' + $receipt + ' | PASS |'
-        $matches = [regex]::Matches($EvidenceText, '(?m)^' + [regex]::Escape($expectedLine) + '$')
+        $matches = [regex]::Matches($EvidenceText, '(?m)^' + [regex]::Escape($expectedLine) + '\r?$')
         if ($matches.Count -ne 1) { throw "Automated evidence row must match its measured receipt exactly: $($row.Id)" }
     }
+    $allAutomated = [regex]::Matches($EvidenceText, '(?m)^\|[ \t]+02-[A-Z]+-[0-9]+[ \t]+\|')
+    if ($allAutomated.Count -ne $script:RequiredAutomatedRows.Count) { throw 'Evidence must contain exactly the nine reviewed automated receipt rows.' }
     foreach ($row in $script:ManualRows) {
         $matches = [regex]::Matches($EvidenceText, '(?m)^\|\s*' + [regex]::Escape($row) + '\s*\|[^\r\n]*\|\s*PENDING\s*\|\s*$')
         if ($matches.Count -ne 1) { throw "Manual backstop row must appear once as PENDING: $row" }
@@ -1052,6 +1092,91 @@ function New-SyntheticLectureArchive {
     }
 }
 
+function Get-ExpectedStructuredEvidenceFields {
+    return @(
+        'evidence_schema',
+        'evidence_timestamp_utc',
+        'java_runtime',
+        'gradle_command',
+        'gradle_transaction_exit',
+        'gradle_log_sha256',
+        'foundation_audit_command',
+        'foundation_audit_exit',
+        'foundation_audit_status',
+        'foundation_audit_log_sha256',
+        'test_manifest_sha256',
+        'unit_test_report_files',
+        'unit_receipt_count',
+        'unit_receipt_failures',
+        'unit_receipt_errors',
+        'unit_receipt_skipped',
+        'unit_receipt_sha256',
+        'gametest_report_files',
+        'gametest_receipt_count',
+        'gametest_receipt_failures',
+        'gametest_receipt_errors',
+        'gametest_receipt_skipped',
+        'gametest_receipt_sha256',
+        'ordinary_jar_size',
+        'ordinary_jar_entries',
+        'ordinary_jar_entries_sha256',
+        'production_server_profile',
+        'previous_distribution_sha256',
+        'source_jar_sha256',
+        'build_jar_sha256',
+        'distribution_sha256',
+        'hash_equality_status',
+        'hash_equality_detail',
+        'source_archive_audit_status',
+        'source_archive_audit_detail',
+        'phase2_archive_audit_status',
+        'phase2_archive_audit_detail',
+        'server_ready_status',
+        'server_ready_detail',
+        'server_stop_cleanup_status',
+        'server_stop_cleanup_detail',
+        'server_ordered_shutdown_status',
+        'server_ordered_shutdown_detail',
+        'production_server_exit',
+        'clean_exit_status',
+        'clean_exit_detail',
+        'owned_server_root_pid',
+        'owned_child_count',
+        'owned_child_cleanup_status',
+        'owned_child_cleanup_detail',
+        'production_server_log_sha256'
+    )
+}
+
+function Get-StructuredEvidenceFields {
+    param([Parameter(Mandatory)][string] $Text)
+    if ([regex]::Matches($Text, '(?m)^' + [regex]::Escape($script:EvidenceBlockStart) + '\s*$').Count -ne 1 -or
+        [regex]::Matches($Text, '(?m)^' + [regex]::Escape($script:EvidenceBlockEnd) + '\s*$').Count -ne 1) {
+        throw 'Evidence machine-block delimiters must each appear exactly once.'
+    }
+    $pattern = '(?ms)^' + [regex]::Escape($script:EvidenceBlockStart) + '\r?\n(?<body>.*?)^' + [regex]::Escape($script:EvidenceBlockEnd) + '\s*$'
+    $blocks = [regex]::Matches($Text, $pattern)
+    if ($blocks.Count -ne 1) { throw 'Evidence must contain exactly one structured machine block.' }
+    $block = $blocks[0]
+    $body = $block.Groups['body'].Value.TrimEnd("`r", "`n")
+    $lines = @([regex]::Split($body, '\r?\n'))
+    $expected = Get-ExpectedStructuredEvidenceFields
+    if ($lines.Count -ne $expected.Count) { throw 'Structured evidence field count is not exact.' }
+    $fields = [ordered]@{}
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $match = [regex]::Match($lines[$index], '^(?<name>[a-z][a-z0-9_]*): (?<value>[^\r\n]+)$')
+        if (-not $match.Success) { throw 'Structured evidence line does not match the exact field grammar.' }
+        $name = $match.Groups['name'].Value
+        $value = $match.Groups['value'].Value
+        if ($name -cne $expected[$index]) { throw 'Structured evidence fields are missing, unknown, duplicated, or out of canonical order.' }
+        if ($fields.Contains($name)) { throw "Structured evidence field is duplicated: $name" }
+        $fields.Add($name, $value)
+    }
+    $outside = $Text.Remove($block.Index, $block.Length)
+    if ($outside -match '(?m)^[ \t]*[A-Za-z][A-Za-z0-9_]*:\s') { throw 'Evidence contains a machine-style field outside the structured block.' }
+    return $fields
+}
+
 function Write-SyntheticTestcaseXml {
     param(
         [Parameter(Mandatory)][System.Xml.XmlWriter] $Writer,
@@ -1148,12 +1273,17 @@ function New-SyntheticEvidenceText {
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
         '# Phase 2 Lecture Evidence',
-        "source_jar_sha256: $Hash",
-        "build_jar_sha256: $Hash",
-        "distribution_sha256: $Hash",
+        $script:EvidenceBlockStart,
+        'evidence_schema: developers_hell_phase2_v1',
+        'evidence_timestamp_utc: 2026-01-01T00:00:00.0000000Z',
+        'java_runtime: Eclipse Temurin 25.0.4+7 checksum-bound',
+        'gradle_command: gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle',
         'gradle_transaction_exit: 0',
+        ('gradle_log_sha256: ' + ('d' * 64)),
+        'foundation_audit_command: powershell.exe scripts/audit-foundation.ps1 -SourceAndDependencies -JarPath build/libs/developers-hell-0.1.0.jar',
         'foundation_audit_exit: 0',
-        'production_server_exit: 0',
+        'foundation_audit_status: PASS',
+        ('foundation_audit_log_sha256: ' + ('e' * 64)),
         ('test_manifest_sha256: ' + $Manifest.Sha256),
         ('unit_test_report_files: ' + $TestReceipts.UnitFiles),
         ('unit_receipt_count: ' + $TestReceipts.UnitCount),
@@ -1167,14 +1297,35 @@ function New-SyntheticEvidenceText {
         ('gametest_receipt_errors: ' + $TestReceipts.GameTestErrors),
         ('gametest_receipt_skipped: ' + $TestReceipts.GameTestSkipped),
         ('gametest_receipt_sha256: ' + $TestReceipts.GameTestSha256),
-        'server_ready: PASS',
-        'server_stop_cleanup_callback: PASS',
-        'server_ordered_shutdown: PASS',
-        'clean_exit: PASS',
-        'owned_child_cleanup: PASS - zero owned child residue',
-        'source_archive_audit: PASS',
-        'phase2_archive_audit: PASS',
-        'hash_equality: source/build/dist hashes equal',
+        'ordinary_jar_size: 1',
+        'ordinary_jar_entries: 1',
+        ('ordinary_jar_entries_sha256: ' + ('f' * 64)),
+        'production_server_profile: local_automated_loopback_offline_no_query_no_rcon_no_resource_pack',
+        'previous_distribution_sha256: absent',
+        "source_jar_sha256: $Hash",
+        "build_jar_sha256: $Hash",
+        "distribution_sha256: $Hash",
+        'hash_equality_status: PASS',
+        'hash_equality_detail: source_build_distribution_sha256_equal',
+        'source_archive_audit_status: PASS',
+        'source_archive_audit_detail: dependency_source_archive_policy',
+        'phase2_archive_audit_status: PASS',
+        'phase2_archive_audit_detail: production_contract_present_forbidden_residue_absent',
+        'server_ready_status: PASS',
+        ('server_ready_detail: ' + $script:ExpectedReadyMarker),
+        'server_stop_cleanup_status: PASS',
+        ('server_stop_cleanup_detail: ' + $script:ExpectedStopCleanupMarker),
+        'server_ordered_shutdown_status: PASS',
+        'server_ordered_shutdown_detail: first_tick_then_cleanup_then_stop_then_all_dimensions_saved',
+        'production_server_exit: 0',
+        'clean_exit_status: PASS',
+        'clean_exit_detail: production_server_exit_zero',
+        'owned_server_root_pid: 1',
+        'owned_child_count: 0',
+        'owned_child_cleanup_status: PASS',
+        'owned_child_cleanup_detail: zero_owned_child_residue',
+        ('production_server_log_sha256: ' + ('a' * 64)),
+        $script:EvidenceBlockEnd,
         '',
         '| Automated ID | Measured receipt group | Receipt | Status |',
         '|---|---|---|---|'
@@ -1262,17 +1413,53 @@ function Invoke-SelfCheckMode {
         $hash = ('a' * 64)
         $evidence = New-SyntheticEvidenceText -Hash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         [void](Assert-EvidenceContract -EvidenceText $evidence -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
+        $productionShape = New-LectureEvidenceText `
+            -Hash $hash `
+            -PreviousHash 'absent' `
+            -Artifact ([pscustomobject]@{ Size=1 }) `
+            -Archive ([pscustomobject]@{ EntryCount=1; EntriesSha256=('f' * 64) }) `
+            -BuildResult ([pscustomobject]@{ Combined='synthetic build transcript' }) `
+            -AuditResult ([pscustomobject]@{ ExitCode=0; Combined='synthetic audit transcript' }) `
+            -ServerResult ([pscustomobject]@{ RootPid=1; CapturedCount=0; LogSha256=('a' * 64) }) `
+            -Manifest $manifest `
+            -TestReceipts $testReceipts `
+            -ValidationRows $validationRows
+        [void](Assert-EvidenceContract -EvidenceText $productionShape -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
+        [void](Assert-EvidenceContract -EvidenceText ($productionShape -replace "`n", "`r`n") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
         Assert-SelfCheckRejects -Label 'evidence hash mismatch' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace "distribution_sha256: $hash", ('distribution_sha256: ' + ('b' * 64))) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'missing real stop callback marker' -Action {
-            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_stop_cleanup_callback:.*\r?\n', '') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_stop_cleanup_status:.*\r?\n', '') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        foreach ($mutation in @(
+            [pscustomobject]@{ Label='BYPASS status'; Pattern='(?m)^server_ready_status: PASS$'; Replacement='server_ready_status: BYPASS' },
+            [pscustomobject]@{ Label='unequal hash status'; Pattern='(?m)^hash_equality_status: PASS$'; Replacement='hash_equality_status: unequal' },
+            [pscustomobject]@{ Label='unclean exit status'; Pattern='(?m)^clean_exit_status: PASS$'; Replacement='clean_exit_status: unclean' },
+            [pscustomobject]@{ Label='negated PASS status'; Pattern='(?m)^foundation_audit_status: PASS$'; Replacement='foundation_audit_status: NOT_PASS' },
+            [pscustomobject]@{ Label='free-form PASS prefix'; Pattern='(?m)^server_ready_status: PASS$'; Replacement='server_ready_status: PASS - fabricated' }
+        )) {
+            Assert-SelfCheckRejects -Label ([string]$mutation.Label) -Action {
+                Assert-EvidenceContract -EvidenceText ($evidence -replace $mutation.Pattern, $mutation.Replacement) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+            }
+        }
+        Assert-SelfCheckRejects -Label 'duplicate structured marker' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_ready_status: PASS$', "server_ready_status: PASS`nserver_ready_status: PASS") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'unknown structured marker' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace ([regex]::Escape($script:EvidenceBlockEnd)), ("unknown_status: PASS`n" + $script:EvidenceBlockEnd)) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'machine marker outside structured block' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence + "rogue_status: PASS`n") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'PASS row missing measured receipt' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^(\| 02-CFG-01 \|[^|]+\|)[^|]+(\| PASS \|)$', '$1 omitted $2') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'PASS row tampered receipt hash' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace ([regex]::Escape([string]$validationRows[0].Sha256)), ('c' * 64)) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'unknown automated PASS row' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence + "| 02-FAKE-99 | forged | unit=0; gametest=0; gates=none; receipt_sha256=$hash | PASS |`n") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'manual observation inferred as PASS' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^\| MANUAL-UI-01 \|([^\r\n]+)\| PENDING \|$', '| MANUAL-UI-01 |$1| PASS |') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
@@ -1389,6 +1576,8 @@ function New-LectureEvidenceText {
         '',
         'Machine-produced public-safe facts for the exact fresh ordinary JAR. Automated PASS never stands in for client rendering, readability, audio, motion, model, or playability observation.',
         '',
+        $script:EvidenceBlockStart,
+        'evidence_schema: developers_hell_phase2_v1',
         ('evidence_timestamp_utc: ' + [DateTime]::UtcNow.ToString('o')),
         'java_runtime: Eclipse Temurin 25.0.4+7 checksum-bound',
         'gradle_command: gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle',
@@ -1396,6 +1585,7 @@ function New-LectureEvidenceText {
         ('gradle_log_sha256: ' + (Get-StringSha256 $BuildResult.Combined)),
         'foundation_audit_command: powershell.exe scripts/audit-foundation.ps1 -SourceAndDependencies -JarPath build/libs/developers-hell-0.1.0.jar',
         ('foundation_audit_exit: ' + $AuditResult.ExitCode),
+        'foundation_audit_status: PASS',
         ('foundation_audit_log_sha256: ' + (Get-StringSha256 $AuditResult.Combined)),
         ('test_manifest_sha256: ' + $Manifest.Sha256),
         ('unit_test_report_files: ' + $TestReceipts.UnitFiles),
@@ -1413,23 +1603,32 @@ function New-LectureEvidenceText {
         ('ordinary_jar_size: ' + $Artifact.Size),
         ('ordinary_jar_entries: ' + $Archive.EntryCount),
         ('ordinary_jar_entries_sha256: ' + $Archive.EntriesSha256),
-        'production_server_profile: local automated smoke; loopback; online-mode=false; query=false; rcon=false; no resource-pack URL',
+        'production_server_profile: local_automated_loopback_offline_no_query_no_rcon_no_resource_pack',
         ('previous_distribution_sha256: ' + $PreviousHash),
         ('source_jar_sha256: ' + $Hash),
         ('build_jar_sha256: ' + $Hash),
         ('distribution_sha256: ' + $Hash),
-        'hash_equality: source/build/dist hashes equal',
-        'source_archive_audit: PASS - dependency/source/archive policy',
-        'phase2_archive_audit: PASS - stable items/entities/recipe/advancement/lang/models/classes present; test/client-link/network/API/telemetry/credential residue absent; one license',
-        'server_ready: PASS - DEVELOPERS_HELL_SERVER_FIRST_TICK_READY',
-        'server_stop_cleanup_callback: PASS - DEVELOPERS_HELL_SERVER_STOPPING_CLEANUP_COMPLETE',
-        'server_ordered_shutdown: PASS - FIRST_TICK_READY -> STOPPING_CLEANUP_COMPLETE -> Stopping server -> All dimensions are saved',
+        'hash_equality_status: PASS',
+        'hash_equality_detail: source_build_distribution_sha256_equal',
+        'source_archive_audit_status: PASS',
+        'source_archive_audit_detail: dependency_source_archive_policy',
+        'phase2_archive_audit_status: PASS',
+        'phase2_archive_audit_detail: production_contract_present_forbidden_residue_absent',
+        'server_ready_status: PASS',
+        ('server_ready_detail: ' + $script:ExpectedReadyMarker),
+        'server_stop_cleanup_status: PASS',
+        ('server_stop_cleanup_detail: ' + $script:ExpectedStopCleanupMarker),
+        'server_ordered_shutdown_status: PASS',
+        'server_ordered_shutdown_detail: first_tick_then_cleanup_then_stop_then_all_dimensions_saved',
         'production_server_exit: 0',
-        'clean_exit: PASS',
+        'clean_exit_status: PASS',
+        'clean_exit_detail: production_server_exit_zero',
         ('owned_server_root_pid: ' + $ServerResult.RootPid),
         ('owned_child_count: ' + $ServerResult.CapturedCount),
-        'owned_child_cleanup: PASS - clean; zero owned child residue',
+        'owned_child_cleanup_status: PASS',
+        'owned_child_cleanup_detail: zero_owned_child_residue',
         ('production_server_log_sha256: ' + $ServerResult.LogSha256),
+        $script:EvidenceBlockEnd,
         '',
         '## Automated validation rows',
         '',
