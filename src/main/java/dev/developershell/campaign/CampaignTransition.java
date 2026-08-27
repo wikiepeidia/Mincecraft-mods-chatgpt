@@ -53,6 +53,7 @@ public record CampaignTransition(
 			EffectIntent.ReconcileRetake,
 			EffectIntent.GrantFirstRewards,
 			EffectIntent.MaterializeRetakeFallback,
+			EffectIntent.MaterializeRewardFallback,
 			EffectIntent.RecoverAttendanceSheet,
 			EffectIntent.ApplyRemoteCooldown,
 			EffectIntent.NotifyRemoteReady {
@@ -88,6 +89,19 @@ public record CampaignTransition(
 			public MaterializeRetakeFallback {
 				Objects.requireNonNull(ownerUuid, "ownerUuid");
 				Objects.requireNonNull(fallbackEntityUuid, "fallbackEntityUuid");
+			}
+		}
+
+		record MaterializeRewardFallback(
+				CampaignEvent.RewardProjectionKey key,
+				PlayerCampaignState.RewardFallbackRef fallback
+		) implements EffectIntent {
+			public MaterializeRewardFallback {
+				Objects.requireNonNull(key, "key");
+				Objects.requireNonNull(fallback, "fallback");
+				if (fallback.materialized()) {
+					throw new IllegalArgumentException("materialization intent requires a reservation");
+				}
 			}
 		}
 

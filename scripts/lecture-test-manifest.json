@@ -33,6 +33,7 @@
       "reloadNormalizationClearsOnlyMatchingActiveIntentOnce()",
       "legacyRemoteAbsencePersistsNormalPendingBeforeProjectionAndCannotReplay()",
       "firstRewardProjectionConfirmationsAreIndependentAndReplaySafe()",
+      "rewardFallbackReservationsAreExactStateFirstAndReplaySafe()",
       "transitionFactoriesAreImmutableAndNoOpCannotCarryEffects()",
       "startAcceptsImplicitReadyAndRetakeExactlyOnce()"
     ],
@@ -158,6 +159,8 @@
       "developers_hell_test:reward_game_tests_legacy_schema_one_failed_remote_persists_pending_then_recovers_once",
       "developers_hell_test:reward_game_tests_matching_desk_recovers_only_missing_sheet_without_reward_replay",
       "developers_hell_test:reward_game_tests_real_encounter_victory_reconciles_first_reward",
+      "developers_hell_test:reward_game_tests_reward_fallback_disk_load_requires_exact_tracked_uuid_and_converges_synchronously",
+      "developers_hell_test:reward_game_tests_reward_fallback_reservations_survive_torn_write_and_unloaded_chunks_without_reissue",
       "developers_hell_test:reward_game_tests_remote_only_representation_reconciles_sheet_independently",
       "developers_hell_test:reward_game_tests_sheet_only_representation_reconciles_remote_independently",
       "developers_hell_test:reward_game_tests_sheet_success_remote_failure_retries_only_remote_on_join"

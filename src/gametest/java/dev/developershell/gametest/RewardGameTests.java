@@ -1,6 +1,7 @@
 package dev.developershell.gametest;
 
 import com.mojang.authlib.GameProfile;
+import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignServiceGameTestAccess;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
@@ -44,9 +46,11 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.players.PlayerList;
+import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -57,6 +61,8 @@ import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -270,6 +276,20 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 					"full inventory creates one owner-bound Sheet fallback");
 			context.assertValueEqual(remoteFallbacks.size(), 1,
 					"full inventory creates one Remote fallback");
+			PlayerCampaignState.RewardFallbackRef sheetReservation =
+					Objects.requireNonNull(result.passed().sheetFallback(), "persisted Sheet fallback");
+			PlayerCampaignState.RewardFallbackRef remoteReservation =
+					Objects.requireNonNull(result.passed().remoteFallback(), "persisted Remote fallback");
+			context.assertTrue(sheetReservation.materialized(),
+					"Sheet reservation is durably marked materialized before confirmation returns");
+			context.assertTrue(remoteReservation.materialized(),
+					"Remote reservation is durably marked materialized before confirmation returns");
+			context.assertValueEqual(sheetReservation.entityUuid(), sheetFallbacks.getFirst().getUUID(),
+					"persisted Sheet reservation names the exact physical entity");
+			context.assertValueEqual(remoteReservation.entityUuid(), remoteFallbacks.getFirst().getUUID(),
+					"persisted Remote reservation names the exact physical entity");
+			context.assertFalse(sheetReservation.entityUuid().equals(remoteReservation.entityUuid()),
+					"the two reward projections never share a fallback UUID");
 			context.assertValueEqual(AttendanceSheetItem.binding(sheetFallbacks.getFirst().getItem()).orElseThrow(),
 					new AttendanceSheetItem.Binding(ownerUuid, result.passed().sheetRecoverySequence()),
 					"Sheet fallback carries the durable owner and recovery sequence");
@@ -308,6 +328,203 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			removeRewardEntities(level.getServer(), ownerUuid);
 			close(intruderConnection);
 			close(ownerConnection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void rewardFallbackReservationsSurviveTornWriteAndUnloadedChunksWithoutReissue(
+			GameTestHelper context
+	) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1707), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-unloaded-reservations");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState pending = persistPendingVictory(context, owner, desk, FACING);
+			fillInventory(owner);
+			BlockPos unloaded = pending.retryPos().offset(4_096, 0, 4_096);
+			context.assertFalse(level.isLoaded(unloaded),
+					"the torn-write fixture starts in an unloaded chunk");
+			pending = withRetryPos(pending, unloaded);
+			CampaignServiceGameTestAccess.replaceState(level, pending);
+
+			UUID sheetUuid = UUID.randomUUID();
+			UUID remoteUuid = UUID.randomUUID();
+			persistFallbackReservation(
+					context,
+					level,
+					new CampaignEvent.SheetProjectionKey(ownerUuid, pending.sheetRecoverySequence()),
+					sheetUuid,
+					unloaded
+			);
+			PlayerCampaignState reserved = persistFallbackReservation(
+					context,
+					level,
+					new CampaignEvent.RemoteProjectionKey(ownerUuid, pending.remoteProjectionUuid()),
+					remoteUuid,
+					unloaded
+			);
+			context.assertValueEqual(reserved.sheetFallback().entityUuid(), sheetUuid,
+					"torn Sheet write preserves the exact reserved UUID");
+			context.assertValueEqual(reserved.remoteFallback().entityUuid(), remoteUuid,
+					"torn Remote write preserves the exact reserved UUID");
+			context.assertFalse(reserved.sheetFallback().materialized(),
+					"suppressed Sheet effect remains an explicit reservation");
+			context.assertFalse(reserved.remoteFallback().materialized(),
+					"suppressed Remote effect remains an explicit reservation");
+
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.FALLBACK_PENDING,
+					"unloaded exact reservations wait without replacement");
+			context.assertValueEqual(state(level, ownerUuid), reserved,
+					"reconciliation neither clears nor reissues unloaded reservations");
+			context.assertFalse(level.isLoaded(unloaded),
+					"reconciliation does not force-load the tracked chunk");
+			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
+			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
+			context.assertValueEqual(state(level, ownerUuid), reserved,
+					"restart/join replay retains both exact reservations");
+			context.assertFalse(level.isLoaded(unloaded),
+					"restart reconciliation still does not force-load the chunk");
+			context.assertValueEqual(boundSheetEntities(
+					level.getServer(), ownerUuid, pending.sheetRecoverySequence()).size(), 0,
+					"unloaded Sheet reservation creates no second entity");
+			context.assertValueEqual(boundRemoteEntities(
+					level.getServer(), ownerUuid, pending.remoteProjectionUuid()).size(), 0,
+					"unloaded Remote reservation creates no second entity");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 120, padding = 24)
+	public void rewardFallbackDiskLoadRequiresExactTrackedUuidAndConvergesSynchronously(
+			GameTestHelper context
+	) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1708), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-disk-fallbacks");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState pending = persistPendingVictory(context, owner, desk, FACING);
+			fillInventory(owner);
+			BlockPos fallbackPos = pending.retryPos();
+			context.assertTrue(level.isLoaded(fallbackPos),
+					"disk fixture uses a loaded chunk so missing means destructively absent");
+
+			UUID sheetUuid = UUID.randomUUID();
+			UUID oldRemoteUuid = UUID.randomUUID();
+			persistFallbackReservation(
+					context,
+					level,
+					new CampaignEvent.SheetProjectionKey(ownerUuid, pending.sheetRecoverySequence()),
+					sheetUuid,
+					fallbackPos
+			);
+			persistFallbackReservation(
+					context,
+					level,
+					new CampaignEvent.RemoteProjectionKey(ownerUuid, pending.remoteProjectionUuid()),
+					oldRemoteUuid,
+					fallbackPos
+			);
+
+			AttendanceSheetItem.Binding sheetBinding =
+					new AttendanceSheetItem.Binding(ownerUuid, pending.sheetRecoverySequence());
+			InfiniteSlidesRemoteItem.Binding remoteBinding =
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, pending.remoteProjectionUuid());
+			ItemEntity sheetDisk = diskRoundTripItem(level,
+					fallbackItem(level, fallbackPos, AttendanceSheetItem.bound(sheetBinding), sheetUuid));
+			ItemEntity remoteDisk = diskRoundTripItem(level,
+					fallbackItem(level, fallbackPos, InfiniteSlidesRemoteItem.bound(remoteBinding), oldRemoteUuid));
+			context.assertValueEqual(sheetDisk.getUUID(), sheetUuid,
+					"Sheet entity UUID survives its Minecraft save/load path");
+			context.assertValueEqual(remoteDisk.getUUID(), oldRemoteUuid,
+					"Remote entity UUID survives its Minecraft save/load path");
+			context.assertTrue(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					sheetDisk, level, EntitySpawnReason.LOAD, true),
+					"the exact tracked Sheet disk entity is admitted");
+			context.assertTrue(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					remoteDisk, level, EntitySpawnReason.LOAD, true),
+					"the exact tracked Remote disk entity is admitted");
+
+			ItemEntity untrackedSheet = fallbackItem(
+					level, fallbackPos, AttendanceSheetItem.bound(sheetBinding), UUID.randomUUID());
+			ItemEntity untrackedRemote = fallbackItem(
+					level, fallbackPos, InfiniteSlidesRemoteItem.bound(remoteBinding), UUID.randomUUID());
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					untrackedSheet, level, EntitySpawnReason.LOAD, true),
+					"a same-binding Sheet with an untracked UUID is rejected");
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					untrackedRemote, level, EntitySpawnReason.LOAD, true),
+					"a same-binding Remote with an untracked UUID is rejected");
+
+			context.assertTrue(level.addFreshEntity(sheetDisk),
+					"the exact Sheet enters the synchronous entity-load callback");
+			PlayerCampaignState afterSheetLoad = state(level, ownerUuid);
+			context.assertFalse(afterSheetLoad.sheetProjectionPending(),
+					"synchronous Sheet load confirms only after its exact representation exists");
+			context.assertTrue(afterSheetLoad.sheetFallback().materialized(),
+					"synchronous Sheet load marks the reservation materialized");
+
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.FALLBACK_ISSUED,
+					"loaded-and-missing Remote clears its old UUID before creating a replacement");
+			PlayerCampaignState converged = state(level, ownerUuid);
+			PlayerCampaignState.RewardFallbackRef newRemote =
+					Objects.requireNonNull(converged.remoteFallback(), "replacement Remote fallback");
+			context.assertFalse(converged.remoteProjectionPending(),
+					"replacement Remote synchronously materializes and confirms");
+			context.assertTrue(newRemote.materialized(),
+					"replacement Remote leaves a durable materialized reference");
+			context.assertFalse(newRemote.entityUuid().equals(oldRemoteUuid),
+					"destructive recovery never reuses the cleared UUID");
+			List<ItemEntity> remoteFallbacks = boundRemoteEntities(
+					level.getServer(), ownerUuid, pending.remoteProjectionUuid());
+			context.assertValueEqual(remoteFallbacks.size(), 1,
+					"loaded-missing recovery creates exactly one Remote entity");
+			context.assertValueEqual(remoteFallbacks.getFirst().getUUID(), newRemote.entityUuid(),
+					"the replacement state names the exact new Remote entity");
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					remoteDisk, level, EntitySpawnReason.LOAD, true),
+					"the cleared old Remote UUID cannot reauthorize on a later disk load");
+
+			BlockPos relocated = fallbackPos.relative(Direction.EAST);
+			sheetDisk.snapTo(Vec3.atCenterOf(relocated));
+			sheetDisk.setRemoved(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+			ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(sheetDisk, level);
+			PlayerCampaignState afterRelocate = state(level, ownerUuid);
+			context.assertValueEqual(afterRelocate.sheetFallback().entityUuid(), sheetUuid,
+					"non-destructive Sheet unload retains the exact UUID");
+			context.assertValueEqual(afterRelocate.sheetFallback().position(), relocated,
+					"non-destructive Sheet unload records its relocation");
+			context.assertTrue(afterRelocate.sheetFallback().materialized(),
+					"non-destructive Sheet unload does not reopen materialization");
+
+			ItemEntity replacementRemote = remoteFallbacks.getFirst();
+			replacementRemote.setRemoved(Entity.RemovalReason.KILLED);
+			ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(replacementRemote, level);
+			context.assertTrue(state(level, ownerUuid).remoteFallback() == null,
+					"destructive Remote unload clears its exact physical reference");
+			ItemEntity staleReplacement = fallbackItem(
+					level, fallbackPos, InfiniteSlidesRemoteItem.bound(remoteBinding), newRemote.entityUuid());
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleReplacement, level, EntitySpawnReason.LOAD, true),
+					"a destructively cleared replacement cannot resurrect from disk");
+			context.succeed();
+		}
+		finally {
+			removeRewardEntities(level.getServer(), ownerUuid);
+			close(connection);
 			clearArena(level, desk, FACING);
 		}
 	}
@@ -619,6 +836,70 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		}
 	}
 
+	private static PlayerCampaignState persistFallbackReservation(
+			GameTestHelper context,
+			ServerLevel level,
+			CampaignEvent.RewardProjectionKey key,
+			UUID entityUuid,
+			BlockPos position
+	) {
+		PlayerCampaignState before = state(level, key.ownerUuid());
+		List<CampaignTransition.EffectIntent> suppressedEffects = new ArrayList<>();
+		CampaignTransition transition = CampaignService.apply(
+				level,
+				new CampaignEvent.RewardFallback(
+						key,
+						entityUuid,
+						before.deskDimension(),
+						position,
+						CampaignEvent.RewardFallbackOperation.RESERVE
+				),
+				suppressedEffects::add
+		);
+		context.assertTrue(transition.accepted(),
+				"fallback reservation commits before its synchronous materialization effect");
+		context.assertValueEqual(suppressedEffects.size(), 1,
+				"one reservation emits exactly one materialization effect");
+		context.assertTrue(suppressedEffects.getFirst()
+				instanceof CampaignTransition.EffectIntent.MaterializeRewardFallback materialize
+				&& materialize.key().equals(key)
+				&& materialize.fallback().entityUuid().equals(entityUuid),
+				"the materialization effect carries the exact persisted reservation");
+		return transition.nextState().orElseThrow();
+	}
+
+	private static ItemEntity fallbackItem(
+			ServerLevel level,
+			BlockPos position,
+			ItemStack stack,
+			UUID entityUuid
+	) {
+		ItemEntity item = new ItemEntity(
+				level,
+				position.getX() + 0.5D,
+				position.getY() + 0.25D,
+				position.getZ() + 0.5D,
+				stack
+		);
+		item.setUUID(entityUuid);
+		return item;
+	}
+
+	private static ItemEntity diskRoundTripItem(ServerLevel level, ItemEntity original) {
+		TagValueOutput output = TagValueOutput.createWithContext(
+				ProblemReporter.DISCARDING,
+				level.registryAccess()
+		);
+		original.saveWithoutId(output);
+		ItemEntity restored = new ItemEntity(level, 0.0D, 0.0D, 0.0D, ItemStack.EMPTY);
+		restored.load(TagValueInput.create(
+				ProblemReporter.DISCARDING,
+				level.registryAccess(),
+				output.buildResult()
+		));
+		return restored;
+	}
+
 	private static PlayerCampaignState persistPendingVictory(
 			GameTestHelper context,
 			RecordingServerPlayer owner,
@@ -710,6 +991,35 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 
 	private static PlayerCampaignState state(ServerLevel level, UUID ownerUuid) {
 		return CampaignSavedData.get(level).player(ownerUuid).orElseThrow();
+	}
+
+	private static PlayerCampaignState withRetryPos(PlayerCampaignState state, BlockPos retryPos) {
+		return new PlayerCampaignState(
+				state.ownerUuid(),
+				state.chapter(),
+				state.status(),
+				state.attemptCount(),
+				state.deskDimension(),
+				state.deskPos(),
+				state.deskFacing(),
+				retryPos,
+				state.activeEncounterRef(),
+				state.sheetEntitled(),
+				state.remoteIssued(),
+				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
+				state.retakeFallbackEntityUuid(),
+				state.remoteCooldownUntilGameTime(),
+				state.sheetRecoverySequence(),
+				state.remoteReadyNoticeForDeadlineGameTime(),
+				state.sheetProjectionPending(),
+				state.remoteProjectionPending(),
+				state.remoteProjectionUuid(),
+				state.legacyRemoteAdoptionPending(),
+				state.sheetFallback(),
+				state.remoteFallback()
+		);
 	}
 
 	private static PlayerCampaignState legacyRemoteMigrationState(

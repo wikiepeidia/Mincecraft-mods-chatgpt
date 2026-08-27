@@ -123,35 +123,61 @@ final class CampaignCodecTest {
 
 	@Test
 	void schemaTwoRoundTripsMaterializationReservationForReloadRecovery() {
+		UUID remoteFallbackUuid = UUID.fromString("c0de0000-0000-4000-8000-000000000532");
+		PlayerCampaignState.RewardFallbackRef sheetFallback = new PlayerCampaignState.RewardFallbackRef(
+				FALLBACK, PlayerCampaignState.OVERWORLD_DIMENSION, RETRY, false);
+		PlayerCampaignState.RewardFallbackRef remoteFallback = new PlayerCampaignState.RewardFallbackRef(
+				remoteFallbackUuid, PlayerCampaignState.OVERWORLD_DIMENSION, DESK, true);
 		PlayerCampaignState reserved = new PlayerCampaignState(
 				OWNER,
-				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
-				PlayerCampaignState.LectureStatus.RETAKE_READY,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
 				3,
 				PlayerCampaignState.OVERWORLD_DIMENSION,
 				DESK,
 				Direction.NORTH,
 				RETRY,
 				null,
-				false,
-				false,
 				true,
-				ENCOUNTER,
-				FALLBACK,
+				true,
+				false,
+				null,
+				null,
 				null,
 				0L,
 				0L,
-				0L
+				0L,
+				true,
+				false,
+				ENCOUNTER,
+				false,
+				sheetFallback,
+				remoteFallback
 		);
 		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, reserved))).getAsJsonObject();
 		JsonObject encodedPlayer = root.getAsJsonArray("players").get(0).getAsJsonObject();
 
-		assertEquals(encodeUuid(FALLBACK), encodedPlayer.get("retake_fallback_reservation_uuid"));
-		assertFalse(encodedPlayer.has("retake_fallback_entity_uuid"));
+		JsonObject encodedSheet = encodedPlayer.getAsJsonObject("sheet_fallback");
+		assertEquals(encodeUuid(FALLBACK), encodedSheet.get("entity_uuid"));
+		assertEquals(PlayerCampaignState.OVERWORLD_DIMENSION, encodedSheet.get("dimension").getAsString());
+		assertEquals(BlockPos.CODEC.encodeStart(JsonOps.INSTANCE, RETRY).getOrThrow(),
+				encodedSheet.get("position"));
+		assertFalse(encodedSheet.get("materialized").getAsBoolean());
+		JsonObject encodedRemote = encodedPlayer.getAsJsonObject("remote_fallback");
+		assertEquals(encodeUuid(remoteFallbackUuid), encodedRemote.get("entity_uuid"));
+		assertTrue(encodedRemote.get("materialized").getAsBoolean());
 		CampaignSavedData decoded = decode(root);
 		assertTrue(decoded.isWritableSchema());
 		assertEquals(reserved, decoded.player(OWNER).orElseThrow());
 		assertEquals(root, encode(decoded));
+
+		JsonObject olderSchemaTwo = root.deepCopy();
+		JsonObject olderPlayer = olderSchemaTwo.getAsJsonArray("players").get(0).getAsJsonObject();
+		olderPlayer.remove("sheet_fallback");
+		olderPlayer.remove("remote_fallback");
+		PlayerCampaignState older = decode(olderSchemaTwo).player(OWNER).orElseThrow();
+		assertEquals(null, older.sheetFallback());
+		assertEquals(null, older.remoteFallback());
 	}
 
 	@Test
@@ -409,6 +435,24 @@ final class CampaignCodecTest {
 				false,
 				ENCOUNTER,
 				true
+		));
+		PlayerCampaignState.RewardFallbackRef reservation = new PlayerCampaignState.RewardFallbackRef(
+				FALLBACK, PlayerCampaignState.OVERWORLD_DIMENSION, RETRY, false);
+		assertThrows(IllegalArgumentException.class, () -> new PlayerCampaignState(
+				OWNER, PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED, 1,
+				PlayerCampaignState.OVERWORLD_DIMENSION, DESK, Direction.NORTH, RETRY,
+				null, true, true, false, null, null, null, 0L, 0L, 0L,
+				false, false, ENCOUNTER, false, reservation, null
+		));
+		PlayerCampaignState.RewardFallbackRef materialized = new PlayerCampaignState.RewardFallbackRef(
+				FALLBACK, PlayerCampaignState.OVERWORLD_DIMENSION, RETRY, true);
+		assertThrows(IllegalArgumentException.class, () -> new PlayerCampaignState(
+				OWNER, PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED, 1,
+				PlayerCampaignState.OVERWORLD_DIMENSION, DESK, Direction.NORTH, RETRY,
+				null, true, true, false, null, null, null, 0L, 0L, 0L,
+				false, false, ENCOUNTER, false, materialized, materialized
 		));
 	}
 

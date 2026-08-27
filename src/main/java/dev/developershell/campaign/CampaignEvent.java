@@ -15,6 +15,7 @@ public sealed interface CampaignEvent permits
 		CampaignEvent.ConfirmSheetProjection,
 		CampaignEvent.ConfirmRemoteProjection,
 		CampaignEvent.ResolveLegacyRemoteAbsence,
+		CampaignEvent.RewardFallback,
 		CampaignEvent.StartRemoteCooldown,
 		CampaignEvent.RemoteReadyNotice {
 	UUID ownerUuid();
@@ -165,6 +166,50 @@ public sealed interface CampaignEvent permits
 		}
 	}
 
+	/** One state-first lifecycle change for an exact Sheet or Remote fallback entity. */
+	record RewardFallback(
+			RewardProjectionKey key,
+			UUID entityUuid,
+			String dimension,
+			BlockPos position,
+			RewardFallbackOperation operation
+	) implements CampaignEvent {
+		public RewardFallback {
+			Objects.requireNonNull(key, "key");
+			Objects.requireNonNull(entityUuid, "entityUuid");
+			if (Objects.requireNonNull(dimension, "dimension").isBlank()) {
+				throw new IllegalArgumentException("fallback dimension must not be blank");
+			}
+			position = Objects.requireNonNull(position, "position").immutable();
+			Objects.requireNonNull(operation, "operation");
+		}
+
+		@Override
+		public UUID ownerUuid() {
+			return key.ownerUuid();
+		}
+	}
+
+	sealed interface RewardProjectionKey permits SheetProjectionKey, RemoteProjectionKey {
+		UUID ownerUuid();
+	}
+
+	record SheetProjectionKey(UUID ownerUuid, long recoverySequence) implements RewardProjectionKey {
+		public SheetProjectionKey {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			if (recoverySequence < 0L) {
+				throw new IllegalArgumentException("recoverySequence must be non-negative");
+			}
+		}
+	}
+
+	record RemoteProjectionKey(UUID ownerUuid, UUID projectionUuid) implements RewardProjectionKey {
+		public RemoteProjectionKey {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(projectionUuid, "projectionUuid");
+		}
+	}
+
 	record StartRemoteCooldown(
 			UUID ownerUuid,
 			long observedGameTime,
@@ -221,6 +266,24 @@ public sealed interface CampaignEvent permits
 		private final String serializedName;
 
 		FallbackOperation(String serializedName) {
+			this.serializedName = serializedName;
+		}
+
+		public String serializedName() {
+			return serializedName;
+		}
+	}
+
+	enum RewardFallbackOperation {
+		RESERVE("reserved"),
+		MATERIALIZED("materialized"),
+		RELOCATED("relocated"),
+		LOST("lost"),
+		CLEARED("cleared");
+
+		private final String serializedName;
+
+		RewardFallbackOperation(String serializedName) {
 			this.serializedName = serializedName;
 		}
 

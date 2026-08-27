@@ -426,7 +426,7 @@ final class CampaignReducerTest {
 		assertNoOp(
 				CampaignService.apply(data, recover, recoveryEffects::add),
 				recoveredState,
-				"stale_sheet_recovery"
+				"sheet_projection_pending"
 		);
 		assertEquals(1, recoveryEffects.size());
 
@@ -585,6 +585,128 @@ final class CampaignReducerTest {
 		assertAccepted(confirmed, "remote_projection_confirmed");
 		assertFalse(confirmed.nextState().orElseThrow().remoteProjectionPending());
 		assertFalse(confirmed.nextState().orElseThrow().legacyRemoteAdoptionPending());
+	}
+
+	@Test
+	void rewardFallbackReservationsAreExactStateFirstAndReplaySafe() {
+		PlayerCampaignState pending = CampaignReducer.reduce(
+				Optional.of(activeState(OWNER, ENCOUNTER, PROFESSOR, 5)),
+				new CampaignEvent.Victory(OWNER, ENCOUNTER)
+		).nextState().orElseThrow();
+		CampaignEvent.SheetProjectionKey sheetKey = new CampaignEvent.SheetProjectionKey(
+				OWNER, pending.sheetRecoverySequence());
+		CampaignEvent.RemoteProjectionKey remoteKey = new CampaignEvent.RemoteProjectionKey(
+				OWNER, pending.remoteProjectionUuid());
+		CampaignEvent.RewardFallback sheetReserve = new CampaignEvent.RewardFallback(
+				sheetKey,
+				FALLBACK,
+				pending.deskDimension(),
+				pending.retryPos(),
+				CampaignEvent.RewardFallbackOperation.RESERVE
+		);
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(pending), new CampaignEvent.RewardFallback(
+						sheetKey, FALLBACK, pending.deskDimension(), OTHER_DESK,
+						CampaignEvent.RewardFallbackOperation.RESERVE)),
+				pending,
+				"reward_fallback_not_reservable"
+		);
+
+		CampaignTransition sheetReservedTransition = CampaignReducer.reduce(Optional.of(pending), sheetReserve);
+		assertAccepted(sheetReservedTransition, "reward_fallback_reserved");
+		PlayerCampaignState sheetReserved = sheetReservedTransition.nextState().orElseThrow();
+		PlayerCampaignState.RewardFallbackRef expectedSheetReservation =
+				new PlayerCampaignState.RewardFallbackRef(
+						FALLBACK, pending.deskDimension(), pending.retryPos(), false);
+		assertEquals(expectedSheetReservation, sheetReserved.sheetFallback());
+		assertEquals(List.of(new EffectIntent.MaterializeRewardFallback(
+				sheetKey, expectedSheetReservation)), sheetReservedTransition.intents());
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(sheetReserved), sheetReserve),
+				sheetReserved,
+				"reward_fallback_not_reservable"
+		);
+
+		CampaignEvent.RewardFallback remoteReserve = new CampaignEvent.RewardFallback(
+				remoteKey,
+				OTHER_FALLBACK,
+				pending.deskDimension(),
+				pending.retryPos(),
+				CampaignEvent.RewardFallbackOperation.RESERVE
+		);
+		CampaignTransition remoteReservedTransition = CampaignReducer.reduce(
+				Optional.of(sheetReserved), remoteReserve);
+		assertAccepted(remoteReservedTransition, "reward_fallback_reserved");
+		PlayerCampaignState bothReserved = remoteReservedTransition.nextState().orElseThrow();
+		assertEquals(FALLBACK, bothReserved.sheetFallback().entityUuid());
+		assertEquals(OTHER_FALLBACK, bothReserved.remoteFallback().entityUuid());
+
+		CampaignEvent.RewardFallback sheetMaterialized = new CampaignEvent.RewardFallback(
+				sheetKey, FALLBACK, pending.deskDimension(), pending.retryPos(),
+				CampaignEvent.RewardFallbackOperation.MATERIALIZED);
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(bothReserved), new CampaignEvent.RewardFallback(
+						sheetKey, THIRD_FALLBACK, pending.deskDimension(), pending.retryPos(),
+						CampaignEvent.RewardFallbackOperation.MATERIALIZED)),
+				bothReserved,
+				"wrong_reward_fallback"
+		);
+		PlayerCampaignState sheetMaterializedState = CampaignReducer.reduce(
+				Optional.of(bothReserved), sheetMaterialized).nextState().orElseThrow();
+		CampaignEvent.RewardFallback remoteMaterialized = new CampaignEvent.RewardFallback(
+				remoteKey, OTHER_FALLBACK, pending.deskDimension(), pending.retryPos(),
+				CampaignEvent.RewardFallbackOperation.MATERIALIZED);
+		PlayerCampaignState bothMaterialized = CampaignReducer.reduce(
+				Optional.of(sheetMaterializedState), remoteMaterialized).nextState().orElseThrow();
+		assertTrue(bothMaterialized.sheetFallback().materialized());
+		assertTrue(bothMaterialized.remoteFallback().materialized());
+
+		CampaignEvent.RewardFallback relocated = new CampaignEvent.RewardFallback(
+				sheetKey, FALLBACK, pending.deskDimension(), OTHER_DESK,
+				CampaignEvent.RewardFallbackOperation.RELOCATED);
+		CampaignTransition relocation = CampaignReducer.reduce(Optional.of(bothMaterialized), relocated);
+		assertAccepted(relocation, "reward_fallback_relocated");
+		PlayerCampaignState relocatedState = relocation.nextState().orElseThrow();
+		assertEquals(OTHER_DESK, relocatedState.sheetFallback().position());
+
+		CampaignTransition sheetConfirmed = CampaignReducer.reduce(
+				Optional.of(relocatedState),
+				new CampaignEvent.ConfirmSheetProjection(OWNER, sheetKey.recoverySequence()));
+		PlayerCampaignState sheetConfirmedState = sheetConfirmed.nextState().orElseThrow();
+		assertFalse(sheetConfirmedState.sheetProjectionPending());
+		assertEquals(relocatedState.sheetFallback(), sheetConfirmedState.sheetFallback());
+		CampaignTransition remoteConfirmed = CampaignReducer.reduce(
+				Optional.of(sheetConfirmedState),
+				new CampaignEvent.ConfirmRemoteProjection(OWNER, remoteKey.projectionUuid()));
+		PlayerCampaignState confirmed = remoteConfirmed.nextState().orElseThrow();
+		assertFalse(confirmed.remoteProjectionPending());
+		assertEquals(relocatedState.remoteFallback(), confirmed.remoteFallback());
+
+		CampaignTransition recovered = CampaignReducer.reduce(
+				Optional.of(confirmed),
+				new CampaignEvent.RecoverSheet(OWNER, confirmed.sheetRecoverySequence()));
+		assertAccepted(recovered, "sheet_recovery_accepted");
+		PlayerCampaignState recoveryPending = recovered.nextState().orElseThrow();
+		assertTrue(recoveryPending.sheetProjectionPending());
+		assertEquals(null, recoveryPending.sheetFallback());
+		assertEquals(confirmed.remoteFallback(), recoveryPending.remoteFallback());
+		assertEquals(List.of(new EffectIntent.RecoverAttendanceSheet(
+				OWNER, recoveryPending.sheetRecoverySequence())), recovered.intents());
+
+		CampaignTransition lost = CampaignReducer.reduce(
+				Optional.of(bothMaterialized),
+				new CampaignEvent.RewardFallback(
+						sheetKey, FALLBACK, pending.deskDimension(), pending.retryPos(),
+						CampaignEvent.RewardFallbackOperation.LOST));
+		assertAccepted(lost, "reward_fallback_lost");
+		PlayerCampaignState retryable = lost.nextState().orElseThrow();
+		assertTrue(retryable.sheetProjectionPending());
+		assertEquals(null, retryable.sheetFallback());
+		assertNoOp(
+				CampaignReducer.reduce(lost.nextState(), sheetMaterialized),
+				retryable,
+				"wrong_reward_fallback"
+		);
 	}
 
 	@Test
@@ -966,7 +1088,7 @@ final class CampaignReducerTest {
 		assertEquals(List.of(new EffectIntent.RecoverAttendanceSheet(OWNER, 5L)), accepted.intents());
 		assertMonotonicFieldsEqual(passed, recovered);
 
-		assertNoOp(CampaignReducer.reduce(accepted.nextState(), recover), recovered, "stale_sheet_recovery");
+		assertNoOp(CampaignReducer.reduce(accepted.nextState(), recover), recovered, "sheet_projection_pending");
 		assertNoOp(
 				CampaignReducer.reduce(Optional.of(passed), new CampaignEvent.RecoverSheet(OWNER, 3L)),
 				passed,

@@ -82,10 +82,29 @@ public final class CampaignSavedData extends SavedData {
 							.forGetter(DurableFields::legacyRemoteAdoptionPending)
 			).apply(instance, DurableFields::new)
 	);
+	private static final Codec<PlayerCampaignState.RewardFallbackRef> REWARD_FALLBACK_CODEC =
+			RecordCodecBuilder.create(instance -> instance.group(
+					UUIDUtil.CODEC.fieldOf("entity_uuid")
+							.forGetter(PlayerCampaignState.RewardFallbackRef::entityUuid),
+					Codec.STRING.fieldOf("dimension")
+							.forGetter(PlayerCampaignState.RewardFallbackRef::dimension),
+					BlockPos.CODEC.fieldOf("position")
+							.forGetter(PlayerCampaignState.RewardFallbackRef::position),
+					Codec.BOOL.fieldOf("materialized")
+							.forGetter(PlayerCampaignState.RewardFallbackRef::materialized)
+			).apply(instance, PlayerCampaignState.RewardFallbackRef::new));
+	private static final MapCodec<RewardFallbackFields> REWARD_FALLBACK_FIELDS_CODEC =
+			RecordCodecBuilder.mapCodec(instance -> instance.group(
+					REWARD_FALLBACK_CODEC.optionalFieldOf("sheet_fallback")
+							.forGetter(RewardFallbackFields::sheetFallback),
+					REWARD_FALLBACK_CODEC.optionalFieldOf("remote_fallback")
+							.forGetter(RewardFallbackFields::remoteFallback)
+			).apply(instance, RewardFallbackFields::new));
 
 	private static final Codec<RawPlayer> RAW_PLAYER_CODEC = RecordCodecBuilder.create(instance -> instance.group(
 			IDENTITY_FIELDS_CODEC.forGetter(RawPlayer::identity),
-			DURABLE_FIELDS_CODEC.forGetter(RawPlayer::durable)
+			DURABLE_FIELDS_CODEC.forGetter(RawPlayer::durable),
+			REWARD_FALLBACK_FIELDS_CODEC.forGetter(RawPlayer::rewardFallbacks)
 	).apply(instance, RawPlayer::new));
 
 	private static final Codec<RawDocument> RAW_DOCUMENT_CODEC = RecordCodecBuilder.create(instance ->
@@ -203,6 +222,7 @@ public final class CampaignSavedData extends SavedData {
 	private static DataResult<EncodedPlayer> decodePlayer(RawPlayer raw, int schemaVersion) {
 		IdentityFields identity = raw.identity();
 		DurableFields durable = raw.durable();
+		RewardFallbackFields rewardFallbacks = raw.rewardFallbacks();
 		if (schemaVersion == SCHEMA_VERSION
 				&& (durable.sheetProjectionPending().isEmpty()
 					|| durable.remoteProjectionPending().isEmpty()
@@ -300,7 +320,9 @@ public final class CampaignSavedData extends SavedData {
 					durable.sheetProjectionPending().orElse(false),
 					remoteProjectionPending,
 					remoteProjectionUuid,
-					legacyRemoteAdoptionPending
+					legacyRemoteAdoptionPending,
+					rewardFallbacks.sheetFallback().orElse(null),
+					rewardFallbacks.remoteFallback().orElse(null)
 			);
 			return DataResult.success(new EncodedPlayer(identity.mapKeyUuid().orElse(identity.ownerUuid()), state));
 		}
@@ -339,6 +361,10 @@ public final class CampaignSavedData extends SavedData {
 						Optional.of(state.remoteProjectionPending()),
 						Optional.ofNullable(state.remoteProjectionUuid()),
 						Optional.of(state.legacyRemoteAdoptionPending())
+				),
+				new RewardFallbackFields(
+						Optional.ofNullable(state.sheetFallback()),
+						Optional.ofNullable(state.remoteFallback())
 				)
 		);
 	}
@@ -479,7 +505,17 @@ public final class CampaignSavedData extends SavedData {
 	) {
 	}
 
-	private record RawPlayer(IdentityFields identity, DurableFields durable) {
+	private record RewardFallbackFields(
+			Optional<PlayerCampaignState.RewardFallbackRef> sheetFallback,
+			Optional<PlayerCampaignState.RewardFallbackRef> remoteFallback
+	) {
+	}
+
+	private record RawPlayer(
+			IdentityFields identity,
+			DurableFields durable,
+			RewardFallbackFields rewardFallbacks
+	) {
 	}
 
 	private record RawDocument(int schemaVersion, List<RawPlayer> players) {

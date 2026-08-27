@@ -37,7 +37,9 @@ public record PlayerCampaignState(
 		boolean sheetProjectionPending,
 		boolean remoteProjectionPending,
 		UUID remoteProjectionUuid,
-		boolean legacyRemoteAdoptionPending
+		boolean legacyRemoteAdoptionPending,
+		RewardFallbackRef sheetFallback,
+		RewardFallbackRef remoteFallback
 ) implements CampaignSavedData.PlayerProgress {
 	public static final String OVERWORLD_DIMENSION = "minecraft:overworld";
 
@@ -85,8 +87,25 @@ public record PlayerCampaignState(
 		if (legacyRemoteAdoptionPending
 				&& (status != LectureStatus.PASSED
 					|| !remoteProjectionPending
+					|| remoteFallback != null
 					|| !legacyRemoteProjectionUuid(ownerUuid, deskPos, attemptCount).equals(remoteProjectionUuid))) {
 			throw new IllegalArgumentException("Legacy Remote adoption requires a pending passed projection");
+		}
+		if (sheetFallback != null && (status != LectureStatus.PASSED || !sheetEntitled)) {
+			throw new IllegalArgumentException("Sheet fallback requires a passed Sheet entitlement");
+		}
+		if (remoteFallback != null && (status != LectureStatus.PASSED || !remoteIssued)) {
+			throw new IllegalArgumentException("Remote fallback requires a passed Remote entitlement");
+		}
+		if (sheetFallback != null && !sheetFallback.materialized() && !sheetProjectionPending) {
+			throw new IllegalArgumentException("Sheet fallback reservation requires a pending projection");
+		}
+		if (remoteFallback != null && !remoteFallback.materialized() && !remoteProjectionPending) {
+			throw new IllegalArgumentException("Remote fallback reservation requires a pending projection");
+		}
+		if (sheetFallback != null && remoteFallback != null
+				&& sheetFallback.entityUuid().equals(remoteFallback.entityUuid())) {
+			throw new IllegalArgumentException("Sheet and Remote fallbacks require distinct entity UUIDs");
 		}
 		if (!retakeEntitled && (retakeEncounterUuid != null
 				|| retakeFallbackReservationUuid != null
@@ -160,7 +179,62 @@ public record PlayerCampaignState(
 				sheetProjectionPending,
 				remoteProjectionPending,
 				remoteProjectionUuid,
-				false
+				false,
+				null,
+				null
+		);
+	}
+
+	/** Source-compatible schema-v2 constructor for records without reward fallback reservations. */
+	public PlayerCampaignState(
+			UUID ownerUuid,
+			CampaignChapter chapter,
+			LectureStatus status,
+			int attemptCount,
+			String deskDimension,
+			BlockPos deskPos,
+			Direction deskFacing,
+			BlockPos retryPos,
+			EncounterRef activeEncounterRef,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			UUID retakeEncounterUuid,
+			UUID retakeFallbackReservationUuid,
+			UUID retakeFallbackEntityUuid,
+			long remoteCooldownUntilGameTime,
+			long sheetRecoverySequence,
+			long remoteReadyNoticeForDeadlineGameTime,
+			boolean sheetProjectionPending,
+			boolean remoteProjectionPending,
+			UUID remoteProjectionUuid,
+			boolean legacyRemoteAdoptionPending
+	) {
+		this(
+				ownerUuid,
+				chapter,
+				status,
+				attemptCount,
+				deskDimension,
+				deskPos,
+				deskFacing,
+				retryPos,
+				activeEncounterRef,
+				sheetEntitled,
+				remoteIssued,
+				retakeEntitled,
+				retakeEncounterUuid,
+				retakeFallbackReservationUuid,
+				retakeFallbackEntityUuid,
+				remoteCooldownUntilGameTime,
+				sheetRecoverySequence,
+				remoteReadyNoticeForDeadlineGameTime,
+				sheetProjectionPending,
+				remoteProjectionPending,
+				remoteProjectionUuid,
+				legacyRemoteAdoptionPending,
+				null,
+				null
 		);
 	}
 
@@ -412,6 +486,26 @@ public record PlayerCampaignState(
 		public RetakeKey {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
 			Objects.requireNonNull(failedEncounterUuid, "failedEncounterUuid");
+		}
+	}
+
+	/** Exact durable identity and last known chunk context for a loose reward representation. */
+	public record RewardFallbackRef(
+			UUID entityUuid,
+			String dimension,
+			BlockPos position,
+			boolean materialized
+	) {
+		public RewardFallbackRef {
+			Objects.requireNonNull(entityUuid, "entityUuid");
+			if (Objects.requireNonNull(dimension, "dimension").isBlank()) {
+				throw new IllegalArgumentException("fallback dimension must not be blank");
+			}
+			position = Objects.requireNonNull(position, "position").immutable();
+		}
+
+		public RewardFallbackRef at(String nextDimension, BlockPos nextPosition, boolean nextMaterialized) {
+			return new RewardFallbackRef(entityUuid, nextDimension, nextPosition, nextMaterialized);
 		}
 	}
 }
