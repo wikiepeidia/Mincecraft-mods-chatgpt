@@ -1,5 +1,6 @@
 package dev.developershell.server;
 
+import dev.developershell.bossrush.BossRushManager;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignTransition;
@@ -30,6 +31,7 @@ public final class DevelopersHellRuntime {
 	private final CampaignServiceAdapter campaignService;
 	private final LifecycleAdapter lifecycle;
 	private final LectureManagerAdapter lectureManager;
+	private final BossRushManager bossRushManager;
 
 	private DevelopersHellRuntime(
 			DevHellConfigLoader.LoadResult loadResult,
@@ -37,7 +39,8 @@ public final class DevelopersHellRuntime {
 			LectureRules lectureRules,
 			CampaignServiceAdapter campaignService,
 			LifecycleAdapter lifecycle,
-			LectureManagerAdapter lectureManager
+			LectureManagerAdapter lectureManager,
+			BossRushManager bossRushManager
 	) {
 		this.loadResult = Objects.requireNonNull(loadResult, "loadResult");
 		this.moduleGate = Objects.requireNonNull(moduleGate, "moduleGate");
@@ -45,6 +48,7 @@ public final class DevelopersHellRuntime {
 		this.campaignService = Objects.requireNonNull(campaignService, "campaignService");
 		this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
 		this.lectureManager = Objects.requireNonNull(lectureManager, "lectureManager");
+		this.bossRushManager = Objects.requireNonNull(bossRushManager, "bossRushManager");
 	}
 
 	public static DevelopersHellRuntime create(DevHellConfigLoader.LoadResult loadResult) {
@@ -76,7 +80,8 @@ public final class DevelopersHellRuntime {
 				rules,
 				campaignService,
 				lifecycle,
-				new LectureManagerAdapter(rules, config.reducedEffects())
+				new LectureManagerAdapter(rules, config.reducedEffects()),
+				new BossRushManager(config.campaignEnabled())
 		);
 	}
 
@@ -106,6 +111,10 @@ public final class DevelopersHellRuntime {
 
 	public LectureManagerAdapter lectureManager() {
 		return lectureManager;
+	}
+
+	public BossRushManager bossRushManager() {
+		return bossRushManager;
 	}
 
 	/**

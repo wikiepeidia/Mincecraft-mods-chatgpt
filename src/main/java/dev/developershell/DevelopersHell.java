@@ -50,12 +50,14 @@ public final class DevelopersHell implements ModInitializer {
 		runtime.lifecycle().bindRetakeReconciler(RetakeService::reconcile);
 		CampaignLifecycle.register(runtime);
 		runtime.lectureManager().initialize();
+		runtime.bossRushManager().registerLifecycle();
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
 		ModItems.RETAKE_FORM.bindArenaSearchRadius(runtime.campaignService().arenaSearchRadius());
 		DeskInteraction.register();
 		DevHellCommands.register(runtime);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			runtime.lectureManager().tick(server);
+			runtime.bossRushManager().tick(server);
 			if (server.getTickCount() == 1) {
 				LOGGER.info("DEVELOPERS_HELL_SERVER_FIRST_TICK_READY");
 			}

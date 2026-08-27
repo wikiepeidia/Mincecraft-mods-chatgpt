@@ -1,5 +1,8 @@
 package dev.developershell.command;
 
+import com.mojang.brigadier.arguments.StringArgumentType;
+import dev.developershell.bossrush.BossRushManager;
+import dev.developershell.bossrush.BossRushProgress;
 import dev.developershell.config.DevHellConfig;
 import dev.developershell.lecture.RetakeService;
 import dev.developershell.module.ModuleId;
@@ -27,6 +30,7 @@ public final class DevHellCommands {
 	private static final String RETAKE_FALLBACK_KEY = "message.developers_hell.retake.fallback";
 	private static final String RETAKE_ALREADY_KEY = "message.developers_hell.retake.already";
 	private static final String RETAKE_NOTHING_KEY = "message.developers_hell.retake.nothing";
+	private static final String BOSS_RUSH_STATUS_KEY = "command.developers_hell.bossrush.status";
 
 	public static void register(DevelopersHellRuntime runtime) {
 		Objects.requireNonNull(runtime, "runtime");
@@ -46,7 +50,66 @@ public final class DevHellCommands {
 								.then(Commands.literal("retake").executes(context -> recoverRetake(
 										context.getSource().getPlayerOrException()
 								))))
+						.then(Commands.literal("bossrush")
+								.then(Commands.literal("start").executes(context -> bossRushStart(
+										context.getSource().getPlayerOrException(), runtime
+								)))
+								.then(Commands.literal("status").executes(context -> bossRushStatus(
+										context.getSource().getPlayerOrException(), runtime
+								)))
+								.then(Commands.literal("abort").executes(context -> bossRushAbort(
+										context.getSource().getPlayerOrException(), runtime
+								)))
+								.then(Commands.literal("replay")
+										.then(Commands.argument("boss", StringArgumentType.word())
+												.executes(context -> bossRushReplay(
+														context.getSource().getPlayerOrException(),
+														runtime,
+														StringArgumentType.getString(context, "boss")
+												))))
+						)
 		));
+	}
+
+	private static int bossRushStart(ServerPlayer player, DevelopersHellRuntime runtime) {
+		BossRushManager.StartResult result = runtime.bossRushManager().start(player);
+		return result == BossRushManager.StartResult.STARTED
+				|| result == BossRushManager.StartResult.SPONSOR_SKIPPED ? 1 : 0;
+	}
+
+	private static int bossRushStatus(ServerPlayer player, DevelopersHellRuntime runtime) {
+		BossRushProgress progress = runtime.bossRushManager().status(player);
+		player.sendSystemMessage(Component.translatable(
+				BOSS_RUSH_STATUS_KEY,
+				Component.translatable("command.developers_hell.bossrush.stage."
+						+ progress.stage().serializedName()),
+				booleanValue(progress.juryCleared()),
+				booleanValue(progress.chairmanCleared()),
+				booleanValue(progress.diplomaGranted())
+		));
+		return 1;
+	}
+
+	private static int bossRushAbort(ServerPlayer player, DevelopersHellRuntime runtime) {
+		return runtime.bossRushManager().abort(player, "command") ? 1 : 0;
+	}
+
+	private static int bossRushReplay(
+			ServerPlayer player,
+			DevelopersHellRuntime runtime,
+			String bossName
+	) {
+		try {
+			return runtime.bossRushManager().replay(
+					player,
+					BossRushManager.ReplayBoss.fromCommand(bossName)
+			) == BossRushManager.StartResult.STARTED ? 1 : 0;
+		}
+		catch (IllegalArgumentException exception) {
+			player.sendSystemMessage(Component.translatable(
+					"command.developers_hell.bossrush.replay.invalid", bossName));
+			return 0;
+		}
 	}
 
 	private static int abort(ServerPlayer player) {
