@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "unit_suites": {
+    "dev.developershell.campaign.CampaignCodecTest": [
+      "serviceCommitsBeforeEffectsAndNoOpWritesNothing()",
+      "legacyPassedSaveDefaultsToMaterializedAndBackfillsStableRemoteIdentity()",
+      "schemaOneRoundTripsMaterializationReservationForReloadRecovery()",
+      "recordConstructorRejectsUnreachableCrossFieldStates()",
+      "futureSchemaIsVisibleReadOnlyAndRoundTripsUnknownPayload()",
+      "mapKeyMismatchIsVisibleAndReadOnly()",
+      "missingAndCorruptSchemaOneRemainExplicitReadOnlyAndPreserveRaw()",
+      "activeReloadNormalizationPersistsOnceAndThenNoOps()",
+      "schemaOneRoundTripsPassedRewardFieldsWithStableNames()",
+      "legacySchemaOneRetakeBackfillsOnlyMissingOptionalIdentity()"
+    ],
+    "dev.developershell.campaign.CampaignReducerTest": [
+      "everyTerminalReasonMatchesOwnerAndEncounterExactlyOnce()",
+      "retakeServiceReplacesOneLostFallbackWithoutChangingProgression()",
+      "retakeServiceDiscardsMaterializedFallbackWhenCommitLosesItsKey()",
+      "matchingVictoryCommitsPermanentLedgersAndWinsEveryReplay()",
+      "retakeFallbackReservationAndLossAreReplaySafe()",
+      "retakeServiceReservesBeforeFallbackAndRecoversMaterializationFailure()",
+      "retryRequiresCurrentEntitlementAndMatchingDeskBeforeAtomicStart()",
+      "retakeServiceStartsFromMaterializedReservationAndClearsItAfterPersistence()",
+      "everyFailureAndReloadRaceVictoryWithTheFirstPersistedTerminalWinning()",
+      "retakeServicePrefersInventoryAndClearsDuplicateFallbackStateFirst()",
+      "sheetRecoveryUsesMonotonicSequenceToSuppressReplays()",
+      "servicePersistsVictoryBeforeEffectsAndSuppressesLateReconciliation()",
+      "terminalAndReloadCreateOneEncounterBoundEntitlementAcrossEveryReplayOrder()",
+      "retakeServiceCompensatesRuntimeFailureBeforeReplacingTheForm()",
+      "remoteCooldownAndReadyNoticeNeverShortenOrReplay()",
+      "retakeServicePersistsAcceptedStartBeforePhysicalClearAndRejectsWithoutEffects()",
+      "reloadNormalizationClearsOnlyMatchingActiveIntentOnce()",
+      "firstRewardProjectionConfirmationsAreIndependentAndReplaySafe()",
+      "transitionFactoriesAreImmutableAndNoOpCannotCarryEffects()",
+      "startAcceptsImplicitReadyAndRetakeExactlyOnce()"
+    ],
+    "dev.developershell.config.DevHellConfigTest": [
+      "defaultsAreExactSafeBoundedAndImmutable()",
+      "issueFieldsAreBoundedSanitizedAndNeverExposePrivateValues()",
+      "invalidInputRemainsByteForByteUnchangedAndNeverGetsARecoveryWrite()",
+      "sizeRaceAndReadFailureFailClosedWithoutRawIoDetails()",
+      "allOffAllOnAndEverySingleGateLeaveStableCatalogIdentityUntouched()",
+      "fileAdapterReceivesOnlyTheFixedChildPath()",
+      "defaultTemplateWriteFailureKeepsSameSafeInMemorySnapshot()",
+      "unsupportedSchemaWrongTypesInvalidEnumsAndRangesAreAggregated()",
+      "professorHealthMustStartAboveTheFirstActFloor()",
+      "duplicateUnknownAndMissingPropertiesAreAggregated()",
+      "configAndLoadResultDefensivelySnapshotMutableInputs()",
+      "missingFileReturnsDefaultsAndWritesOneReusableTemplate()",
+      "arbitrarySecretScalarsAndPersonalPropertyNamesUseOnlyTypedSentinels()",
+      "runtimeCompositionUsesExactAcceptedImmutableSnapshot()",
+      "symbolicLinkNonRegularAndOversizeInputsFailBeforeRead()",
+      "malformedAndNonStrictJsonFailClosedWithoutWriting()",
+      "validCompleteDocumentAcceptsEveryBoundedValueAndExplicitModule()"
+    ],
+    "dev.developershell.item.RemoteCooldownTest": [
+      "acceptedDeadlineAndReadyEventsAreOwnerBoundAndReplaySafe()",
+      "exactDeadlineAndCeilingSecondsUseServerTickArithmetic()",
+      "overlayRestoreIsClampedAndReadyNoticeIsOneExactDeadlineEdge()",
+      "readyCuePolicyRequiresAPresentRemoteAndYieldsToCriticalBossInstructions()",
+      "slideCeilingsStayExplicitAndSmall()"
+    ],
+    "dev.developershell.lecture.ArenaValidatorTest": [
+      "radiusOneUsesOnlyItsCompleteOuterShell()",
+      "radiusEightCanSelectItsOuterShell()",
+      "radiusFiveRejectsAOnlySafeRadiusSixCandidate()"
+    ],
+    "dev.developershell.lecture.LectureGeometryTest": [
+      "lanePartitionsCoverTheInteriorExactlyOnce()",
+      "quizPadsAndAttendanceRingsUseFixedLocalAnchors()",
+      "verticalFacingCannotCreateAHorizontalArena()",
+      "typedResultsAndEveryRejectionExposeStableLocalizationKeys()",
+      "retryOrderStartsTwoBehindAndIsFiniteThroughRadiusFive()",
+      "allFourFacingsFreezeExactBoundaryInteriorAndHeadroom()",
+      "retryRadiusOneAndEightBoundTheCompleteConfiguredShells()",
+      "everyCombatZoneUsesOneExactServerSideContainmentContract()"
+    ],
+    "dev.developershell.lecture.LectureStateMachineTest": [
+      "minimumConfiguredHealthCanCompleteAllThreeActs()",
+      "pureDamageRejectsWrongStaleAndExpiredInputsWithoutChangingState()",
+      "attendanceCoversEveryQuadrantCountsThreeAbsencesAndDetentionIsNonlethal()",
+      "explicitSeedRepeatsAndIncludesAttemptCycleAndQuizIndex()",
+      "vulnerabilityUsesHalfOpenEightyTickBoundaryAndTimeoutRepeatsOnlyCurrentAct()",
+      "detentionAtOneHealthEmitsNoDamageAndNeverRepeatsAfterThirdAbsence()",
+      "thresholdsCannotBeSkippedAndRecoveryAdvancesActsDeterministically()",
+      "entityDamageAdmissionClampsAtEachActFloorWithoutSkipping()",
+      "entityDamageAdmissionUsesTheExplicitActiveActFloor()",
+      "slideDeckResolvesExactlyAtTick100ForEveryLaneAndOpensTickBoundedWindow()",
+      "entityDamageAdmissionRejectsClosedWrongOwnerStaleAndInvalidDamage()",
+      "finalMatchingThresholdEmitsVictoryExactlyOnce()",
+      "slideDeckMissIsBoundedAndReducedEffectsNeverChangesCollisionMeaning()",
+      "standardRulesFreezeExactThreeActTimingThresholdsAndBounds()",
+      "surpriseQuizCoversEveryPadAndWrongOrNoAnswerEmitsAtMostOneHomework()"
+    ],
+    "dev.developershell.module.ModuleGateTest": [
+      "enabledModuleViewIsImmutableAndNullQueriesAreRejected()",
+      "serializedNamesAreExactAndUnique()",
+      "allDisabledDisablesEveryModule()",
+      "ofRejectsNullSetAndMember()",
+      "allEnabledEnablesEveryModule()",
+      "stableCatalogIsExactImmutableAndIndependentOfEveryGate()",
+      "explicitGateEnablesOnlySelectedModule()",
+      "gateDefensivelyCopiesInput()"
+    ]
+  },
+  "gametest_suites": {
+    "contract_arena": [
+      "developers_hell_test:contract_arena_game_tests_active_encounter_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_failed_runtime_start_rolls_back_without_false_success_or_hidden_retake",
+      "developers_hell_test:contract_arena_game_tests_fire_occupancy_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_fire_retry_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_insufficient_headroom_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_magma_floor_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_non_solid_floor_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_outside_border_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_spawn_capacity_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_unsafe_retry_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_valid_start_persists_exact_geometry_before_effects",
+      "developers_hell_test:contract_arena_game_tests_wrong_dimension_rejection_is_atomic",
+      "developers_hell_test:contract_arena_game_tests_wrong_target_rejection_is_atomic"
+    ],
+    "foundation": [
+      "developers_hell_test:foundation_game_tests_contract_discovery_crafting_and_guidance_are_survival_reachable",
+      "developers_hell_test:foundation_game_tests_foundation_token_is_registered"
+    ],
+    "lecture_boss": [
+      "developers_hell_test:lecture_boss_game_tests_homework_add_registry_identity_and_orphan_guard_are_stable",
+      "developers_hell_test:lecture_boss_game_tests_professor_damage_uses_half_open_authoritative_deadline",
+      "developers_hell_test:lecture_boss_game_tests_reduced_effects_keep_semantic_shapes_with_lower_bounded_cadence",
+      "developers_hell_test:lecture_boss_game_tests_three_acts_use_redundant_cues_owner_damage_and_atomic_victory_cleanup",
+      "developers_hell_test:lecture_boss_game_tests_wrong_quiz_spawns_one_owner_scoped_cleanup_owned_homework_add"
+    ],
+    "lecture_lifecycle": [
+      "developers_hell_test:lecture_lifecycle_game_tests_death_escape_timeout_dimension_disconnect_abort_and_unload_converge_exactly_once",
+      "developers_hell_test:lecture_lifecycle_game_tests_reload_join_rejects_orphan_and_cancels_every_queued_impact",
+      "developers_hell_test:lecture_lifecycle_game_tests_server_stop_handler_converges_exactly_once_without_stopping_game_test_server"
+    ],
+    "remote": [
+      "developers_hell_test:remote_game_tests_death_respawn_and_join_restore_persisted_remaining_overlay_without_chat",
+      "developers_hell_test:remote_game_tests_production_remote_use_commits_one_effect_and_rejected_use_does_not_reset",
+      "developers_hell_test:remote_game_tests_ready_edge_waits_for_present_remote_and_critical_instruction_then_emits_once"
+    ],
+    "retake": [
+      "developers_hell_test:retake_game_tests_abort_and_recover_commands_require_game_master_and_use_shared_services",
+      "developers_hell_test:retake_game_tests_cleanup_issues_one_bound_inventory_form_and_replay_issues_nothing",
+      "developers_hell_test:retake_game_tests_empty_hand_recovery_requires_matching_desk_missing_projection_and_ready_state",
+      "developers_hell_test:retake_game_tests_full_inventory_fallback_loss_and_recovery_stay_exactly_one",
+      "developers_hell_test:retake_game_tests_production_retake_item_revalidates_commits_and_consumes_exactly_one",
+      "developers_hell_test:retake_game_tests_wrong_owner_desk_state_and_changed_arena_are_atomic_no_ops"
+    ],
+    "reward": [
+      "developers_hell_test:reward_game_tests_direct_death_and_compatibility_victory_cannot_bypass_manager",
+      "developers_hell_test:reward_game_tests_failed_both_recover_at_desk_and_lost_remote_does_not_replay",
+      "developers_hell_test:reward_game_tests_full_inventory_victory_uses_owner_targeted_fallback_without_replay",
+      "developers_hell_test:reward_game_tests_matching_desk_recovers_only_missing_sheet_without_reward_replay",
+      "developers_hell_test:reward_game_tests_real_encounter_victory_reconciles_first_reward",
+      "developers_hell_test:reward_game_tests_remote_only_representation_reconciles_sheet_independently",
+      "developers_hell_test:reward_game_tests_sheet_only_representation_reconciles_remote_independently",
+      "developers_hell_test:reward_game_tests_sheet_success_remote_failure_retries_only_remote_on_join"
+    ],
+    "vanilla_baseline": [
+      "minecraft:always_pass"
+    ]
+  },
+  "validation_rows": [
+    {
+      "id": "02-CFG-01",
+      "description": "strict config defaults, rejection, and redaction receipt",
+      "unit_suites": ["dev.developershell.config.DevHellConfigTest"],
+      "gametest_suites": [],
+      "gates": []
+    },
+    {
+      "id": "02-STATE-01",
+      "description": "monotonic replay-safe persistence receipt",
+      "unit_suites": ["dev.developershell.campaign.CampaignCodecTest", "dev.developershell.campaign.CampaignReducerTest"],
+      "gametest_suites": [],
+      "gates": []
+    },
+    {
+      "id": "02-GEO-01",
+      "description": "bounded deterministic arena and attack geometry receipt",
+      "unit_suites": ["dev.developershell.lecture.ArenaValidatorTest", "dev.developershell.lecture.LectureGeometryTest"],
+      "gametest_suites": ["contract_arena"],
+      "gates": []
+    },
+    {
+      "id": "02-ITEM-01",
+      "description": "contract, retake, and remote transaction receipt",
+      "unit_suites": ["dev.developershell.item.RemoteCooldownTest"],
+      "gametest_suites": ["contract_arena", "retake", "remote"],
+      "gates": []
+    },
+    {
+      "id": "02-BOSS-01",
+      "description": "boss identity, acts, damage, and vulnerability receipt",
+      "unit_suites": ["dev.developershell.lecture.LectureStateMachineTest"],
+      "gametest_suites": ["lecture_boss"],
+      "gates": []
+    },
+    {
+      "id": "02-LIFE-01",
+      "description": "terminal, reload, orphan, and server-stop cleanup receipt",
+      "unit_suites": [],
+      "gametest_suites": ["lecture_lifecycle"],
+      "gates": []
+    },
+    {
+      "id": "02-REWARD-01",
+      "description": "exactly-once reward fallback and recovery receipt",
+      "unit_suites": ["dev.developershell.campaign.CampaignReducerTest"],
+      "gametest_suites": ["reward"],
+      "gates": []
+    },
+    {
+      "id": "02-DISC-01",
+      "description": "survival discovery and registered foundation receipt",
+      "unit_suites": [],
+      "gametest_suites": ["foundation"],
+      "gates": []
+    },
+    {
+      "id": "02-GATE-01",
+      "description": "module, vanilla harness, build, audit, archive, and server receipt",
+      "unit_suites": ["dev.developershell.module.ModuleGateTest"],
+      "gametest_suites": ["vanilla_baseline"],
+      "gates": ["gradle_transaction", "foundation_audit", "source_archive", "phase2_archive", "production_server"]
+    }
+  ]
+}

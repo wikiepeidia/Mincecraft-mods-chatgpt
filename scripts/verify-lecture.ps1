@@ -24,6 +24,9 @@ $script:ToolchainEvidenceRelativePath = '.planning/phases/01-java-25-and-fabric-
 $script:JdkRelativePath = '.work/toolchain/temurin-25.0.4+7-x64'
 $script:GradleInitRelativePath = 'scripts/loom-resolution.init.gradle'
 $script:ServerRunRelativePath = 'run/production-server'
+$script:TestManifestRelativePath = 'scripts/lecture-test-manifest.json'
+$script:UnitTestReportRelativePath = 'build/test-results/test'
+$script:GameTestReportRelativePath = 'build/test-results/gametest/TEST-gametest.xml'
 $script:RequiredAutomatedRows = @('02-CFG-01','02-STATE-01','02-GEO-01','02-ITEM-01','02-BOSS-01','02-LIFE-01','02-REWARD-01','02-DISC-01','02-GATE-01')
 $script:ManualRows = @(
     'MANUAL-UI-01',
@@ -143,6 +146,296 @@ function Get-StringSha256 {
     } finally {
         $sha.Dispose()
     }
+}
+
+function Assert-ExactProperties {
+    param(
+        [Parameter(Mandatory)] $Value,
+        [Parameter(Mandatory)][string[]] $Expected,
+        [Parameter(Mandatory)][string] $Label
+    )
+    $actual = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+    $missing = @($Expected | Where-Object { $_ -cnotin $actual })
+    $unknown = @($actual | Where-Object { $_ -cnotin $Expected })
+    if ($missing.Count -ne 0 -or $unknown.Count -ne 0 -or $actual.Count -ne $Expected.Count) {
+        throw "$Label has missing, duplicate, or unknown properties."
+    }
+}
+
+function Assert-UniqueStrings {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Values,
+        [Parameter(Mandatory)][string] $Label
+    )
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($value in $Values) {
+        if ([string]::IsNullOrWhiteSpace($value) -or -not $seen.Add($value)) {
+            throw "$Label contains an empty or duplicate value."
+        }
+    }
+}
+
+function Get-CanonicalReceiptHash {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Lines)
+    $ordered = @($Lines)
+    [System.Array]::Sort($ordered, [System.StringComparer]::Ordinal)
+    return Get-StringSha256 -Value (($ordered -join "`n") + "`n")
+}
+
+function Get-LectureTestManifest {
+    $path = Resolve-SafeRepositoryPath -Path $script:TestManifestRelativePath -ExpectedRelativePath $script:TestManifestRelativePath
+    $raw = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+    Assert-ExactProperties -Value $raw -Expected @('schema_version','unit_suites','gametest_suites','validation_rows') -Label 'Test manifest'
+    if ([int]$raw.schema_version -ne 1) { throw 'Test manifest schema version is unsupported.' }
+
+    $unitGroups = @{}
+    $expectedUnit = [System.Collections.Generic.List[string]]::new()
+    foreach ($suiteProperty in @($raw.unit_suites.PSObject.Properties)) {
+        $suite = [string]$suiteProperty.Name
+        if ($suite -notmatch '^dev[.]developershell(?:[.][A-Za-z][A-Za-z0-9_]*)+[.]?[A-Za-z][A-Za-z0-9_]*Test$') {
+            throw 'Test manifest has an invalid unit suite name.'
+        }
+        $methods = @($suiteProperty.Value | ForEach-Object { [string]$_ })
+        if ($methods.Count -eq 0) { throw "Test manifest unit suite is empty: $suite" }
+        Assert-UniqueStrings -Values $methods -Label "Test manifest unit suite $suite"
+        $ids = [System.Collections.Generic.List[string]]::new()
+        foreach ($method in $methods) {
+            if ($method -notmatch '^[A-Za-z][A-Za-z0-9_]*[(][)]$') { throw "Test manifest has an invalid unit method in $suite." }
+            $id = $suite + '#' + $method
+            $ids.Add($id)
+            $expectedUnit.Add($id)
+        }
+        $unitGroups[$suite] = @($ids)
+    }
+    if ($unitGroups.Count -eq 0) { throw 'Test manifest has no unit suites.' }
+    Assert-UniqueStrings -Values @($expectedUnit) -Label 'Test manifest unit IDs'
+
+    $gameTestGroups = @{}
+    $expectedGameTests = [System.Collections.Generic.List[string]]::new()
+    foreach ($groupProperty in @($raw.gametest_suites.PSObject.Properties)) {
+        $group = [string]$groupProperty.Name
+        if ($group -notmatch '^[a-z][a-z0-9_]*$') { throw 'Test manifest has an invalid GameTest group name.' }
+        $ids = @($groupProperty.Value | ForEach-Object { [string]$_ })
+        if ($ids.Count -eq 0) { throw "Test manifest GameTest group is empty: $group" }
+        Assert-UniqueStrings -Values $ids -Label "Test manifest GameTest group $group"
+        foreach ($id in $ids) {
+            if ($id -notmatch '^[a-z0-9_.-]+:[a-z0-9_./-]+$') { throw "Test manifest has an invalid GameTest ID in $group." }
+            $expectedGameTests.Add($id)
+        }
+        $gameTestGroups[$group] = $ids
+    }
+    if ($gameTestGroups.Count -eq 0) { throw 'Test manifest has no GameTest groups.' }
+    Assert-UniqueStrings -Values @($expectedGameTests) -Label 'Test manifest GameTest IDs'
+    if (@($gameTestGroups['vanilla_baseline']).Count -ne 1 -or [string]$gameTestGroups['vanilla_baseline'][0] -cne 'minecraft:always_pass') {
+        throw 'Test manifest must pin the Fabric runner vanilla always-pass baseline explicitly.'
+    }
+
+    $allowedGates = @('gradle_transaction','foundation_audit','source_archive','phase2_archive','production_server')
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $rowIds = [System.Collections.Generic.List[string]]::new()
+    $referencedUnitGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $referencedGameTestGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($rawRow in @($raw.validation_rows)) {
+        Assert-ExactProperties -Value $rawRow -Expected @('id','description','unit_suites','gametest_suites','gates') -Label 'Test manifest validation row'
+        $id = [string]$rawRow.id
+        $description = [string]$rawRow.description
+        $unitSuites = @($rawRow.unit_suites | ForEach-Object { [string]$_ })
+        $gameTestSuites = @($rawRow.gametest_suites | ForEach-Object { [string]$_ })
+        $gates = @($rawRow.gates | ForEach-Object { [string]$_ })
+        if ($id -cnotin $script:RequiredAutomatedRows -or $description -notmatch '^[a-z0-9 ,_-]+$') {
+            throw 'Test manifest validation row identity or description is invalid.'
+        }
+        Assert-UniqueStrings -Values $unitSuites -Label "Validation row $id unit suites"
+        Assert-UniqueStrings -Values $gameTestSuites -Label "Validation row $id GameTest suites"
+        Assert-UniqueStrings -Values $gates -Label "Validation row $id gates"
+        foreach ($suite in $unitSuites) {
+            if (-not $unitGroups.ContainsKey($suite)) { throw "Validation row $id references an unknown unit suite." }
+            [void]$referencedUnitGroups.Add($suite)
+        }
+        foreach ($group in $gameTestSuites) {
+            if (-not $gameTestGroups.ContainsKey($group)) { throw "Validation row $id references an unknown GameTest group." }
+            [void]$referencedGameTestGroups.Add($group)
+        }
+        foreach ($gate in $gates) {
+            if ($gate -cnotin $allowedGates) { throw "Validation row $id references an unknown gate." }
+        }
+        if ($unitSuites.Count + $gameTestSuites.Count + $gates.Count -eq 0) { throw "Validation row $id has no receipts." }
+        $rowIds.Add($id)
+        $rows.Add([pscustomobject]@{ Id=$id; Description=$description; UnitSuites=$unitSuites; GameTestSuites=$gameTestSuites; Gates=$gates })
+    }
+    Assert-UniqueStrings -Values @($rowIds) -Label 'Test manifest validation row IDs'
+    if ($rowIds.Count -ne $script:RequiredAutomatedRows.Count) { throw 'Test manifest validation row count is not exact.' }
+    for ($index = 0; $index -lt $script:RequiredAutomatedRows.Count; $index++) {
+        if ($rowIds[$index] -cne $script:RequiredAutomatedRows[$index]) { throw 'Test manifest validation row order is not canonical.' }
+    }
+    foreach ($suite in @($unitGroups.Keys)) {
+        if (-not $referencedUnitGroups.Contains([string]$suite)) { throw "Unit suite has no explicit validation-row receipt group: $suite" }
+    }
+    foreach ($group in @($gameTestGroups.Keys)) {
+        if (-not $referencedGameTestGroups.Contains([string]$group)) { throw "GameTest group has no explicit validation-row receipt group: $group" }
+    }
+
+    return [pscustomobject]@{
+        Path = $path
+        Sha256 = Get-FileSha256 -LiteralPath $path
+        UnitGroups = $unitGroups
+        GameTestGroups = $gameTestGroups
+        ExpectedUnitIds = @($expectedUnit)
+        ExpectedGameTestIds = @($expectedGameTests)
+        Rows = @($rows)
+    }
+}
+
+function Read-SafeXmlDocument {
+    param([Parameter(Mandatory)][string] $LiteralPath)
+    $settings = [System.Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $reader = [System.Xml.XmlReader]::Create($LiteralPath, $settings)
+    try {
+        $document = [System.Xml.XmlDocument]::new()
+        $document.XmlResolver = $null
+        $document.Load($reader)
+        return $document
+    } finally {
+        $reader.Dispose()
+    }
+}
+
+function Assert-ExactExecutedIds {
+    param(
+        [Parameter(Mandatory)][string[]] $Actual,
+        [Parameter(Mandatory)][string[]] $Expected,
+        [Parameter(Mandatory)][string] $Label
+    )
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($id in $Actual) {
+        if ([string]::IsNullOrWhiteSpace($id) -or -not $actualSet.Add($id)) { throw "$Label receipt contains an empty or duplicate executed ID." }
+    }
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($id in $Expected) {
+        if (-not $expectedSet.Add($id)) { throw "$Label manifest contains a duplicate expected ID." }
+    }
+    $missing = @($Expected | Where-Object { -not $actualSet.Contains($_) })
+    $unexpected = @($Actual | Where-Object { -not $expectedSet.Contains($_) })
+    if ($missing.Count -ne 0 -or $unexpected.Count -ne 0 -or $Actual.Count -ne $Expected.Count) {
+        throw "$Label receipt does not exactly equal the reviewed manifest (missing=$($missing.Count), unexpected=$($unexpected.Count))."
+    }
+}
+
+function Get-TestExecutionReceipts {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [string] $UnitReportDirectory,
+        [string] $GameTestReportPath
+    )
+    if ([string]::IsNullOrWhiteSpace($UnitReportDirectory)) { $UnitReportDirectory = Join-Path $script:RepositoryRoot $script:UnitTestReportRelativePath }
+    if ([string]::IsNullOrWhiteSpace($GameTestReportPath)) { $GameTestReportPath = Join-Path $script:RepositoryRoot $script:GameTestReportRelativePath }
+    $unitFiles = @(Get-ChildItem -LiteralPath $UnitReportDirectory -File -Filter 'TEST-*.xml' -ErrorAction Stop | Sort-Object Name)
+    if ($unitFiles.Count -eq 0) { throw 'Fresh unit-test XML receipts are missing.' }
+    $unitIds = [System.Collections.Generic.List[string]]::new()
+    $unitFailures = 0; $unitErrors = 0; $unitSkipped = 0
+    foreach ($file in $unitFiles) {
+        $document = Read-SafeXmlDocument -LiteralPath $file.FullName
+        $suite = $document.DocumentElement
+        if ($null -eq $suite -or $suite.Name -cne 'testsuite') { throw 'Unit receipt root must be one testsuite.' }
+        $cases = @($suite.SelectNodes('./testcase'))
+        foreach ($attribute in @('tests','failures','errors','skipped')) {
+            if (-not $suite.HasAttribute($attribute) -or $suite.GetAttribute($attribute) -notmatch '^[0-9]+$') { throw "Unit receipt lacks a numeric $attribute count." }
+        }
+        $caseFailures = @($suite.SelectNodes('./testcase/failure')).Count
+        $caseErrors = @($suite.SelectNodes('./testcase/error')).Count
+        $caseSkipped = @($suite.SelectNodes('./testcase/skipped')).Count
+        if ([int]$suite.GetAttribute('tests') -ne $cases.Count -or [int]$suite.GetAttribute('failures') -ne $caseFailures -or [int]$suite.GetAttribute('errors') -ne $caseErrors -or [int]$suite.GetAttribute('skipped') -ne $caseSkipped) {
+            throw 'Unit receipt declared counts disagree with testcase nodes.'
+        }
+        $unitFailures += $caseFailures; $unitErrors += $caseErrors; $unitSkipped += $caseSkipped
+        foreach ($case in $cases) {
+            $className = [string]$case.GetAttribute('classname')
+            $methodName = [string]$case.GetAttribute('name')
+            if ([string]::IsNullOrWhiteSpace($className) -or [string]::IsNullOrWhiteSpace($methodName)) { throw 'Unit receipt testcase identity is incomplete.' }
+            $unitIds.Add($className + '#' + $methodName)
+        }
+    }
+    if ($unitFailures -ne 0 -or $unitErrors -ne 0 -or $unitSkipped -ne 0) { throw 'Unit receipt contains a failed, errored, or skipped testcase.' }
+    Assert-ExactExecutedIds -Actual @($unitIds) -Expected @($Manifest.ExpectedUnitIds) -Label 'Unit'
+
+    if (-not (Test-Path -LiteralPath $GameTestReportPath -PathType Leaf)) { throw 'Fresh GameTest XML receipt is missing.' }
+    $gameDocument = Read-SafeXmlDocument -LiteralPath $GameTestReportPath
+    $gameCases = @($gameDocument.SelectNodes('//testcase'))
+    if ($gameCases.Count -eq 0) { throw 'Fresh GameTest XML receipt has no testcase nodes.' }
+    $gameFailures = @($gameDocument.SelectNodes('//testcase/failure')).Count
+    $gameErrors = @($gameDocument.SelectNodes('//testcase/error')).Count
+    $gameSkipped = @($gameDocument.SelectNodes('//testcase/skipped')).Count
+    if ($gameFailures -ne 0 -or $gameErrors -ne 0 -or $gameSkipped -ne 0) { throw 'GameTest receipt contains a failed, errored, or skipped testcase.' }
+    $gameTestIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($case in $gameCases) {
+        $id = [string]$case.GetAttribute('name')
+        if ([string]::IsNullOrWhiteSpace($id)) { throw 'GameTest receipt testcase identity is incomplete.' }
+        $gameTestIds.Add($id)
+    }
+    Assert-ExactExecutedIds -Actual @($gameTestIds) -Expected @($Manifest.ExpectedGameTestIds) -Label 'GameTest'
+
+    return [pscustomobject]@{
+        UnitFiles = $unitFiles.Count
+        UnitIds = @($unitIds)
+        UnitCount = $unitIds.Count
+        UnitFailures = $unitFailures
+        UnitErrors = $unitErrors
+        UnitSkipped = $unitSkipped
+        UnitSha256 = Get-CanonicalReceiptHash -Lines @($unitIds | ForEach-Object { 'unit:' + $_ })
+        GameTestFiles = 1
+        GameTestIds = @($gameTestIds)
+        GameTestCount = $gameTestIds.Count
+        GameTestFailures = $gameFailures
+        GameTestErrors = $gameErrors
+        GameTestSkipped = $gameSkipped
+        GameTestSha256 = Get-CanonicalReceiptHash -Lines @($gameTestIds | ForEach-Object { 'gametest:' + $_ })
+    }
+}
+
+function Get-ValidationRowReceipts {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] $TestReceipts,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $GateResults
+    )
+    $actualUnit = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($id in @($TestReceipts.UnitIds)) { [void]$actualUnit.Add([string]$id) }
+    $actualGameTests = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($id in @($TestReceipts.GameTestIds)) { [void]$actualGameTests.Add([string]$id) }
+    $result = [System.Collections.Generic.List[object]]::new()
+    foreach ($row in @($Manifest.Rows)) {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $unitCount = 0; $gameTestCount = 0
+        foreach ($suite in @($row.UnitSuites)) {
+            foreach ($id in @($Manifest.UnitGroups[$suite])) {
+                if (-not $actualUnit.Contains([string]$id)) { throw "Validation row $($row.Id) lacks a measured unit receipt." }
+                $lines.Add('unit:' + [string]$id); $unitCount++
+            }
+        }
+        foreach ($group in @($row.GameTestSuites)) {
+            foreach ($id in @($Manifest.GameTestGroups[$group])) {
+                if (-not $actualGameTests.Contains([string]$id)) { throw "Validation row $($row.Id) lacks a measured GameTest receipt." }
+                $lines.Add('gametest:' + [string]$id); $gameTestCount++
+            }
+        }
+        foreach ($gate in @($row.Gates)) {
+            if (-not $GateResults.Contains($gate) -or [bool]$GateResults[$gate] -ne $true) { throw "Validation row $($row.Id) lacks a green measured gate: $gate" }
+            $lines.Add('gate:' + [string]$gate + '=PASS')
+        }
+        if ($lines.Count -eq 0) { throw "Validation row $($row.Id) has no measured receipts." }
+        $result.Add([pscustomobject]@{
+            Id = $row.Id
+            Description = $row.Description
+            UnitCount = $unitCount
+            GameTestCount = $gameTestCount
+            Gates = if (@($row.Gates).Count -eq 0) { 'none' } else { @($row.Gates) -join ',' }
+            Sha256 = Get-CanonicalReceiptHash -Lines @($lines)
+            Status = 'PASS'
+        })
+    }
+    return @($result)
 }
 
 function Get-EvidenceMarker {
@@ -325,7 +618,10 @@ function Assert-ServerTranscript {
 function Assert-EvidenceContract {
     param(
         [Parameter(Mandatory)][string] $EvidenceText,
-        [Parameter(Mandatory)][string] $DistributionHash
+        [Parameter(Mandatory)][string] $DistributionHash,
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] $TestReceipts,
+        [Parameter(Mandatory)] $ValidationRows
     )
     if ($DistributionHash -notmatch '^[0-9a-fA-F]{64}$') { throw 'Distribution hash is not SHA-256.' }
     $normalizedHash = $DistributionHash.ToLowerInvariant()
@@ -334,17 +630,41 @@ function Assert-EvidenceContract {
             throw "Evidence hash mismatch: $marker"
         }
     }
-    foreach ($marker in @('gradle_transaction_exit','foundation_audit_adjudication_exit','production_server_exit')) {
+    foreach ($marker in @('gradle_transaction_exit','foundation_audit_exit','production_server_exit')) {
         if ((Get-EvidenceMarker -Text $EvidenceText -Name $marker) -cne '0') { throw "Evidence exit is not zero: $marker" }
     }
-    if ((Get-EvidenceMarker -Text $EvidenceText -Name 'foundation_audit_exit') -cne '1') { throw 'Evidence must preserve the raw foundation audit sanitizer false-positive exit 1.' }
+    $receiptMarkers = [ordered]@{
+        test_manifest_sha256 = [string]$Manifest.Sha256
+        unit_test_report_files = [string]$TestReceipts.UnitFiles
+        unit_receipt_count = [string]$TestReceipts.UnitCount
+        unit_receipt_failures = [string]$TestReceipts.UnitFailures
+        unit_receipt_errors = [string]$TestReceipts.UnitErrors
+        unit_receipt_skipped = [string]$TestReceipts.UnitSkipped
+        unit_receipt_sha256 = [string]$TestReceipts.UnitSha256
+        gametest_report_files = [string]$TestReceipts.GameTestFiles
+        gametest_receipt_count = [string]$TestReceipts.GameTestCount
+        gametest_receipt_failures = [string]$TestReceipts.GameTestFailures
+        gametest_receipt_errors = [string]$TestReceipts.GameTestErrors
+        gametest_receipt_skipped = [string]$TestReceipts.GameTestSkipped
+        gametest_receipt_sha256 = [string]$TestReceipts.GameTestSha256
+    }
+    foreach ($entry in $receiptMarkers.GetEnumerator()) {
+        if ((Get-EvidenceMarker -Text $EvidenceText -Name ([string]$entry.Key)) -cne [string]$entry.Value) {
+            throw "Evidence execution receipt mismatch: $($entry.Key)"
+        }
+    }
     foreach ($marker in @('server_ready','server_stop_cleanup_callback','server_ordered_shutdown','clean_exit','owned_child_cleanup','source_archive_audit','phase2_archive_audit','hash_equality')) {
         $value = Get-EvidenceMarker -Text $EvidenceText -Name $marker
         if ($value -notmatch '(?i)(?:PASS|equal|clean|zero)') { throw "Evidence PASS marker is not green: $marker" }
     }
-    foreach ($row in $script:RequiredAutomatedRows) {
-        $matches = [regex]::Matches($EvidenceText, '(?m)^\|\s*' + [regex]::Escape($row) + '\s*\|[^\r\n]*\|\s*PASS\s*\|\s*$')
-        if ($matches.Count -ne 1) { throw "Automated evidence row must appear once as PASS: $row" }
+    $rows = @($ValidationRows)
+    if ($rows.Count -ne $script:RequiredAutomatedRows.Count) { throw 'Evidence validation-row receipt count is not exact.' }
+    foreach ($row in $rows) {
+        if ([string]$row.Status -cne 'PASS' -or [string]$row.Sha256 -notmatch '^[0-9a-f]{64}$') { throw "Validation row receipt is not green and canonical: $($row.Id)" }
+        $receipt = 'unit=' + $row.UnitCount + '; gametest=' + $row.GameTestCount + '; gates=' + $row.Gates + '; receipt_sha256=' + $row.Sha256
+        $expectedLine = '| ' + $row.Id + ' | ' + $row.Description + ' | ' + $receipt + ' | PASS |'
+        $matches = [regex]::Matches($EvidenceText, '(?m)^' + [regex]::Escape($expectedLine) + '$')
+        if ($matches.Count -ne 1) { throw "Automated evidence row must match its measured receipt exactly: $($row.Id)" }
     }
     foreach ($row in $script:ManualRows) {
         $matches = [regex]::Matches($EvidenceText, '(?m)^\|\s*' + [regex]::Escape($row) + '\s*\|[^\r\n]*\|\s*PENDING\s*\|\s*$')
@@ -732,8 +1052,99 @@ function New-SyntheticLectureArchive {
     }
 }
 
+function Write-SyntheticTestcaseXml {
+    param(
+        [Parameter(Mandatory)][System.Xml.XmlWriter] $Writer,
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $ClassName,
+        [ValidateSet('pass','fail','error','skip')][string] $Outcome = 'pass'
+    )
+    $Writer.WriteStartElement('testcase')
+    $Writer.WriteAttributeString('name', $Name)
+    $Writer.WriteAttributeString('classname', $ClassName)
+    if ($Outcome -cne 'pass') {
+        $Writer.WriteStartElement($(if ($Outcome -ceq 'fail') { 'failure' } elseif ($Outcome -ceq 'error') { 'error' } else { 'skipped' }))
+        $Writer.WriteAttributeString('message', 'synthetic mutation')
+        $Writer.WriteEndElement()
+    }
+    $Writer.WriteEndElement()
+}
+
+function New-SyntheticTestReceiptSet {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)][string] $Root,
+        [ValidateSet('none','missing','duplicate','unexpected','fail','error','skip')][string] $GameTestMutation = 'none',
+        [ValidateSet('none','missing','duplicate','unexpected','fail','error','skip')][string] $UnitMutation = 'none'
+    )
+    $unitDirectory = Join-Path $Root 'unit'
+    $gameTestPath = Join-Path $Root 'gametest.xml'
+    if (Test-Path -LiteralPath $unitDirectory -PathType Container) { Remove-Item -LiteralPath $unitDirectory -Recurse -Force }
+    [void](New-Item -ItemType Directory -Path $unitDirectory -Force)
+    if (Test-Path -LiteralPath $gameTestPath -PathType Leaf) { Remove-Item -LiteralPath $gameTestPath -Force }
+    $settings = [System.Xml.XmlWriterSettings]::new()
+    $settings.Encoding = [System.Text.UTF8Encoding]::new($false)
+    $settings.Indent = $true
+
+    $firstUnit = [string]$Manifest.ExpectedUnitIds[0]
+    foreach ($suite in @($Manifest.UnitGroups.Keys | Sort-Object)) {
+        $ids = [System.Collections.Generic.List[string]]::new()
+        foreach ($id in @($Manifest.UnitGroups[$suite])) {
+            if ($UnitMutation -ceq 'missing' -and [string]$id -ceq $firstUnit) { continue }
+            $ids.Add([string]$id)
+            if ($UnitMutation -ceq 'duplicate' -and [string]$id -ceq $firstUnit) { $ids.Add([string]$id) }
+        }
+        if ($UnitMutation -ceq 'unexpected' -and [string]$suite -ceq [string](@($Manifest.UnitGroups.Keys | Sort-Object)[0])) {
+            $ids.Add([string]$suite + '#unexpectedReceiptMethod()')
+        }
+        $path = Join-Path $unitDirectory ('TEST-' + [string]$suite + '.xml')
+        $writer = [System.Xml.XmlWriter]::Create($path, $settings)
+        try {
+            $writer.WriteStartDocument()
+            $writer.WriteStartElement('testsuite')
+            $writer.WriteAttributeString('tests', [string]$ids.Count)
+            $writer.WriteAttributeString('failures', $(if ($UnitMutation -ceq 'fail' -and @($ids) -ccontains $firstUnit) { '1' } else { '0' }))
+            $writer.WriteAttributeString('errors', $(if ($UnitMutation -ceq 'error' -and @($ids) -ccontains $firstUnit) { '1' } else { '0' }))
+            $writer.WriteAttributeString('skipped', $(if ($UnitMutation -ceq 'skip' -and @($ids) -ccontains $firstUnit) { '1' } else { '0' }))
+            foreach ($id in @($ids)) {
+                $parts = [string]$id -split '#', 2
+                $outcome = if ([string]$id -cne $firstUnit) { 'pass' } elseif ($UnitMutation -cin @('fail','error','skip')) { $UnitMutation } else { 'pass' }
+                Write-SyntheticTestcaseXml -Writer $writer -Name $parts[1] -ClassName $parts[0] -Outcome $outcome
+            }
+            $writer.WriteEndElement()
+            $writer.WriteEndDocument()
+        } finally { $writer.Dispose() }
+    }
+
+    $firstGameTest = [string]$Manifest.ExpectedGameTestIds[0]
+    $gameTestIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($id in @($Manifest.ExpectedGameTestIds)) {
+        if ($GameTestMutation -ceq 'missing' -and [string]$id -ceq $firstGameTest) { continue }
+        $gameTestIds.Add([string]$id)
+        if ($GameTestMutation -ceq 'duplicate' -and [string]$id -ceq $firstGameTest) { $gameTestIds.Add([string]$id) }
+    }
+    if ($GameTestMutation -ceq 'unexpected') { $gameTestIds.Add('developers_hell_test:unexpected_game_test') }
+    $gameWriter = [System.Xml.XmlWriter]::Create($gameTestPath, $settings)
+    try {
+        $gameWriter.WriteStartDocument()
+        $gameWriter.WriteStartElement('testsuite')
+        foreach ($id in @($gameTestIds)) {
+            $outcome = if ([string]$id -cne $firstGameTest) { 'pass' } elseif ($GameTestMutation -cin @('fail','error','skip')) { $GameTestMutation } else { 'pass' }
+            Write-SyntheticTestcaseXml -Writer $gameWriter -Name ([string]$id) -ClassName 'fabric-gametest-api-v1:empty' -Outcome $outcome
+        }
+        $gameWriter.WriteEndElement()
+        $gameWriter.WriteEndDocument()
+    } finally { $gameWriter.Dispose() }
+    return [pscustomobject]@{ UnitDirectory=$unitDirectory; GameTestPath=$gameTestPath }
+}
+
 function New-SyntheticEvidenceText {
-    param([Parameter(Mandatory)][string] $Hash)
+    param(
+        [Parameter(Mandatory)][string] $Hash,
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] $TestReceipts,
+        [Parameter(Mandatory)] $ValidationRows
+    )
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
         '# Phase 2 Lecture Evidence',
@@ -741,9 +1152,21 @@ function New-SyntheticEvidenceText {
         "build_jar_sha256: $Hash",
         "distribution_sha256: $Hash",
         'gradle_transaction_exit: 0',
-        'foundation_audit_exit: 1',
-        'foundation_audit_adjudication_exit: 0',
+        'foundation_audit_exit: 0',
         'production_server_exit: 0',
+        ('test_manifest_sha256: ' + $Manifest.Sha256),
+        ('unit_test_report_files: ' + $TestReceipts.UnitFiles),
+        ('unit_receipt_count: ' + $TestReceipts.UnitCount),
+        ('unit_receipt_failures: ' + $TestReceipts.UnitFailures),
+        ('unit_receipt_errors: ' + $TestReceipts.UnitErrors),
+        ('unit_receipt_skipped: ' + $TestReceipts.UnitSkipped),
+        ('unit_receipt_sha256: ' + $TestReceipts.UnitSha256),
+        ('gametest_report_files: ' + $TestReceipts.GameTestFiles),
+        ('gametest_receipt_count: ' + $TestReceipts.GameTestCount),
+        ('gametest_receipt_failures: ' + $TestReceipts.GameTestFailures),
+        ('gametest_receipt_errors: ' + $TestReceipts.GameTestErrors),
+        ('gametest_receipt_skipped: ' + $TestReceipts.GameTestSkipped),
+        ('gametest_receipt_sha256: ' + $TestReceipts.GameTestSha256),
         'server_ready: PASS',
         'server_stop_cleanup_callback: PASS',
         'server_ordered_shutdown: PASS',
@@ -753,10 +1176,13 @@ function New-SyntheticEvidenceText {
         'phase2_archive_audit: PASS',
         'hash_equality: source/build/dist hashes equal',
         '',
-        '| Automated ID | Evidence | Status |',
-        '|---|---|---|'
+        '| Automated ID | Measured receipt group | Receipt | Status |',
+        '|---|---|---|---|'
     )) { [void] $lines.Add($line) }
-    foreach ($row in $script:RequiredAutomatedRows) { [void] $lines.Add("| $row | synthetic green anchor | PASS |") }
+    foreach ($row in @($ValidationRows)) {
+        $receipt = 'unit=' + $row.UnitCount + '; gametest=' + $row.GameTestCount + '; gates=' + $row.Gates + '; receipt_sha256=' + $row.Sha256
+        [void]$lines.Add('| ' + $row.Id + ' | ' + $row.Description + ' | ' + $receipt + ' | ' + $row.Status + ' |')
+    }
     [void] $lines.Add('')
     [void] $lines.Add('| Manual backstop ID | Direct-client observation | Status |')
     [void] $lines.Add('|---|---|---|')
@@ -773,7 +1199,8 @@ function Invoke-SelfCheckMode {
         throw 'Safe evidence path contract returned no path.'
     }
     [void](Resolve-SafeRepositoryPath -Path $script:DefaultDistributionRelativePath -ExpectedRelativePath $script:DefaultDistributionRelativePath -AllowMissingLeaf)
-        Assert-SelfCheckRejects -Label 'path traversal/alternate target' -Action {
+    $manifest = Get-LectureTestManifest
+    Assert-SelfCheckRejects -Label 'path traversal/alternate target' -Action {
         Resolve-SafeRepositoryPath -Path '..\outside.md' -ExpectedRelativePath $script:DefaultEvidenceRelativePath -AllowMissingLeaf
     }
     if (-not (Test-OwnedChildStartOrder -ParentStartTicks 1000 -ChildStartTicks 1000) -or
@@ -804,17 +1231,51 @@ function Invoke-SelfCheckMode {
         New-SyntheticLectureArchive -Path $jar -TelemetryValue '"false"'
         Assert-SelfCheckRejects -Label 'telemetry opt-out string false' -Action { Get-LectureArchiveContract -JarPath $jar }
 
+        $receiptRoot = Join-Path $fixtureRoot 'receipts'
+        [void](New-Item -ItemType Directory -Path $receiptRoot)
+        $receiptPaths = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot
+        $commentedSource = Join-Path $receiptRoot 'CommentOnlyGameTest.java'
+        [System.IO.File]::WriteAllText($commentedSource, '// @GameTest is documentation, not an execution receipt.', [System.Text.UTF8Encoding]::new($false))
+        $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
+        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 86 -or $testReceipts.GameTestCount -ne 41) {
+            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 86/41 manifest drifted.'
+        }
+        $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
+        $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
+
+        foreach ($mutation in @('missing','duplicate','unexpected','fail','error','skip')) {
+            $mutated = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -GameTestMutation $mutation
+            Assert-SelfCheckRejects -Label "GameTest $mutation execution receipt" -Action {
+                Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $mutated.UnitDirectory -GameTestReportPath $mutated.GameTestPath
+            }
+        }
+        foreach ($mutation in @('missing','duplicate','unexpected','fail','error','skip')) {
+            $mutated = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -UnitMutation $mutation
+            Assert-SelfCheckRejects -Label "unit $mutation execution receipt" -Action {
+                Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $mutated.UnitDirectory -GameTestReportPath $mutated.GameTestPath
+            }
+        }
+        $receiptPaths = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot
+        $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
+        $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
+
         $hash = ('a' * 64)
-        $evidence = New-SyntheticEvidenceText -Hash $hash
-        [void](Assert-EvidenceContract -EvidenceText $evidence -DistributionHash $hash)
+        $evidence = New-SyntheticEvidenceText -Hash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        [void](Assert-EvidenceContract -EvidenceText $evidence -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
         Assert-SelfCheckRejects -Label 'evidence hash mismatch' -Action {
-            Assert-EvidenceContract -EvidenceText ($evidence -replace "distribution_sha256: $hash", ('distribution_sha256: ' + ('b' * 64))) -DistributionHash $hash
+            Assert-EvidenceContract -EvidenceText ($evidence -replace "distribution_sha256: $hash", ('distribution_sha256: ' + ('b' * 64))) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'missing real stop callback marker' -Action {
-            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_stop_cleanup_callback:.*\r?\n', '') -DistributionHash $hash
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_stop_cleanup_callback:.*\r?\n', '') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'PASS row missing measured receipt' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^(\| 02-CFG-01 \|[^|]+\|)[^|]+(\| PASS \|)$', '$1 omitted $2') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'PASS row tampered receipt hash' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace ([regex]::Escape([string]$validationRows[0].Sha256)), ('c' * 64)) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'manual observation inferred as PASS' -Action {
-            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^\| MANUAL-UI-01 \|([^\r\n]+)\| PENDING \|$', '| MANUAL-UI-01 |$1| PASS |') -DistributionHash $hash
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^\| MANUAL-UI-01 \|([^\r\n]+)\| PENDING \|$', '| MANUAL-UI-01 |$1| PASS |') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
 
         $ordered = "$($script:ExpectedReadyMarker)`n$($script:ExpectedStopCleanupMarker)`nStopping server`nAll dimensions are saved"
@@ -876,27 +1337,15 @@ function Assert-IndependentProductionSourceContract {
     return $true
 }
 
-function Assert-FoundationAuditAdjudication {
+function Assert-FoundationAuditGreen {
     param([Parameter(Mandatory)] $AuditResult)
-    if ($AuditResult.ExitCode -eq 0) { throw 'Foundation audit unexpectedly stopped reporting the pinned sanitizer literal; review the adjudication instead of silently widening it.' }
-    if ($AuditResult.ExitCode -ne 1) { throw "Foundation audit returned unexpected raw exit $($AuditResult.ExitCode)." }
+    if ($AuditResult.ExitCode -ne 0) { throw "Foundation audit returned non-zero exit $($AuditResult.ExitCode)." }
     $text = $AuditResult.Combined.Replace('\', '/')
-    $expectedPath = 'src/main/java/dev/developershell/config/ConfigIssue.java'
-    $failureSections = [regex]::Matches($text, '(?m)^FAIL:').Count
-    if ($failureSections -ne 2 -or
-        $text -notmatch '(?m)^## SOURCE_RUNTIME_SURFACES\r?\nFAIL: Forbidden account credential or authorization surface found in: src/main/java/dev/developershell/config/ConfigIssue[.]java\s*$' -or
-        $text -notmatch '(?m)^## FINAL_RESULT\r?\nFAIL: FOUNDATION_AUDIT \(1 section failure\(s\)\)\s*$' -or
-        $text -notmatch '(?m)^- SOURCE_RUNTIME_SURFACES - Forbidden account credential or authorization surface found in: src/main/java/dev/developershell/config/ConfigIssue[.]java\s*$') {
-        throw 'Foundation audit output is not the one exact adjudicable sanitizer-literal false positive.'
+    if ($text -match '(?m)^FAIL:' -or $text -notmatch '(?m)^## FINAL_RESULT\r?\nPASS: FOUNDATION_AUDIT\s*$') {
+        throw 'Foundation audit output is not exactly green.'
     }
-    foreach ($pass in @('PREREQUISITES','COMMON_CLIENT_LINKAGE','OFFICIAL_REPOSITORIES','DIRECT_DEPENDENCIES','RUNTIME_CLASSPATH_REPORT','PRODUCTION_ARCHIVE','WRAPPER_AND_GIT_HYGIENE')) {
+    foreach ($pass in @('PREREQUISITES','COMMON_CLIENT_LINKAGE','OFFICIAL_REPOSITORIES','DIRECT_DEPENDENCIES','RUNTIME_CLASSPATH_REPORT','PRODUCTION_ARCHIVE','SOURCE_RUNTIME_SURFACES','WRAPPER_AND_GIT_HYGIENE')) {
         if ($text -notmatch ('(?s)## ' + [regex]::Escape($pass) + '\r?\nPASS:')) { throw "Foundation audit has no exact PASS for required section: $pass" }
-    }
-    $configPath = Join-Path $script:RepositoryRoot $expectedPath
-    if ((Get-FileSha256 $configPath) -cne '63adf50dffaf1143d0339510dc7203b56d857d7af2352fd9e5c308ed56ba67ab') { throw 'ConfigIssue.java changed from the reviewed sanitizer-only source hash.' }
-    $configText = [System.IO.File]::ReadAllText($configPath)
-    if ([regex]::Matches($configText, '(?i)credential(?:s)?').Count -ne 1 -or $configText -notmatch [regex]::Escape('lower.contains("credential")') -or $configText -notmatch '(?s)sanitizeRejectedValue.*?return REDACTED;') {
-        throw 'The adjudicated credential literal is not the one exact sanitizeRejectedValue denylist context.'
     }
     [void](Assert-IndependentProductionSourceContract)
     return $true
@@ -921,27 +1370,6 @@ function Copy-ArtifactAtomically {
     }
 }
 
-function Get-UnitTestSummary {
-    $files = @(Get-ChildItem -LiteralPath (Join-Path $script:RepositoryRoot 'build\test-results\test') -File -Filter 'TEST-*.xml' -ErrorAction Stop)
-    if ($files.Count -eq 0) { throw 'Fresh unit-test XML reports are missing.' }
-    $tests = 0; $failures = 0; $errors = 0; $skipped = 0
-    foreach ($file in $files) {
-        [xml]$xml = [System.IO.File]::ReadAllText($file.FullName)
-        $suite = $xml.testsuite
-        $tests += [int]$suite.tests; $failures += [int]$suite.failures; $errors += [int]$suite.errors; $skipped += [int]$suite.skipped
-    }
-    if ($tests -le 0 -or $failures -ne 0 -or $errors -ne 0) { throw 'Fresh unit-test reports are empty or not green.' }
-    return [pscustomobject]@{ Files=$files.Count; Tests=$tests; Failures=$failures; Errors=$errors; Skipped=$skipped }
-}
-
-function Get-GameTestSourceCount {
-    $files = @(Get-ChildItem -LiteralPath (Join-Path $script:RepositoryRoot 'src\gametest\java') -File -Recurse -Filter '*.java')
-    $count = 0
-    foreach ($file in $files) { $count += [regex]::Matches([System.IO.File]::ReadAllText($file.FullName), '@GameTest\b').Count }
-    if ($count -le 0) { throw 'No Phase 2 GameTest anchors were found.' }
-    return $count
-}
-
 function New-LectureEvidenceText {
     param(
         [Parameter(Mandatory)][string] $Hash,
@@ -951,8 +1379,9 @@ function New-LectureEvidenceText {
         [Parameter(Mandatory)] $BuildResult,
         [Parameter(Mandatory)] $AuditResult,
         [Parameter(Mandatory)] $ServerResult,
-        [Parameter(Mandatory)] $UnitSummary,
-        [Parameter(Mandatory)][int] $GameTestCount
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] $TestReceipts,
+        [Parameter(Mandatory)] $ValidationRows
     )
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
@@ -967,15 +1396,20 @@ function New-LectureEvidenceText {
         ('gradle_log_sha256: ' + (Get-StringSha256 $BuildResult.Combined)),
         'foundation_audit_command: powershell.exe scripts/audit-foundation.ps1 -SourceAndDependencies -JarPath build/libs/developers-hell-0.1.0.jar',
         ('foundation_audit_exit: ' + $AuditResult.ExitCode),
-        'foundation_audit_adjudication_exit: 0',
-        'foundation_audit_adjudication: PASS - one exact ConfigIssue.sanitizeRejectedValue denylist literal at pinned source hash; no other raw finding',
         ('foundation_audit_log_sha256: ' + (Get-StringSha256 $AuditResult.Combined)),
-        ('unit_test_report_files: ' + $UnitSummary.Files),
-        ('unit_tests: ' + $UnitSummary.Tests),
-        ('unit_failures: ' + $UnitSummary.Failures),
-        ('unit_errors: ' + $UnitSummary.Errors),
-        ('unit_skipped: ' + $UnitSummary.Skipped),
-        ('gametest_anchors_executed_by_runGameTest: ' + $GameTestCount),
+        ('test_manifest_sha256: ' + $Manifest.Sha256),
+        ('unit_test_report_files: ' + $TestReceipts.UnitFiles),
+        ('unit_receipt_count: ' + $TestReceipts.UnitCount),
+        ('unit_receipt_failures: ' + $TestReceipts.UnitFailures),
+        ('unit_receipt_errors: ' + $TestReceipts.UnitErrors),
+        ('unit_receipt_skipped: ' + $TestReceipts.UnitSkipped),
+        ('unit_receipt_sha256: ' + $TestReceipts.UnitSha256),
+        ('gametest_report_files: ' + $TestReceipts.GameTestFiles),
+        ('gametest_receipt_count: ' + $TestReceipts.GameTestCount),
+        ('gametest_receipt_failures: ' + $TestReceipts.GameTestFailures),
+        ('gametest_receipt_errors: ' + $TestReceipts.GameTestErrors),
+        ('gametest_receipt_skipped: ' + $TestReceipts.GameTestSkipped),
+        ('gametest_receipt_sha256: ' + $TestReceipts.GameTestSha256),
         ('ordinary_jar_size: ' + $Artifact.Size),
         ('ordinary_jar_entries: ' + $Archive.EntryCount),
         ('ordinary_jar_entries_sha256: ' + $Archive.EntriesSha256),
@@ -999,17 +1433,14 @@ function New-LectureEvidenceText {
         '',
         '## Automated validation rows',
         '',
-        '| Automated ID | Existing green evidence | Status |',
-        '|---|---|---|',
-        '| 02-CFG-01 | DevHellConfigTest strict whole-file defaults/rejection matrix | PASS |',
-        '| 02-STATE-01 | CampaignCodecTest and CampaignReducerTest monotonic/replay-safe persistence | PASS |',
-        '| 02-GEO-01 | LectureGeometryTest and LectureStateMachineTest bounded deterministic geometry | PASS |',
-        '| 02-ITEM-01 | ContractArenaGameTests, RetakeGameTests, RemoteGameTests transaction/cooldown cases | PASS |',
-        '| 02-BOSS-01 | LectureStateMachineTest and LectureBossGameTests identity/acts/vulnerability | PASS |',
-        '| 02-LIFE-01 | LectureLifecycleGameTests terminal/reload/orphan/server-stop cleanup matrix | PASS |',
-        '| 02-REWARD-01 | CampaignReducerTest and RewardGameTests exactly-once/fallback/recovery cases | PASS |',
-        '| 02-DISC-01 | FoundationGameTests recipe/advancement/localization/valid-desk discovery | PASS |',
-        '| 02-GATE-01 | Fresh offline build, dependency/source/archive audit, and ordered dedicated-server clean stop | PASS |',
+        '| Automated ID | Measured receipt group | Receipt | Status |',
+        '|---|---|---|---|'
+    )) { [void]$lines.Add([string]$line) }
+    foreach ($row in @($ValidationRows)) {
+        $receipt = 'unit=' + $row.UnitCount + '; gametest=' + $row.GameTestCount + '; gates=' + $row.Gates + '; receipt_sha256=' + $row.Sha256
+        [void]$lines.Add('| ' + $row.Id + ' | ' + $row.Description + ' | ' + $receipt + ' | ' + $row.Status + ' |')
+    }
+    foreach ($line in @(
         '',
         '## Direct-client backstops',
         '',
@@ -1031,6 +1462,7 @@ function New-LectureEvidenceText {
 function Invoke-VerifyMode {
     param([Parameter(Mandatory)][string] $EvidenceFile, [Parameter(Mandatory)][string] $DistributionFile)
     $jdk = Get-VerifiedJdk
+    $manifest = Get-LectureTestManifest
     $previousHash = if (Test-Path -LiteralPath $DistributionFile -PathType Leaf) { Get-FileSha256 $DistributionFile } else { 'absent' }
     $buildStartedUtc = [DateTime]::UtcNow
     $gradleArgs = Get-GradleArguments -Jdk $jdk -Tasks @('clean','test','runGameTest','auditDirectDependencies','build')
@@ -1038,20 +1470,21 @@ function Invoke-VerifyMode {
     if ($build.ExitCode -ne 0 -or $build.Combined -notmatch 'BUILD SUCCESSFUL' -or $build.Combined -notmatch '(?m)> Task :runGameTest' -or $build.Combined -notmatch 'DEVELOPERS_HELL_DIRECT_DEPENDENCIES=') { throw 'Fresh offline Gradle transaction did not prove build, GameTest, and dependency anchors.' }
     $jar = Resolve-SafeRepositoryPath -Path $script:BuildJarRelativePath -ExpectedRelativePath $script:BuildJarRelativePath
     $artifact = Assert-FreshArtifact -JarPath $jar -BuildStartedUtc $buildStartedUtc
-    $unit = Get-UnitTestSummary
-    $gameTests = Get-GameTestSourceCount
+    $testReceipts = Get-TestExecutionReceipts -Manifest $manifest
     $audit = Invoke-BoundedFoundationAudit -Jdk $jdk -JarPath $jar
-    [void](Assert-FoundationAuditAdjudication -AuditResult $audit)
+    [void](Assert-FoundationAuditGreen -AuditResult $audit)
     $archive = Get-LectureArchiveContract -JarPath $jar
     if ($archive.Sha256 -cne $artifact.Sha256) { throw 'Fresh-artifact and Phase 2 archive hashes disagree.' }
     $server = Invoke-BoundedProductionServer -Jdk $jdk -ArtifactPath $jar
     if ((Get-FileSha256 $jar) -cne $artifact.Sha256) { throw 'Fresh build JAR changed after all candidate gates.' }
+    $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
+    $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
 
     Copy-ArtifactAtomically -Source $jar -Destination $DistributionFile
     $distributionHash = Get-FileSha256 $DistributionFile
     if ($distributionHash -cne $artifact.Sha256) { throw 'Promoted distribution does not equal the inspected source/build JAR.' }
-    $evidenceText = New-LectureEvidenceText -Hash $distributionHash -PreviousHash $previousHash -Artifact $artifact -Archive $archive -BuildResult $build -AuditResult $audit -ServerResult $server -UnitSummary $unit -GameTestCount $gameTests
-    [void](Assert-EvidenceContract -EvidenceText $evidenceText -DistributionHash $distributionHash)
+    $evidenceText = New-LectureEvidenceText -Hash $distributionHash -PreviousHash $previousHash -Artifact $artifact -Archive $archive -BuildResult $build -AuditResult $audit -ServerResult $server -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+    [void](Assert-EvidenceContract -EvidenceText $evidenceText -DistributionHash $distributionHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
     [System.IO.File]::WriteAllText($EvidenceFile, $evidenceText, [System.Text.UTF8Encoding]::new($false))
     Write-Host "PASS: fresh Phase 2 artifact promoted after all gates; server root PID $($server.RootPid), captured owned children $($server.CapturedCount), SHA-256 $distributionHash"
 }
@@ -1062,10 +1495,14 @@ function Invoke-ValidateEvidenceMode {
     if (-not (Test-Path -LiteralPath $EvidenceFile -PathType Leaf)) { throw 'Phase 2 lecture evidence is missing.' }
     if (-not (Test-Path -LiteralPath $DistributionFile -PathType Leaf)) { throw 'Phase 2 distribution JAR is missing.' }
     $distributionHash = Get-FileSha256 $DistributionFile
+    $manifest = Get-LectureTestManifest
+    $testReceipts = Get-TestExecutionReceipts -Manifest $manifest
+    $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
+    $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
     $buildJar = Resolve-SafeRepositoryPath -Path $script:BuildJarRelativePath -ExpectedRelativePath $script:BuildJarRelativePath
     if ((Get-FileSha256 $buildJar) -cne $distributionHash) { throw 'Current build and distribution hashes are not equal.' }
     $text = [System.IO.File]::ReadAllText($EvidenceFile)
-    [void](Assert-EvidenceContract -EvidenceText $text -DistributionHash $distributionHash)
+    [void](Assert-EvidenceContract -EvidenceText $text -DistributionHash $distributionHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
     [void](Get-LectureArchiveContract -JarPath $DistributionFile)
     Write-Host "PASS: lecture evidence validates exact build/dist SHA-256 $distributionHash with seven manual rows PENDING"
 }

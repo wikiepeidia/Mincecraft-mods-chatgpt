@@ -39,6 +39,16 @@ fabricApi {
 	}
 }
 
+def gameTestReport = layout.buildDirectory.file("test-results/gametest/TEST-gametest.xml")
+loom.runs.named("gameTest") {
+	vmArg "-Dfabric-api.gametest.report-file=${gameTestReport.get().asFile.absolutePath}"
+}
+tasks.named("runGameTest") {
+	doFirst {
+		gameTestReport.get().asFile.parentFile.mkdirs()
+	}
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
