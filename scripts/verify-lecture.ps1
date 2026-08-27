@@ -91,6 +91,78 @@ function Resolve-SafeRepositoryPath {
     return $candidate
 }
 
+function Invoke-GitRepositoryQuery {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Arguments)
+    $git = (Get-Command git.exe -ErrorAction Stop).Source
+    Push-Location -LiteralPath $script:RepositoryRoot
+    try {
+        $output = @(& $git @Arguments 2>&1 | ForEach-Object { [string]$_ })
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($exitCode -ne 0) { throw 'Git repository identity query failed.' }
+    return @($output)
+}
+
+function Get-RepositorySourceIdentity {
+    $formatLines = @(Invoke-GitRepositoryQuery -Arguments @('rev-parse','--show-object-format'))
+    $commitLines = @(Invoke-GitRepositoryQuery -Arguments @('rev-parse','--verify','HEAD'))
+    $treeLines = @(Invoke-GitRepositoryQuery -Arguments @('rev-parse','--verify','HEAD^{tree}'))
+    if ($formatLines.Count -ne 1 -or $commitLines.Count -ne 1 -or $treeLines.Count -ne 1) { throw 'Git repository identity output is ambiguous.' }
+    $format = [string]$formatLines[0]
+    $commit = [string]$commitLines[0]
+    $tree = [string]$treeLines[0]
+    $hashPattern = if ($format -ceq 'sha1') { '^[0-9a-f]{40}$' } elseif ($format -ceq 'sha256') { '^[0-9a-f]{64}$' } else { throw 'Git repository object format is unsupported.' }
+    if ($commit -notmatch $hashPattern -or $tree -notmatch $hashPattern) { throw 'Git repository commit or tree identity is not canonical.' }
+    return [pscustomobject]@{ ObjectFormat=$format; Commit=$commit; Tree=$tree }
+}
+
+function Assert-EmptySourceStatus {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Lines)
+    if (@($Lines | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -ne 0) {
+        throw 'Verification requires a clean tracked and untracked source worktree.'
+    }
+    return $true
+}
+
+function Get-CleanSourceSnapshot {
+    # Keep the repository's reviewed .gitignore for generated outputs, but disable
+    # user-global excludes so an untracked source file cannot disappear from status.
+    $status = @(Invoke-GitRepositoryQuery -Arguments @('-c','core.excludesFile=','status','--porcelain=v1','--untracked-files=all'))
+    [void](Assert-EmptySourceStatus -Lines $status)
+    $identity = Get-RepositorySourceIdentity
+    return [pscustomobject]@{ ObjectFormat=$identity.ObjectFormat; Commit=$identity.Commit; Tree=$identity.Tree; Status='CLEAN' }
+}
+
+function Assert-SourceSnapshotStillClean {
+    param([Parameter(Mandatory)] $Expected)
+    $actual = Get-CleanSourceSnapshot
+    if ([string]$actual.ObjectFormat -cne [string]$Expected.ObjectFormat -or [string]$actual.Commit -cne [string]$Expected.Commit -or [string]$actual.Tree -cne [string]$Expected.Tree) {
+        throw 'Source commit or tree changed during the verification transaction.'
+    }
+    return $true
+}
+
+function Assert-RecordedSourceIdentity {
+    param(
+        [Parameter(Mandatory)][string] $ObjectFormat,
+        [Parameter(Mandatory)][string] $Commit,
+        [Parameter(Mandatory)][string] $Tree
+    )
+    $current = Get-RepositorySourceIdentity
+    if ($ObjectFormat -cne $current.ObjectFormat) { throw 'Evidence source object format does not match this repository.' }
+    $hashPattern = if ($ObjectFormat -ceq 'sha1') { '^[0-9a-f]{40}$' } elseif ($ObjectFormat -ceq 'sha256') { '^[0-9a-f]{64}$' } else { throw 'Evidence source object format is unsupported.' }
+    if ($Commit -notmatch $hashPattern -or $Tree -notmatch $hashPattern) { throw 'Evidence source commit or tree is not canonical.' }
+    $commitType = @(Invoke-GitRepositoryQuery -Arguments @('cat-file','-t',$Commit))
+    $recordedTree = @(Invoke-GitRepositoryQuery -Arguments @('rev-parse','--verify',($Commit + '^{tree}')))
+    $treeType = @(Invoke-GitRepositoryQuery -Arguments @('cat-file','-t',$Tree))
+    if ($commitType.Count -ne 1 -or $commitType[0] -cne 'commit' -or $recordedTree.Count -ne 1 -or $recordedTree[0] -cne $Tree -or $treeType.Count -ne 1 -or $treeType[0] -cne 'tree') {
+        throw 'Evidence source commit does not resolve to the recorded tree.'
+    }
+    return $true
+}
+
 function Assert-FreshArtifact {
     param(
         [Parameter(Mandatory)][string] $JarPath,
@@ -623,7 +695,8 @@ function Assert-EvidenceContract {
         [Parameter(Mandatory)][string] $DistributionHash,
         [Parameter(Mandatory)] $Manifest,
         [Parameter(Mandatory)] $TestReceipts,
-        [Parameter(Mandatory)] $ValidationRows
+        [Parameter(Mandatory)] $ValidationRows,
+        $ExpectedSourceSnapshot
     )
     if ($DistributionHash -notmatch '^[0-9a-fA-F]{64}$') { throw 'Distribution hash is not SHA-256.' }
     $normalizedHash = $DistributionHash.ToLowerInvariant()
@@ -633,6 +706,15 @@ function Assert-EvidenceContract {
     if ($timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.]\d{7}Z$') { throw 'Evidence timestamp is not canonical UTC round-trip format.' }
     try { [void][DateTime]::ParseExact($timestamp, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
     catch { throw 'Evidence timestamp is not a valid UTC timestamp.' }
+    $sourceObjectFormat = [string]$fields['source_object_format']
+    $sourceCommit = [string]$fields['source_commit']
+    $sourceTree = [string]$fields['source_tree']
+    if ([string]$fields['source_worktree_status'] -cne 'CLEAN') { throw 'Evidence source worktree status is not exactly CLEAN.' }
+    [void](Assert-RecordedSourceIdentity -ObjectFormat $sourceObjectFormat -Commit $sourceCommit -Tree $sourceTree)
+    if ($null -ne $ExpectedSourceSnapshot -and
+        ($sourceObjectFormat -cne [string]$ExpectedSourceSnapshot.ObjectFormat -or $sourceCommit -cne [string]$ExpectedSourceSnapshot.Commit -or $sourceTree -cne [string]$ExpectedSourceSnapshot.Tree -or [string]$ExpectedSourceSnapshot.Status -cne 'CLEAN')) {
+        throw 'Evidence source identity differs from the clean verification snapshot.'
+    }
     $exactFields = [ordered]@{
         java_runtime = 'Eclipse Temurin 25.0.4+7 checksum-bound'
         gradle_command = 'gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle'
@@ -1096,6 +1178,10 @@ function Get-ExpectedStructuredEvidenceFields {
     return @(
         'evidence_schema',
         'evidence_timestamp_utc',
+        'source_object_format',
+        'source_commit',
+        'source_tree',
+        'source_worktree_status',
         'java_runtime',
         'gradle_command',
         'gradle_transaction_exit',
@@ -1268,7 +1354,8 @@ function New-SyntheticEvidenceText {
         [Parameter(Mandatory)][string] $Hash,
         [Parameter(Mandatory)] $Manifest,
         [Parameter(Mandatory)] $TestReceipts,
-        [Parameter(Mandatory)] $ValidationRows
+        [Parameter(Mandatory)] $ValidationRows,
+        [Parameter(Mandatory)] $SourceSnapshot
     )
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
@@ -1276,6 +1363,10 @@ function New-SyntheticEvidenceText {
         $script:EvidenceBlockStart,
         'evidence_schema: developers_hell_phase2_v1',
         'evidence_timestamp_utc: 2026-01-01T00:00:00.0000000Z',
+        ('source_object_format: ' + $SourceSnapshot.ObjectFormat),
+        ('source_commit: ' + $SourceSnapshot.Commit),
+        ('source_tree: ' + $SourceSnapshot.Tree),
+        'source_worktree_status: CLEAN',
         'java_runtime: Eclipse Temurin 25.0.4+7 checksum-bound',
         'gradle_command: gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle',
         'gradle_transaction_exit: 0',
@@ -1354,6 +1445,9 @@ function Invoke-SelfCheckMode {
     Assert-SelfCheckRejects -Label 'path traversal/alternate target' -Action {
         Resolve-SafeRepositoryPath -Path '..\outside.md' -ExpectedRelativePath $script:DefaultEvidenceRelativePath -AllowMissingLeaf
     }
+    [void](Assert-EmptySourceStatus -Lines @())
+    Assert-SelfCheckRejects -Label 'modified tracked source status' -Action { Assert-EmptySourceStatus -Lines @(' M src/main/java/example.java') }
+    Assert-SelfCheckRejects -Label 'untracked source status' -Action { Assert-EmptySourceStatus -Lines @('?? src/main/java/untracked.java') }
     if (-not (Test-OwnedChildStartOrder -ParentStartTicks 1000 -ChildStartTicks 1000) -or
         -not (Test-OwnedChildStartOrder -ParentStartTicks 1000 -ChildStartTicks 1001) -or
         (Test-OwnedChildStartOrder -ParentStartTicks 1000 -ChildStartTicks 999)) {
@@ -1411,8 +1505,10 @@ function Invoke-SelfCheckMode {
         $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
 
         $hash = ('a' * 64)
-        $evidence = New-SyntheticEvidenceText -Hash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
-        [void](Assert-EvidenceContract -EvidenceText $evidence -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
+        $sourceIdentity = Get-RepositorySourceIdentity
+        $sourceSnapshot = [pscustomobject]@{ ObjectFormat=$sourceIdentity.ObjectFormat; Commit=$sourceIdentity.Commit; Tree=$sourceIdentity.Tree; Status='CLEAN' }
+        $evidence = New-SyntheticEvidenceText -Hash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -SourceSnapshot $sourceSnapshot
+        [void](Assert-EvidenceContract -EvidenceText $evidence -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
         $productionShape = New-LectureEvidenceText `
             -Hash $hash `
             -PreviousHash 'absent' `
@@ -1423,11 +1519,18 @@ function Invoke-SelfCheckMode {
             -ServerResult ([pscustomobject]@{ RootPid=1; CapturedCount=0; LogSha256=('a' * 64) }) `
             -Manifest $manifest `
             -TestReceipts $testReceipts `
-            -ValidationRows $validationRows
-        [void](Assert-EvidenceContract -EvidenceText $productionShape -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
-        [void](Assert-EvidenceContract -EvidenceText ($productionShape -replace "`n", "`r`n") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
+            -ValidationRows $validationRows `
+            -SourceSnapshot $sourceSnapshot
+        [void](Assert-EvidenceContract -EvidenceText $productionShape -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
+        [void](Assert-EvidenceContract -EvidenceText ($productionShape -replace "`n", "`r`n") -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
         Assert-SelfCheckRejects -Label 'evidence hash mismatch' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace "distribution_sha256: $hash", ('distribution_sha256: ' + ('b' * 64))) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'dirty source worktree claim' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^source_worktree_status: CLEAN$', 'source_worktree_status: DIRTY') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
+        }
+        Assert-SelfCheckRejects -Label 'source commit/tree mismatch' -Action {
+            Assert-EvidenceContract -EvidenceText ($evidence -replace ('source_tree: ' + [regex]::Escape([string]$sourceSnapshot.Tree)), ('source_tree: ' + $sourceSnapshot.Commit)) -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
         }
         Assert-SelfCheckRejects -Label 'missing real stop callback marker' -Action {
             Assert-EvidenceContract -EvidenceText ($evidence -replace '(?m)^server_stop_cleanup_status:.*\r?\n', '') -DistributionHash $hash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
@@ -1568,7 +1671,8 @@ function New-LectureEvidenceText {
         [Parameter(Mandatory)] $ServerResult,
         [Parameter(Mandatory)] $Manifest,
         [Parameter(Mandatory)] $TestReceipts,
-        [Parameter(Mandatory)] $ValidationRows
+        [Parameter(Mandatory)] $ValidationRows,
+        [Parameter(Mandatory)] $SourceSnapshot
     )
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
@@ -1579,6 +1683,10 @@ function New-LectureEvidenceText {
         $script:EvidenceBlockStart,
         'evidence_schema: developers_hell_phase2_v1',
         ('evidence_timestamp_utc: ' + [DateTime]::UtcNow.ToString('o')),
+        ('source_object_format: ' + $SourceSnapshot.ObjectFormat),
+        ('source_commit: ' + $SourceSnapshot.Commit),
+        ('source_tree: ' + $SourceSnapshot.Tree),
+        'source_worktree_status: CLEAN',
         'java_runtime: Eclipse Temurin 25.0.4+7 checksum-bound',
         'gradle_command: gradlew.bat pinned-jvm --offline clean test runGameTest auditDirectDependencies build --no-daemon --console=plain --stacktrace --init-script scripts/loom-resolution.init.gradle',
         'gradle_transaction_exit: 0',
@@ -1660,6 +1768,7 @@ function New-LectureEvidenceText {
 
 function Invoke-VerifyMode {
     param([Parameter(Mandatory)][string] $EvidenceFile, [Parameter(Mandatory)][string] $DistributionFile)
+    $sourceSnapshot = Get-CleanSourceSnapshot
     $jdk = Get-VerifiedJdk
     $manifest = Get-LectureTestManifest
     $previousHash = if (Test-Path -LiteralPath $DistributionFile -PathType Leaf) { Get-FileSha256 $DistributionFile } else { 'absent' }
@@ -1676,14 +1785,15 @@ function Invoke-VerifyMode {
     if ($archive.Sha256 -cne $artifact.Sha256) { throw 'Fresh-artifact and Phase 2 archive hashes disagree.' }
     $server = Invoke-BoundedProductionServer -Jdk $jdk -ArtifactPath $jar
     if ((Get-FileSha256 $jar) -cne $artifact.Sha256) { throw 'Fresh build JAR changed after all candidate gates.' }
+    [void](Assert-SourceSnapshotStillClean -Expected $sourceSnapshot)
     $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
     $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
 
     Copy-ArtifactAtomically -Source $jar -Destination $DistributionFile
     $distributionHash = Get-FileSha256 $DistributionFile
     if ($distributionHash -cne $artifact.Sha256) { throw 'Promoted distribution does not equal the inspected source/build JAR.' }
-    $evidenceText = New-LectureEvidenceText -Hash $distributionHash -PreviousHash $previousHash -Artifact $artifact -Archive $archive -BuildResult $build -AuditResult $audit -ServerResult $server -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows
-    [void](Assert-EvidenceContract -EvidenceText $evidenceText -DistributionHash $distributionHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows)
+    $evidenceText = New-LectureEvidenceText -Hash $distributionHash -PreviousHash $previousHash -Artifact $artifact -Archive $archive -BuildResult $build -AuditResult $audit -ServerResult $server -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -SourceSnapshot $sourceSnapshot
+    [void](Assert-EvidenceContract -EvidenceText $evidenceText -DistributionHash $distributionHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
     [System.IO.File]::WriteAllText($EvidenceFile, $evidenceText, [System.Text.UTF8Encoding]::new($false))
     Write-Host "PASS: fresh Phase 2 artifact promoted after all gates; server root PID $($server.RootPid), captured owned children $($server.CapturedCount), SHA-256 $distributionHash"
 }
