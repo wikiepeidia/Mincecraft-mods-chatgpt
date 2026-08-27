@@ -48,7 +48,10 @@ final class CampaignCodecTest {
 				null,
 				9_000L,
 				6L,
-				8_000L
+				8_000L,
+				true,
+				true,
+				ENCOUNTER
 		);
 		CampaignSavedData original = CampaignSavedData.createForTesting(Map.of(OWNER, state));
 
@@ -63,6 +66,9 @@ final class CampaignCodecTest {
 		assertFalse(encodedPlayer.has("retake_fallback_entity_uuid"));
 		assertEquals(6L, encodedPlayer.get("sheet_recovery_sequence").getAsLong());
 		assertEquals(8_000L, encodedPlayer.get("remote_ready_notice_for_deadline_game_time").getAsLong());
+		assertTrue(encodedPlayer.get("sheet_projection_pending").getAsBoolean());
+		assertTrue(encodedPlayer.get("remote_projection_pending").getAsBoolean());
+		assertEquals(encodeUuid(ENCOUNTER), encodedPlayer.get("remote_projection_uuid"));
 
 		CampaignSavedData decoded = decode(root);
 		assertEquals(ReadDisposition.WRITABLE, decoded.readDisposition());
@@ -206,6 +212,24 @@ final class CampaignCodecTest {
 						  \"encounter_uuid\":\"c0de0000-0000-4000-8000-000000000511\",
 						  \"professor_uuid\":\"c0de0000-0000-4000-8000-000000000521\",
 						  \"sheet_entitled\":false,\"remote_issued\":false
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"pre_lecture\",\"lecture_status\":\"ready\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],\"sheet_entitled\":false,
+						  \"remote_issued\":false,\"sheet_projection_pending\":true
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"pre_lecture\",\"lecture_status\":\"ready\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],\"sheet_entitled\":false,
+						  \"remote_issued\":false,\"remote_projection_pending\":true
 						}]}""")
 		);
 
@@ -220,6 +244,44 @@ final class CampaignCodecTest {
 			}).accepted());
 			assertFalse(decoded.isDirty());
 		}
+	}
+
+	@Test
+	void legacyPassedSaveDefaultsToMaterializedAndBackfillsStableRemoteIdentity() {
+		PlayerCampaignState state = new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
+				7,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				true,
+				true,
+				false,
+				null,
+				null,
+				null,
+				9_000L,
+				6L,
+				8_000L
+		);
+		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, state))).getAsJsonObject();
+		JsonObject encoded = root.getAsJsonArray("players").get(0).getAsJsonObject();
+		encoded.remove("sheet_projection_pending");
+		encoded.remove("remote_projection_pending");
+		encoded.remove("remote_projection_uuid");
+
+		CampaignSavedData decoded = decode(root);
+		PlayerCampaignState migrated = decoded.player(OWNER).orElseThrow();
+		assertFalse(migrated.sheetProjectionPending());
+		assertFalse(migrated.remoteProjectionPending());
+		assertEquals(PlayerCampaignState.legacyRemoteProjectionUuid(OWNER, DESK, 7),
+				migrated.remoteProjectionUuid());
+		assertTrue(encode(decoded).getAsJsonObject().getAsJsonArray("players").get(0).getAsJsonObject()
+				.has("remote_projection_uuid"));
 	}
 
 	@Test

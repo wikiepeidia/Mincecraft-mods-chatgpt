@@ -38,6 +38,12 @@ public final class CampaignReducer {
 		if (event instanceof CampaignEvent.RecoverSheet recoverSheet) {
 			return reduceSheetRecovery(state, recoverSheet);
 		}
+		if (event instanceof CampaignEvent.ConfirmSheetProjection confirmSheet) {
+			return confirmSheetProjection(state, confirmSheet);
+		}
+		if (event instanceof CampaignEvent.ConfirmRemoteProjection confirmRemote) {
+			return confirmRemoteProjection(state, confirmRemote);
+		}
 		if (event instanceof CampaignEvent.StartRemoteCooldown startRemoteCooldown) {
 			return reduceRemoteCooldown(state, startRemoteCooldown);
 		}
@@ -185,11 +191,15 @@ public final class CampaignReducer {
 			PlayerCampaignState state,
 			CampaignEvent.Victory event
 	) {
-		boolean firstRemote = !state.remoteIssued();
-		PlayerCampaignState next = copy(
-				state,
+		PlayerCampaignState next = new PlayerCampaignState(
+				state.ownerUuid(),
 				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
 				PlayerCampaignState.LectureStatus.PASSED,
+				state.attemptCount(),
+				state.deskDimension(),
+				state.deskPos(),
+				state.deskFacing(),
+				state.retryPos(),
 				null,
 				true,
 				true,
@@ -199,14 +209,49 @@ public final class CampaignReducer {
 				null,
 				state.remoteCooldownUntilGameTime(),
 				state.sheetRecoverySequence(),
-				state.remoteReadyNoticeForDeadlineGameTime()
+				state.remoteReadyNoticeForDeadlineGameTime(),
+				true,
+				true,
+				event.encounterUuid()
 		);
 		List<EffectIntent> intents = new ArrayList<>();
 		intents.add(new EffectIntent.CleanupEncounter(state.ownerUuid(), event.encounterUuid(), "victory"));
-		if (firstRemote) {
-			intents.add(new EffectIntent.GrantFirstRewards(state.ownerUuid()));
-		}
+		intents.add(new EffectIntent.GrantFirstRewards(state.ownerUuid()));
 		return CampaignTransition.accepted(next, "victory_accepted", intents);
+	}
+
+	private static CampaignTransition confirmSheetProjection(
+			PlayerCampaignState state,
+			CampaignEvent.ConfirmSheetProjection event
+	) {
+		if (state.status() != PlayerCampaignState.LectureStatus.PASSED
+				|| !state.sheetProjectionPending()) {
+			return noOp(state, "sheet_projection_not_pending");
+		}
+		if (event.recoverySequence() != state.sheetRecoverySequence()) {
+			return noOp(state, "stale_sheet_projection");
+		}
+		return CampaignTransition.accepted(
+				copyRewardProjectionState(state, false, state.remoteProjectionPending()),
+				"sheet_projection_confirmed"
+		);
+	}
+
+	private static CampaignTransition confirmRemoteProjection(
+			PlayerCampaignState state,
+			CampaignEvent.ConfirmRemoteProjection event
+	) {
+		if (state.status() != PlayerCampaignState.LectureStatus.PASSED
+				|| !state.remoteProjectionPending()) {
+			return noOp(state, "remote_projection_not_pending");
+		}
+		if (!event.projectionUuid().equals(state.remoteProjectionUuid())) {
+			return noOp(state, "stale_remote_projection");
+		}
+		return CampaignTransition.accepted(
+				copyRewardProjectionState(state, state.sheetProjectionPending(), false),
+				"remote_projection_confirmed"
+		);
 	}
 
 	private static CampaignTransition reduceRetakeReconciliation(
@@ -297,6 +342,9 @@ public final class CampaignReducer {
 		if (state.status() != PlayerCampaignState.LectureStatus.PASSED || !state.sheetEntitled()) {
 			return noOp(state, "sheet_not_recoverable");
 		}
+		if (state.sheetProjectionPending()) {
+			return noOp(state, "sheet_projection_pending");
+		}
 		if (event.expectedSequence() != state.sheetRecoverySequence()) {
 			return noOp(state, "stale_sheet_recovery");
 		}
@@ -330,7 +378,9 @@ public final class CampaignReducer {
 			PlayerCampaignState state,
 			CampaignEvent.StartRemoteCooldown event
 	) {
-		if (state.status() != PlayerCampaignState.LectureStatus.PASSED || !state.remoteIssued()) {
+		if (state.status() != PlayerCampaignState.LectureStatus.PASSED
+				|| !state.remoteIssued()
+				|| state.remoteProjectionPending()) {
 			return noOp(state, "remote_not_entitled");
 		}
 		if (event.observedGameTime() < state.remoteCooldownUntilGameTime()) {
@@ -366,7 +416,7 @@ public final class CampaignReducer {
 			PlayerCampaignState state,
 			CampaignEvent.RemoteReadyNotice event
 	) {
-		if (!state.remoteIssued()) {
+		if (!state.remoteIssued() || state.remoteProjectionPending()) {
 			return noOp(state, "remote_not_entitled");
 		}
 		if (event.cooldownDeadlineGameTime() != state.remoteCooldownUntilGameTime()) {
@@ -451,7 +501,40 @@ public final class CampaignReducer {
 				fallbackUuid,
 				remoteCooldownUntilGameTime,
 				sheetRecoverySequence,
-				remoteReadyNoticeForDeadlineGameTime
+				remoteReadyNoticeForDeadlineGameTime,
+				state.sheetProjectionPending(),
+				state.remoteProjectionPending(),
+				state.remoteProjectionUuid()
+		);
+	}
+
+	private static PlayerCampaignState copyRewardProjectionState(
+			PlayerCampaignState state,
+			boolean sheetProjectionPending,
+			boolean remoteProjectionPending
+	) {
+		return new PlayerCampaignState(
+				state.ownerUuid(),
+				state.chapter(),
+				state.status(),
+				state.attemptCount(),
+				state.deskDimension(),
+				state.deskPos(),
+				state.deskFacing(),
+				state.retryPos(),
+				state.activeEncounterRef(),
+				state.sheetEntitled(),
+				state.remoteIssued(),
+				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
+				state.retakeFallbackEntityUuid(),
+				state.remoteCooldownUntilGameTime(),
+				state.sheetRecoverySequence(),
+				state.remoteReadyNoticeForDeadlineGameTime(),
+				sheetProjectionPending,
+				remoteProjectionPending,
+				state.remoteProjectionUuid()
 		);
 	}
 

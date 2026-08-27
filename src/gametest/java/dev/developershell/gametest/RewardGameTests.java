@@ -6,9 +6,12 @@ import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.AttendanceSheetItem;
+import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureGeometry;
 import dev.developershell.lecture.LectureStateMachine;
+import dev.developershell.lecture.RewardService;
+import dev.developershell.lecture.RewardServiceGameTestAccess;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItemIds;
 import dev.developershell.registry.ModItems;
@@ -21,6 +24,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
@@ -95,10 +99,14 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 					"the real manager path commits PASSED");
 			context.assertTrue(passed.sheetEntitled(), "the Sheet entitlement is durable before projection");
 			context.assertTrue(passed.remoteIssued(), "the Remote ledger is durable before projection");
+			context.assertFalse(passed.sheetProjectionPending(),
+					"the visible Sheet confirms its independent projection");
+			context.assertFalse(passed.remoteProjectionPending(),
+					"the visible Remote confirms its independent projection");
 			context.assertValueEqual(countBoundSheets(owner, ownerUuid, passed.sheetRecoverySequence()), 1,
 					"the accepted victory grants one owner-bound Sheet");
-			context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), 1,
-					"the accepted victory grants one Remote");
+			context.assertValueEqual(countBoundRemotes(owner, ownerUuid, passed.remoteProjectionUuid()), 1,
+					"the accepted victory grants one exact owner-bound Remote");
 			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(VICTORY_KEY),
 					"one accepted victory emits one truthful result message");
 			context.assertValueEqual(LectureEncounterManager.activeRuntimeCount(), 0,
@@ -126,7 +134,7 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			context.succeed();
 		}
 		finally {
-			removeRewardEntities(level.getServer(), ownerUuid, desk.relative(FACING.getOpposite(), 2));
+			removeRewardEntities(level.getServer(), ownerUuid);
 			close(connection);
 			clearArena(level, desk, FACING);
 		}
@@ -136,7 +144,6 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	public void fullInventoryVictoryUsesOwnerTargetedFallbackWithoutReplay(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(RELATIVE_DESK);
-		BlockPos retry = desk.relative(FACING.getOpposite(), 2);
 		UUID ownerUuid = invocationOwnerUuid(owner(1702), desk, level.getGameTime());
 		UUID intruderUuid = invocationOwnerUuid(owner(1703), desk, level.getGameTime());
 		ConnectedPlayer ownerConnection = null;
@@ -154,8 +161,8 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 					"full inventory receives no hidden Remote stack");
 			List<ItemEntity> sheetFallbacks = boundSheetEntities(
 					level.getServer(), ownerUuid, result.passed().sheetRecoverySequence());
-			List<ItemEntity> remoteFallbacks = rewardEntitiesNear(
-					level.getServer(), ModItems.INFINITE_SLIDES_REMOTE, retry);
+			List<ItemEntity> remoteFallbacks = boundRemoteEntities(
+					level.getServer(), ownerUuid, result.passed().remoteProjectionUuid());
 			context.assertValueEqual(sheetFallbacks.size(), 1,
 					"full inventory creates one owner-bound Sheet fallback");
 			context.assertValueEqual(remoteFallbacks.size(), 1,
@@ -163,6 +170,9 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			context.assertValueEqual(AttendanceSheetItem.binding(sheetFallbacks.getFirst().getItem()).orElseThrow(),
 					new AttendanceSheetItem.Binding(ownerUuid, result.passed().sheetRecoverySequence()),
 					"Sheet fallback carries the durable owner and recovery sequence");
+			context.assertValueEqual(InfiniteSlidesRemoteItem.binding(remoteFallbacks.getFirst().getItem()).orElseThrow(),
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, result.passed().remoteProjectionUuid()),
+					"Remote fallback carries its durable owner and projection identity");
 
 			intruderConnection = createSurvivalPlayer(context, intruderUuid, "reward-full-intruder");
 			RecordingServerPlayer intruder = intruderConnection.player();
@@ -184,17 +194,196 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			context.assertValueEqual(boundSheetEntities(
 					level.getServer(), ownerUuid, result.passed().sheetRecoverySequence()).size(), 1,
 					"replay creates no second Sheet fallback");
-			context.assertValueEqual(rewardEntitiesNear(
-					level.getServer(), ModItems.INFINITE_SLIDES_REMOTE, retry).size(), 1,
+			context.assertValueEqual(boundRemoteEntities(
+					level.getServer(), ownerUuid, result.passed().remoteProjectionUuid()).size(), 1,
 					"replay creates no second Remote fallback");
 			context.assertTrue(owner.recordedSystemMessageKeys().isEmpty(),
 					"fallback replay emits no second result");
 			context.succeed();
 		}
 		finally {
-			removeRewardEntities(level.getServer(), ownerUuid, retry);
+			removeRewardEntities(level.getServer(), ownerUuid);
 			close(intruderConnection);
 			close(ownerConnection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void sheetOnlyRepresentationReconcilesRemoteIndependently(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1710), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-sheet-only");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState pending = persistPendingVictory(context, owner, desk, FACING);
+			owner.getInventory().setItem(0, AttendanceSheetItem.bound(
+					new AttendanceSheetItem.Binding(ownerUuid, pending.sheetRecoverySequence())));
+			owner.getInventory().setItem(1, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			owner.getInventory().setItem(2, InfiniteSlidesRemoteItem.bound(
+					new InfiniteSlidesRemoteItem.Binding(owner(9710), UUID.randomUUID())));
+
+			context.assertValueEqual(RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"an observed Sheet does not suppress the pending Remote");
+			PlayerCampaignState complete = state(level, ownerUuid);
+			context.assertFalse(complete.sheetProjectionPending(), "the observed exact Sheet confirms once");
+			context.assertFalse(complete.remoteProjectionPending(), "the independently issued Remote confirms once");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, complete.sheetRecoverySequence()), 1,
+					"the observed Sheet is not duplicated");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, complete.remoteProjectionUuid()), 1,
+					"one exact Remote is issued despite unrelated and unbound Remote stacks");
+			context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), 3,
+					"unbound and wrong-owner stacks remain unrelated to reconciliation");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void remoteOnlyRepresentationReconcilesSheetIndependently(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1711), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-remote-only");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState pending = persistPendingVictory(context, owner, desk, FACING);
+			owner.getInventory().setItem(0, InfiniteSlidesRemoteItem.bound(
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, pending.remoteProjectionUuid())));
+			owner.getInventory().setItem(1, new ItemStack(ModItems.ATTENDANCE_SHEET));
+			owner.getInventory().setItem(2, AttendanceSheetItem.bound(
+					new AttendanceSheetItem.Binding(owner(9711), pending.sheetRecoverySequence())));
+
+			context.assertValueEqual(RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"an observed Remote does not suppress the pending Sheet");
+			PlayerCampaignState complete = state(level, ownerUuid);
+			context.assertFalse(complete.sheetProjectionPending(), "the independently issued Sheet confirms once");
+			context.assertFalse(complete.remoteProjectionPending(), "the observed exact Remote confirms once");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, complete.sheetRecoverySequence()), 1,
+					"one exact Sheet is issued despite unrelated and unbound Sheet stacks");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, complete.remoteProjectionUuid()), 1,
+					"the observed Remote is not duplicated");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void sheetSuccessRemoteFailureRetriesOnlyRemoteOnJoin(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1712), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-partial-failure");
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+
+			context.assertValueEqual(RewardServiceGameTestAccess.reconcilePending(
+					owner, stack -> stack.getItem() == ModItems.INFINITE_SLIDES_REMOTE),
+					RewardService.Outcome.MATERIALIZATION_FAILED,
+					"the GameTest-only fault leaves only the Remote projection pending");
+			PlayerCampaignState partial = state(level, ownerUuid);
+			context.assertFalse(partial.sheetProjectionPending(), "the successful Sheet confirms independently");
+			context.assertTrue(partial.remoteProjectionPending(), "the failed Remote remains durably pending");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, partial.sheetRecoverySequence()), 1,
+					"the successful Sheet is observable before confirmation");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, partial.remoteProjectionUuid()), 0,
+					"a forced Remote failure produces no hidden representation");
+
+			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
+			PlayerCampaignState complete = state(level, ownerUuid);
+			context.assertFalse(complete.sheetProjectionPending(), "join does not reopen the completed Sheet");
+			context.assertFalse(complete.remoteProjectionPending(), "join retries and confirms the pending Remote");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, complete.sheetRecoverySequence()), 1,
+					"join does not duplicate the Sheet");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, complete.remoteProjectionUuid()), 1,
+					"join materializes exactly one bound Remote");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	@GameTest(maxTicks = 120, padding = 24)
+	public void failedBothRecoverAtDeskAndLostRemoteDoesNotReplay(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1713), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-total-failure");
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+
+			context.assertValueEqual(RewardServiceGameTestAccess.reconcilePending(owner, ignored -> true),
+					RewardService.Outcome.MATERIALIZATION_FAILED,
+					"both forced failures leave both projections retryable");
+			PlayerCampaignState failed = state(level, ownerUuid);
+			context.assertTrue(failed.sheetProjectionPending(), "failed Sheet remains pending");
+			context.assertTrue(failed.remoteProjectionPending(), "failed Remote remains pending");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, failed.sheetRecoverySequence()), 0,
+					"no Sheet confirmation exists without an observable representation");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, failed.remoteProjectionUuid()), 0,
+					"no Remote confirmation exists without an observable representation");
+
+			context.assertValueEqual(useEmptyHand(level, owner, desk), InteractionResult.SUCCESS_SERVER,
+					"the matching saved Desk retries both pending projections");
+			PlayerCampaignState recovered = state(level, ownerUuid);
+			context.assertFalse(recovered.sheetProjectionPending(), "Desk retry confirms the Sheet");
+			context.assertFalse(recovered.remoteProjectionPending(), "Desk retry confirms the Remote");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, recovered.sheetRecoverySequence()), 1,
+					"Desk retry materializes one Sheet");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, recovered.remoteProjectionUuid()), 1,
+					"Desk retry materializes one Remote");
+
+			removeBoundRemotes(level.getServer(), ownerUuid);
+			moveBoundSheetOffSelected(owner, ownerUuid, recovered.sheetRecoverySequence());
+			ServerPlayerEvents.JOIN.invoker().onJoin(owner);
+			context.assertValueEqual(useEmptyHand(level, owner, desk), InteractionResult.SUCCESS_SERVER,
+					"later join and Desk checks remain bounded after a confirmed Remote is lost");
+			context.assertValueEqual(state(level, ownerUuid), recovered,
+					"later loss never reopens the durable Remote projection");
+			context.assertValueEqual(countBoundRemotes(
+					owner, ownerUuid, recovered.remoteProjectionUuid()), 0,
+					"a legitimately issued then lost Remote is not duplicated");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
 			clearArena(level, desk, FACING);
 		}
 	}
@@ -327,6 +516,30 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		}
 	}
 
+	private static PlayerCampaignState persistPendingVictory(
+			GameTestHelper context,
+			RecordingServerPlayer owner,
+			BlockPos desk,
+			Direction facing
+	) {
+		PlayerCampaignState active = startAttempt(context, owner, desk, facing);
+		UUID encounterUuid = active.encounterUuid();
+		List<CampaignTransition.EffectIntent> suppressedEffects = new ArrayList<>();
+		CampaignTransition transition = CampaignService.commitVictory(
+				owner.level(), owner.getUUID(), encounterUuid, suppressedEffects::add);
+		context.assertTrue(transition.accepted(),
+				"the fault fixture durably commits the authorized active encounter victory");
+		context.assertValueEqual(suppressedEffects.size(), 2,
+				"the fault fixture suppresses only the two post-commit effects");
+		PlayerCampaignState pending = state(owner.level(), owner.getUUID());
+		context.assertTrue(pending.sheetProjectionPending(),
+				"victory persists Sheet pending before projection effects");
+		context.assertTrue(pending.remoteProjectionPending(),
+				"victory persists Remote pending before projection effects");
+		LectureEncounterManager.cleanup(encounterUuid);
+		return pending;
+	}
+
 	private static VictoryResult completeRealEncounter(
 			GameTestHelper context,
 			RecordingServerPlayer owner,
@@ -448,6 +661,19 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		return count;
 	}
 
+	private static int countBoundRemotes(ServerPlayer player, UUID ownerUuid, UUID projectionUuid) {
+		int count = 0;
+		InfiniteSlidesRemoteItem.Binding expected =
+				new InfiniteSlidesRemoteItem.Binding(ownerUuid, projectionUuid);
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			if (InfiniteSlidesRemoteItem.binding(stack).filter(expected::equals).isPresent()) {
+				count += stack.getCount();
+			}
+		}
+		return count;
+	}
+
 	private static List<ItemEntity> boundSheetEntities(MinecraftServer server, UUID ownerUuid, long sequence) {
 		AttendanceSheetItem.Binding expected = new AttendanceSheetItem.Binding(ownerUuid, sequence);
 		List<ItemEntity> result = new ArrayList<>();
@@ -463,14 +689,19 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		return result;
 	}
 
-	private static List<ItemEntity> rewardEntitiesNear(MinecraftServer server, Item itemType, BlockPos retry) {
+	private static List<ItemEntity> boundRemoteEntities(
+			MinecraftServer server,
+			UUID ownerUuid,
+			UUID projectionUuid
+	) {
+		InfiniteSlidesRemoteItem.Binding expected =
+				new InfiniteSlidesRemoteItem.Binding(ownerUuid, projectionUuid);
 		List<ItemEntity> result = new ArrayList<>();
 		for (ServerLevel level : server.getAllLevels()) {
 			for (Entity entity : level.getAllEntities()) {
 				if (entity instanceof ItemEntity item
 						&& !item.isRemoved()
-						&& item.getItem().getItem() == itemType
-						&& item.blockPosition().distManhattan(retry) <= 2) {
+						&& InfiniteSlidesRemoteItem.binding(item.getItem()).filter(expected::equals).isPresent()) {
 					result.add(item);
 				}
 			}
@@ -521,11 +752,33 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		}
 	}
 
-	private static void removeRewardEntities(MinecraftServer server, UUID ownerUuid, BlockPos retry) {
-		removeBoundSheets(server, ownerUuid);
-		for (ItemEntity item : rewardEntitiesNear(server, ModItems.INFINITE_SLIDES_REMOTE, retry)) {
-			item.discard();
+	private static void removeBoundRemotes(MinecraftServer server, UUID ownerUuid) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+				if (InfiniteSlidesRemoteItem.binding(player.getInventory().getItem(slot))
+						.map(InfiniteSlidesRemoteItem.Binding::ownerUuid).filter(ownerUuid::equals).isPresent()) {
+					player.getInventory().setItem(slot, ItemStack.EMPTY);
+				}
+			}
 		}
+		for (ServerLevel level : server.getAllLevels()) {
+			for (Entity entity : level.getAllEntities()) {
+				if (entity instanceof ItemEntity item
+						&& InfiniteSlidesRemoteItem.binding(item.getItem())
+						.map(InfiniteSlidesRemoteItem.Binding::ownerUuid).filter(ownerUuid::equals).isPresent()) {
+					item.discard();
+				}
+			}
+		}
+	}
+
+	private static void removeBoundRewards(MinecraftServer server, UUID ownerUuid) {
+		removeBoundSheets(server, ownerUuid);
+		removeBoundRemotes(server, ownerUuid);
+	}
+
+	private static void removeRewardEntities(MinecraftServer server, UUID ownerUuid) {
+		removeBoundRewards(server, ownerUuid);
 	}
 
 	private static void fillInventory(ServerPlayer player) {

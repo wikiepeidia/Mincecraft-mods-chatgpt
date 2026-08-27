@@ -51,6 +51,7 @@ public final class CampaignLifecycle {
 		});
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
 			onPlayerTerminal(newPlayer, CampaignEvent.TerminalReason.DEATH);
+			RewardService.reconcilePending(newPlayer);
 			RewardService.restoreRemoteCooldown(newPlayer);
 		});
 		ServerPlayerEvents.JOIN.register(CampaignLifecycle::onJoin);
@@ -122,6 +123,7 @@ public final class CampaignLifecycle {
 		else {
 			current.deliverPendingReloadNotice(player);
 		}
+		RewardService.reconcilePending(player);
 		RewardService.restoreRemoteCooldown(player);
 	}
 

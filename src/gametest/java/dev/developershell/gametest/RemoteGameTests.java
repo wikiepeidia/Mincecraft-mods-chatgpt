@@ -57,6 +57,7 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 	private static final String FIRED_KEY = "message.developers_hell.remote.fired";
 	private static final String RECHARGING_KEY = "message.developers_hell.remote.recharging";
 	private static final String READY_KEY = "message.developers_hell.remote.ready";
+	private static final String UNAUTHORIZED_KEY = "message.developers_hell.remote.unauthorized";
 
 	@GameTest(maxTicks = 180, padding = 24)
 	public void productionRemoteUseCommitsOneEffectAndRejectedUseDoesNotReset(GameTestHelper context) {
@@ -71,6 +72,27 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			RecordingServerPlayer owner = connection.player();
 			completeRealEncounter(context, owner, desk, FACING);
 			ItemStack remote = moveRemoteToHand(context, owner);
+			PlayerCampaignState authorized = state(level, ownerUuid);
+			owner.getInventory().setItem(10, remote);
+			owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			owner.clearFeedback();
+			context.assertValueEqual(useRemote(level, owner), InteractionResult.SUCCESS_SERVER,
+					"an unbound Remote is rejected without vanilla fallthrough");
+			context.assertValueEqual(state(level, ownerUuid), authorized,
+					"an unbound Remote cannot commit a cooldown");
+			context.assertValueEqual(owner.recordedOverlayKeys(), List.of(UNAUTHORIZED_KEY),
+					"an unbound Remote gets only unauthorized feedback");
+			owner.setItemInHand(InteractionHand.MAIN_HAND, InfiniteSlidesRemoteItem.bound(
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, UUID.randomUUID())));
+			owner.clearFeedback();
+			context.assertValueEqual(useRemote(level, owner), InteractionResult.SUCCESS_SERVER,
+					"a stale owner-bound Remote is rejected without vanilla fallthrough");
+			context.assertValueEqual(state(level, ownerUuid), authorized,
+					"a stale projection identity cannot commit a cooldown");
+			context.assertValueEqual(owner.recordedOverlayKeys(), List.of(UNAUTHORIZED_KEY),
+					"a stale projection identity gets only unauthorized feedback");
+			remote = owner.getInventory().removeItemNoUpdate(10);
+			owner.setItemInHand(InteractionHand.MAIN_HAND, remote);
 
 			context.assertTrue(ModItems.INFINITE_SLIDES_REMOTE instanceof InfiniteSlidesRemoteItem,
 					"the production Remote registry field uses the custom item type");
@@ -157,8 +179,8 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			ConnectedPlayer respawnConnection = createSurvivalPlayer(
 					context, ownerUuid, "remote-respawn");
 			RecordingServerPlayer respawned = respawnConnection.player();
-			respawned.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
-			respawned.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			respawned.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
+			respawned.setItemInHand(InteractionHand.OFF_HAND, boundRemote(level, ownerUuid));
 			ServerLivingEntityEvents.AFTER_DEATH.invoker().afterDeath(owner, owner.damageSources().generic());
 			ServerPlayerEvents.AFTER_RESPAWN.invoker().afterRespawn(owner, respawned, false);
 			int respawnRemainder = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
@@ -180,8 +202,8 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			close(respawnConnection);
 			ConnectedPlayer rejoinConnection = createSurvivalPlayer(context, ownerUuid, "remote-rejoin");
 			RecordingServerPlayer rejoined = rejoinConnection.player();
-			rejoined.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
-			rejoined.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			rejoined.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
+			rejoined.setItemInHand(InteractionHand.OFF_HAND, boundRemote(level, ownerUuid));
 			ServerPlayerEvents.JOIN.invoker().onJoin(rejoined);
 			int joinRemainder = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
 					deadline, level.getGameTime());
@@ -233,7 +255,7 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			context.assertTrue(owner.recordedOverlayKeys().isEmpty() && owner.readySounds() == 0,
 					"item absence emits no ambient feedback");
 
-			owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			owner.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
 			context.assertFalse(RewardService.reconcileRemoteReady(owner, true),
 					"critical action-bar priority defers the elapsed ready edge");
 			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), 0L,
@@ -247,7 +269,7 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 					"an absent Remote keeps the deferred deadline edge pending across production ticks");
 			context.assertTrue(owner.recordedOverlayKeys().isEmpty() && owner.readySounds() == 0,
 					"the deferred edge stays silent until presentation is safe and possible");
-			owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			owner.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
 		});
 		context.runAfterDelay(412L, () -> {
 			context.assertValueEqual(state(level, ownerUuid).remoteReadyNoticeForDeadlineGameTime(), deadline,
@@ -318,13 +340,18 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 		context.assertValueEqual(passed.status(), PlayerCampaignState.LectureStatus.PASSED,
 				"Remote fixture reaches the real passed state");
 		context.assertTrue(passed.remoteIssued(), "Remote entitlement is committed before use testing");
+		context.assertFalse(passed.remoteProjectionPending(),
+				"ordinary victory confirms the bound Remote before it is usable");
 	}
 
 	private static ItemStack moveRemoteToHand(GameTestHelper context, ServerPlayer owner) {
+		PlayerCampaignState state = state(owner.level(), owner.getUUID());
+		InfiniteSlidesRemoteItem.Binding expected = new InfiniteSlidesRemoteItem.Binding(
+				owner.getUUID(), state.remoteProjectionUuid());
 		int selected = owner.getInventory().getSelectedSlot();
 		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
 			ItemStack stack = owner.getInventory().getItem(slot);
-			if (stack.getItem() != ModItems.INFINITE_SLIDES_REMOTE) {
+			if (InfiniteSlidesRemoteItem.binding(stack).filter(expected::equals).isEmpty()) {
 				continue;
 			}
 			if (slot != selected) {
@@ -334,6 +361,12 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			return owner.getInventory().getItem(selected);
 		}
 		throw context.assertionException("real victory did not grant the production Remote");
+	}
+
+	private static ItemStack boundRemote(ServerLevel level, UUID ownerUuid) {
+		PlayerCampaignState state = state(level, ownerUuid);
+		return InfiniteSlidesRemoteItem.bound(new InfiniteSlidesRemoteItem.Binding(
+				ownerUuid, state.remoteProjectionUuid()));
 	}
 
 	private static InteractionResult useRemote(ServerLevel level, ServerPlayer owner) {

@@ -108,6 +108,7 @@
   "message.developers_hell.remote.recharging": "Remote recharging - %ss remaining.",
   "message.developers_hell.remote.unauthorized": "Remote inactive - pass the Lecture to authorize it.",
   "message.developers_hell.reward.victory": "PASSED: Attendance Sheet recorded.\nReward: Infinite Slides Remote (cooldown: 20s).",
+  "message.developers_hell.reward.recovered": "Pending lecture rewards reconciled from your campaign record.",
   "tooltip.developers_hell.attendance_sheet.proof": "Proof of passing Lecture 1.",
   "tooltip.developers_hell.retake_form.desk": "Use on your Internship Desk to retry the Lecture.",
   "tooltip.developers_hell.contract.blocks": "No blocks are changed by default.",

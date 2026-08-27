@@ -3,11 +3,18 @@ package dev.developershell.item;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
+import dev.developershell.registry.ModItems;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Consumer;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -22,6 +29,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.TooltipDisplay;
+import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.AABB;
@@ -38,6 +46,8 @@ public final class InfiniteSlidesRemoteItem extends Item {
 
 	private static final double SLIDE_HALF_WIDTH_BLOCKS = 1.25D;
 	private static final double SLIDE_VERTICAL_REACH_BLOCKS = 2.0D;
+	private static final String OWNER_TAG = "developers_hell_remote_owner";
+	private static final String PROJECTION_TAG = "developers_hell_remote_projection";
 	private static final String TOOLTIP_EFFECT_KEY =
 			"tooltip.developers_hell.infinite_slides_remote.effect";
 	private static final String TOOLTIP_COOLDOWN_KEY =
@@ -49,6 +59,35 @@ public final class InfiniteSlidesRemoteItem extends Item {
 
 	public InfiniteSlidesRemoteItem(Properties properties) {
 		super(properties);
+	}
+
+	/** Creates the one owner-bound physical projection for a committed first victory. */
+	public static ItemStack bound(Binding binding) {
+		Objects.requireNonNull(binding, "binding");
+		ItemStack stack = new ItemStack(ModItems.INFINITE_SLIDES_REMOTE);
+		CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+			tag.store(OWNER_TAG, UUIDUtil.CODEC, binding.ownerUuid());
+			tag.store(PROJECTION_TAG, UUIDUtil.CODEC, binding.projectionUuid());
+		});
+		return stack;
+	}
+
+	/** Reads a complete owner/projection binding; incomplete or unrelated stacks fail closed. */
+	public static Optional<Binding> binding(ItemStack stack) {
+		Objects.requireNonNull(stack, "stack");
+		if (stack.isEmpty() || stack.getItem() != ModItems.INFINITE_SLIDES_REMOTE) {
+			return Optional.empty();
+		}
+		CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+		if (customData == null || customData.isEmpty()) {
+			return Optional.empty();
+		}
+		CompoundTag tag = customData.copyTag();
+		Optional<UUID> ownerUuid = tag.read(OWNER_TAG, UUIDUtil.CODEC);
+		Optional<UUID> projectionUuid = tag.read(PROJECTION_TAG, UUIDUtil.CODEC);
+		return ownerUuid.isPresent() && projectionUuid.isPresent()
+				? Optional.of(new Binding(ownerUuid.get(), projectionUuid.get()))
+				: Optional.empty();
 	}
 
 	/**
@@ -84,6 +123,18 @@ public final class InfiniteSlidesRemoteItem extends Item {
 				|| player.isSpectator()) {
 			return InteractionResult.FAIL;
 		}
+		Optional<Binding> binding = binding(stack);
+		Optional<PlayerCampaignState> state = CampaignService.snapshot(serverLevel, serverPlayer.getUUID());
+		if (binding.isEmpty()
+				|| state.isEmpty()
+				|| !binding.get().ownerUuid().equals(serverPlayer.getUUID())
+				|| state.get().status() != PlayerCampaignState.LectureStatus.PASSED
+				|| !state.get().remoteIssued()
+				|| state.get().remoteProjectionPending()
+				|| !binding.get().projectionUuid().equals(state.get().remoteProjectionUuid())) {
+			serverPlayer.sendOverlayMessage(Component.translatable(UNAUTHORIZED_KEY));
+			return InteractionResult.SUCCESS_SERVER;
+		}
 
 		CampaignTransition transition = CampaignService.commitRemoteCooldown(
 				serverPlayer,
@@ -93,10 +144,10 @@ public final class InfiniteSlidesRemoteItem extends Item {
 			return InteractionResult.SUCCESS_SERVER;
 		}
 
-		PlayerCampaignState state = transition.nextState().orElse(null);
-		if (state != null && transition.reason().equals("remote_on_cooldown")) {
+		PlayerCampaignState resultingState = transition.nextState().orElse(null);
+		if (resultingState != null && transition.reason().equals("remote_on_cooldown")) {
 			int seconds = Cooldown.remainingSeconds(
-					state.remoteCooldownUntilGameTime(),
+					resultingState.remoteCooldownUntilGameTime(),
 					serverLevel.getGameTime()
 			);
 			serverPlayer.sendOverlayMessage(Component.translatable(RECHARGING_KEY, seconds));
@@ -236,6 +287,14 @@ public final class InfiniteSlidesRemoteItem extends Item {
 		Vec3 lateral = offset.subtract(forward.scale(forwardDistance));
 		return lateral.horizontalDistanceSqr()
 				<= SLIDE_HALF_WIDTH_BLOCKS * SLIDE_HALF_WIDTH_BLOCKS;
+	}
+
+	/** Exact identity of the only retryable first-victory Remote projection. */
+	public record Binding(UUID ownerUuid, UUID projectionUuid) {
+		public Binding {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(projectionUuid, "projectionUuid");
+		}
 	}
 
 }

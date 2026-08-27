@@ -344,12 +344,34 @@ final class CampaignReducerTest {
 		});
 
 		assertAccepted(accepted, "victory_accepted");
-		PlayerCampaignState passed = accepted.nextState().orElseThrow();
+		PlayerCampaignState pending = accepted.nextState().orElseThrow();
+		assertTrue(pending.sheetProjectionPending());
+		assertTrue(pending.remoteProjectionPending());
+		assertEquals(ENCOUNTER, pending.remoteProjectionUuid());
 		assertEquals(List.of(
 				new EffectIntent.CleanupEncounter(OWNER, ENCOUNTER, "victory"),
 				new EffectIntent.GrantFirstRewards(OWNER)
 		), dispatched);
 		assertTrue(reentrant.isEmpty());
+		CampaignTransition sheetConfirmed = CampaignService.apply(
+				data,
+				new CampaignEvent.ConfirmSheetProjection(OWNER, pending.sheetRecoverySequence()),
+				ignored -> {
+				}
+		);
+		assertAccepted(sheetConfirmed, "sheet_projection_confirmed");
+		assertFalse(sheetConfirmed.nextState().orElseThrow().sheetProjectionPending());
+		assertTrue(sheetConfirmed.nextState().orElseThrow().remoteProjectionPending());
+		CampaignTransition remoteConfirmed = CampaignService.apply(
+				data,
+				new CampaignEvent.ConfirmRemoteProjection(OWNER, ENCOUNTER),
+				ignored -> {
+				}
+		);
+		assertAccepted(remoteConfirmed, "remote_projection_confirmed");
+		PlayerCampaignState passed = remoteConfirmed.nextState().orElseThrow();
+		assertFalse(passed.sheetProjectionPending());
+		assertFalse(passed.remoteProjectionPending());
 
 		assertNoOp(
 				CampaignService.applyTerminal(data, victory, dispatched::add),
@@ -418,6 +440,92 @@ final class CampaignReducerTest {
 		assertEquals("missing_state", wrongOwner.reason());
 		assertTrue(wrongOwner.intents().isEmpty());
 		assertEquals(1, recoveryEffects.size());
+	}
+
+	@Test
+	void firstRewardProjectionConfirmationsAreIndependentAndReplaySafe() {
+		PlayerCampaignState active = activeState(OWNER, ENCOUNTER, PROFESSOR, 5);
+		CampaignTransition victory = CampaignReducer.reduce(
+				Optional.of(active), new CampaignEvent.Victory(OWNER, ENCOUNTER)
+		);
+		assertAccepted(victory, "victory_accepted");
+		PlayerCampaignState pending = victory.nextState().orElseThrow();
+		assertTrue(pending.sheetProjectionPending());
+		assertTrue(pending.remoteProjectionPending());
+		assertEquals(ENCOUNTER, pending.remoteProjectionUuid());
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(pending),
+						new CampaignEvent.ConfirmSheetProjection(OWNER, pending.sheetRecoverySequence() + 1L)
+				),
+				pending,
+				"stale_sheet_projection"
+		);
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(pending),
+						new CampaignEvent.ConfirmRemoteProjection(OWNER, STALE_ENCOUNTER)
+				),
+				pending,
+				"stale_remote_projection"
+		);
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(pending),
+						new CampaignEvent.RecoverSheet(OWNER, pending.sheetRecoverySequence())
+				),
+				pending,
+				"sheet_projection_pending"
+		);
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(pending),
+						new CampaignEvent.StartRemoteCooldown(OWNER, 1_000L, 1_400L)
+				),
+				pending,
+				"remote_not_entitled"
+		);
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(pending),
+						new CampaignEvent.RemoteReadyNotice(OWNER, 0L, 1_000L)
+				),
+				pending,
+				"remote_not_entitled"
+		);
+
+		CampaignTransition remote = CampaignReducer.reduce(
+				Optional.of(pending), new CampaignEvent.ConfirmRemoteProjection(OWNER, ENCOUNTER)
+		);
+		assertAccepted(remote, "remote_projection_confirmed");
+		PlayerCampaignState sheetOnlyPending = remote.nextState().orElseThrow();
+		assertTrue(sheetOnlyPending.sheetProjectionPending());
+		assertFalse(sheetOnlyPending.remoteProjectionPending());
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(sheetOnlyPending),
+						new CampaignEvent.ConfirmRemoteProjection(OWNER, ENCOUNTER)
+				),
+				sheetOnlyPending,
+				"remote_projection_not_pending"
+		);
+
+		CampaignTransition sheet = CampaignReducer.reduce(
+				Optional.of(sheetOnlyPending),
+				new CampaignEvent.ConfirmSheetProjection(OWNER, pending.sheetRecoverySequence())
+		);
+		assertAccepted(sheet, "sheet_projection_confirmed");
+		PlayerCampaignState complete = sheet.nextState().orElseThrow();
+		assertFalse(complete.sheetProjectionPending());
+		assertFalse(complete.remoteProjectionPending());
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(complete),
+						new CampaignEvent.ConfirmSheetProjection(OWNER, complete.sheetRecoverySequence())
+				),
+				complete,
+				"sheet_projection_not_pending"
+		);
 	}
 
 	@Test

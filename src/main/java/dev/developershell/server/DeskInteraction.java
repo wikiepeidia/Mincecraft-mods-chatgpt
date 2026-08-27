@@ -28,6 +28,7 @@ public final class DeskInteraction {
 	private static final String SHEET_RECOVERED_KEY = "message.developers_hell.attendance_sheet.recovered";
 	private static final String SHEET_ALREADY_KEY = "message.developers_hell.attendance_sheet.already";
 	private static final String SHEET_NOTHING_KEY = "message.developers_hell.attendance_sheet.nothing";
+	private static final String REWARDS_RECOVERED_KEY = "message.developers_hell.reward.recovered";
 	private static boolean registered;
 
 	public static synchronized void register() {
@@ -94,16 +95,25 @@ public final class DeskInteraction {
 			};
 		}
 		else if (state.status() == PlayerCampaignState.LectureStatus.PASSED) {
-			RewardService.Outcome outcome = RewardService.recoverSheet(
-					serverPlayer,
-					hit.getBlockPos(),
-					block.getValue(LecternBlock.FACING)
-			);
-			messageKey = switch (outcome) {
-				case SHEET_RECOVERED, SHEET_FALLBACK_RECOVERED -> SHEET_RECOVERED_KEY;
-				case ALREADY_PRESENT -> SHEET_ALREADY_KEY;
-				default -> SHEET_NOTHING_KEY;
-			};
+			if (state.sheetProjectionPending() || state.remoteProjectionPending()) {
+				RewardService.Outcome outcome = RewardService.reconcilePending(serverPlayer);
+				messageKey = switch (outcome) {
+					case INVENTORY_ISSUED, FALLBACK_ISSUED, ALREADY_PRESENT -> REWARDS_RECOVERED_KEY;
+					default -> SHEET_NOTHING_KEY;
+				};
+			}
+			else {
+				RewardService.Outcome outcome = RewardService.recoverSheet(
+						serverPlayer,
+						hit.getBlockPos(),
+						block.getValue(LecternBlock.FACING)
+				);
+				messageKey = switch (outcome) {
+					case SHEET_RECOVERED, SHEET_FALLBACK_RECOVERED -> SHEET_RECOVERED_KEY;
+					case ALREADY_PRESENT -> SHEET_ALREADY_KEY;
+					default -> SHEET_NOTHING_KEY;
+				};
+			}
 		}
 		else {
 			messageKey = NOTHING_KEY;

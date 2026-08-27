@@ -12,6 +12,8 @@ public sealed interface CampaignEvent permits
 		CampaignEvent.ReconcileRetake,
 		CampaignEvent.RetakeFallback,
 		CampaignEvent.RecoverSheet,
+		CampaignEvent.ConfirmSheetProjection,
+		CampaignEvent.ConfirmRemoteProjection,
 		CampaignEvent.StartRemoteCooldown,
 		CampaignEvent.RemoteReadyNotice {
 	UUID ownerUuid();
@@ -136,6 +138,22 @@ public sealed interface CampaignEvent permits
 			if (expectedSequence < 0L) {
 				throw new IllegalArgumentException("expectedSequence must be non-negative");
 			}
+		}
+	}
+
+	record ConfirmSheetProjection(UUID ownerUuid, long recoverySequence) implements CampaignEvent {
+		public ConfirmSheetProjection {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			if (recoverySequence < 0L) {
+				throw new IllegalArgumentException("recoverySequence must be non-negative");
+			}
+		}
+	}
+
+	record ConfirmRemoteProjection(UUID ownerUuid, UUID projectionUuid) implements CampaignEvent {
+		public ConfirmRemoteProjection {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(projectionUuid, "projectionUuid");
 		}
 	}
 

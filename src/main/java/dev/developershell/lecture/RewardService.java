@@ -10,6 +10,7 @@ import dev.developershell.registry.ModItems;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Predicate;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -20,7 +21,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
@@ -61,36 +61,61 @@ public final class RewardService {
 			return Outcome.REJECTED;
 		}
 
-		PlayerCampaignState persisted = persistedView.get();
-		AttendanceSheetItem.Binding binding = new AttendanceSheetItem.Binding(
-				ownerUuid,
-				persisted.sheetRecoverySequence()
-		);
 		ServerPlayer owner = participant.get();
-		if (hasSheetRepresentation(level.getServer(), binding)
-				|| hasRemoteRepresentation(level, owner, persisted.retryPos())) {
+		Outcome outcome = reconcilePending(owner);
+		owner.sendSystemMessage(Component.translatable(VICTORY_KEY));
+		return outcome;
+	}
+
+	/**
+	 * Independently retries only still-pending first-victory projections. A representation is
+	 * observed by its complete owner/generation binding before its pending bit can clear.
+	 */
+	public static Outcome reconcilePending(ServerPlayer owner) {
+		return reconcilePending(owner, ignored -> false);
+	}
+
+	/** Package-private fault seam used only by the generated GameTest source set. */
+	static Outcome reconcilePending(ServerPlayer owner, Predicate<ItemStack> forcedFailure) {
+		Objects.requireNonNull(owner, "owner");
+		Objects.requireNonNull(forcedFailure, "forcedFailure");
+		ServerLevel level = owner.level();
+		if (!level.getServer().isSameThread() || owner.isSpectator()) {
+			return Outcome.REJECTED;
+		}
+		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, owner.getUUID());
+		if (stateView.isEmpty()) {
+			return Outcome.NOT_ENTITLED;
+		}
+		PlayerCampaignState state = stateView.get();
+		if (state.status() != PlayerCampaignState.LectureStatus.PASSED
+				|| !state.sheetEntitled()
+				|| !state.remoteIssued()
+				|| state.remoteProjectionUuid() == null) {
+			return Outcome.NOT_ENTITLED;
+		}
+		if (!state.sheetProjectionPending() && !state.remoteProjectionPending()) {
 			return Outcome.ALREADY_PRESENT;
 		}
 
-		Projection sheet = materialize(
-				level,
-				owner,
-				persisted.retryPos(),
-				AttendanceSheetItem.bound(binding)
-		);
-		Projection remote = materialize(
-				level,
-				owner,
-				persisted.retryPos(),
-				new ItemStack(ModItems.INFINITE_SLIDES_REMOTE)
-		);
-		if (sheet == Projection.FAILED || remote == Projection.FAILED) {
+		ProjectionAttempt sheet = state.sheetProjectionPending()
+				? reconcileSheetProjection(level, owner, state, forcedFailure)
+				: ProjectionAttempt.SKIPPED;
+		ProjectionAttempt remote = state.remoteProjectionPending()
+				? reconcileRemoteProjection(level, owner, state, forcedFailure)
+				: ProjectionAttempt.SKIPPED;
+		if (sheet == ProjectionAttempt.FAILED || remote == ProjectionAttempt.FAILED) {
 			return Outcome.MATERIALIZATION_FAILED;
 		}
-		owner.sendSystemMessage(Component.translatable(VICTORY_KEY));
-		return sheet == Projection.FALLBACK || remote == Projection.FALLBACK
-				? Outcome.FALLBACK_ISSUED
-				: Outcome.INVENTORY_ISSUED;
+		if (sheet == ProjectionAttempt.FALLBACK || remote == ProjectionAttempt.FALLBACK) {
+			return Outcome.FALLBACK_ISSUED;
+		}
+		if (sheet == ProjectionAttempt.INVENTORY || remote == ProjectionAttempt.INVENTORY) {
+			return Outcome.INVENTORY_ISSUED;
+		}
+		return sheet == ProjectionAttempt.OBSERVED || remote == ProjectionAttempt.OBSERVED
+				? Outcome.ALREADY_PRESENT
+				: Outcome.REJECTED;
 	}
 
 	/**
@@ -179,8 +204,14 @@ public final class RewardService {
 			return 0;
 		}
 		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, owner.getUUID());
-		Optional<ItemStack> remote = firstRemoteStack(owner);
-		if (stateView.isEmpty() || !stateView.get().remoteIssued() || remote.isEmpty()) {
+		if (stateView.isEmpty()
+				|| !stateView.get().remoteIssued()
+				|| stateView.get().remoteProjectionPending()
+				|| stateView.get().remoteProjectionUuid() == null) {
+			return 0;
+		}
+		Optional<ItemStack> remote = firstRemoteStack(owner, stateView.get());
+		if (remote.isEmpty()) {
 			return 0;
 		}
 		int remainingTicks = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
@@ -212,6 +243,11 @@ public final class RewardService {
 			return false;
 		}
 		PlayerCampaignState state = stateView.get();
+		if (!state.remoteIssued()
+				|| state.remoteProjectionPending()
+				|| state.remoteProjectionUuid() == null) {
+			return false;
+		}
 		long observedGameTime = level.getGameTime();
 		if (!InfiniteSlidesRemoteItem.Cooldown.readyNoticeDue(
 				state.remoteCooldownUntilGameTime(),
@@ -220,7 +256,7 @@ public final class RewardService {
 		)) {
 			return false;
 		}
-		if (readyCueDecision(firstRemoteStack(owner).isPresent(), criticalActionBarActive)
+		if (readyCueDecision(firstRemoteStack(owner, state).isPresent(), criticalActionBarActive)
 				!= ReadyCueDecision.PRESENT) {
 			return false;
 		}
@@ -263,7 +299,7 @@ public final class RewardService {
 		if (sheetLifecycleRegistered) {
 			return;
 		}
-		ServerEntityEvents.ALLOW_LOAD.register(RewardService::allowSheetLoad);
+		ServerEntityEvents.ALLOW_LOAD.register(RewardService::allowRewardLoad);
 		ServerEntityEvents.ENTITY_LOAD.register(RewardService::onEntityLoad);
 		sheetLifecycleRegistered = true;
 	}
@@ -285,7 +321,10 @@ public final class RewardService {
 				|| next.status() != PlayerCampaignState.LectureStatus.PASSED
 				|| next.activeEncounterRef() != null
 				|| !next.sheetEntitled()
-				|| !next.remoteIssued()) {
+				|| !next.remoteIssued()
+				|| !next.sheetProjectionPending()
+				|| !next.remoteProjectionPending()
+				|| !encounterUuid.equals(next.remoteProjectionUuid())) {
 			return false;
 		}
 		long cleanupCount = transition.intents().stream().filter(effect ->
@@ -301,12 +340,113 @@ public final class RewardService {
 		return cleanupCount == 1L && grantCount == 1L && transition.intents().size() == 2;
 	}
 
+	private static ProjectionAttempt reconcileSheetProjection(
+			ServerLevel level,
+			ServerPlayer owner,
+			PlayerCampaignState state,
+			Predicate<ItemStack> forcedFailure
+	) {
+		AttendanceSheetItem.Binding binding = new AttendanceSheetItem.Binding(
+				state.ownerUuid(), state.sheetRecoverySequence()
+		);
+		if (hasSheetRepresentation(level.getServer(), binding)) {
+			return confirmSheetProjection(level, state.ownerUuid(), binding.recoverySequence())
+					? ProjectionAttempt.OBSERVED
+					: ProjectionAttempt.FAILED;
+		}
+		Projection projection = materialize(
+				level,
+				owner,
+				state.retryPos(),
+				AttendanceSheetItem.bound(binding),
+				forcedFailure
+		);
+		if (projection == Projection.FAILED
+				|| !confirmSheetProjection(level, state.ownerUuid(), binding.recoverySequence())) {
+			return ProjectionAttempt.FAILED;
+		}
+		return projection == Projection.INVENTORY
+				? ProjectionAttempt.INVENTORY
+				: ProjectionAttempt.FALLBACK;
+	}
+
+	private static ProjectionAttempt reconcileRemoteProjection(
+			ServerLevel level,
+			ServerPlayer owner,
+			PlayerCampaignState state,
+			Predicate<ItemStack> forcedFailure
+	) {
+		InfiniteSlidesRemoteItem.Binding binding = new InfiniteSlidesRemoteItem.Binding(
+				state.ownerUuid(), state.remoteProjectionUuid()
+		);
+		if (hasRemoteRepresentation(level.getServer(), binding)) {
+			return confirmRemoteProjection(level, binding)
+					? ProjectionAttempt.OBSERVED
+					: ProjectionAttempt.FAILED;
+		}
+		Projection projection = materialize(
+				level,
+				owner,
+				state.retryPos(),
+				InfiniteSlidesRemoteItem.bound(binding),
+				forcedFailure
+		);
+		if (projection == Projection.FAILED || !confirmRemoteProjection(level, binding)) {
+			return ProjectionAttempt.FAILED;
+		}
+		return projection == Projection.INVENTORY
+				? ProjectionAttempt.INVENTORY
+				: ProjectionAttempt.FALLBACK;
+	}
+
+	private static boolean confirmSheetProjection(
+			ServerLevel level,
+			UUID ownerUuid,
+			long recoverySequence
+	) {
+		CampaignTransition transition = CampaignService.apply(
+				level,
+				new CampaignEvent.ConfirmSheetProjection(ownerUuid, recoverySequence),
+				ignored -> {
+				}
+		);
+		return transition.accepted()
+				&& transition.nextState().filter(state -> !state.sheetProjectionPending()).isPresent();
+	}
+
+	private static boolean confirmRemoteProjection(
+			ServerLevel level,
+			InfiniteSlidesRemoteItem.Binding binding
+	) {
+		CampaignTransition transition = CampaignService.apply(
+				level,
+				new CampaignEvent.ConfirmRemoteProjection(binding.ownerUuid(), binding.projectionUuid()),
+				ignored -> {
+				}
+		);
+		return transition.accepted()
+				&& transition.nextState().filter(state -> !state.remoteProjectionPending()).isPresent();
+	}
+
 	private static Projection materialize(
 			ServerLevel level,
 			ServerPlayer owner,
 			BlockPos retryPos,
 			ItemStack stack
 	) {
+		return materialize(level, owner, retryPos, stack, ignored -> false);
+	}
+
+	private static Projection materialize(
+			ServerLevel level,
+			ServerPlayer owner,
+			BlockPos retryPos,
+			ItemStack stack,
+			Predicate<ItemStack> forcedFailure
+	) {
+		if (forcedFailure.test(stack)) {
+			return Projection.FAILED;
+		}
 		if (owner.getInventory().add(stack)) {
 			return Projection.INVENTORY;
 		}
@@ -352,37 +492,46 @@ public final class RewardService {
 	}
 
 	private static boolean hasRemoteRepresentation(
-			ServerLevel level,
-			ServerPlayer owner,
-			BlockPos retryPos
+			MinecraftServer server,
+			InfiniteSlidesRemoteItem.Binding binding
 	) {
-		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
-			if (owner.getInventory().getItem(slot).getItem() == ModItems.INFINITE_SLIDES_REMOTE) {
-				return true;
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+				if (InfiniteSlidesRemoteItem.binding(player.getInventory().getItem(slot))
+						.filter(binding::equals).isPresent()) {
+					return true;
+				}
 			}
 		}
-		for (Entity entity : level.getAllEntities()) {
-			if (entity instanceof ItemEntity item
-					&& !item.isRemoved()
-					&& item.getItem().getItem() == ModItems.INFINITE_SLIDES_REMOTE
-					&& item.blockPosition().distManhattan(retryPos) <= 2) {
-				return true;
+		for (ServerLevel level : server.getAllLevels()) {
+			for (Entity entity : level.getAllEntities()) {
+				if (entity instanceof ItemEntity item
+						&& !item.isRemoved()
+						&& InfiniteSlidesRemoteItem.binding(item.getItem()).filter(binding::equals).isPresent()) {
+					return true;
+				}
 			}
 		}
 		return false;
 	}
 
-	private static Optional<ItemStack> firstRemoteStack(ServerPlayer owner) {
+	private static Optional<ItemStack> firstRemoteStack(
+			ServerPlayer owner,
+			PlayerCampaignState state
+	) {
+		InfiniteSlidesRemoteItem.Binding expected = new InfiniteSlidesRemoteItem.Binding(
+				state.ownerUuid(), state.remoteProjectionUuid()
+		);
 		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
 			ItemStack stack = owner.getInventory().getItem(slot);
-			if (!stack.isEmpty() && stack.getItem() == ModItems.INFINITE_SLIDES_REMOTE) {
+			if (InfiniteSlidesRemoteItem.binding(stack).filter(expected::equals).isPresent()) {
 				return Optional.of(stack);
 			}
 		}
 		return Optional.empty();
 	}
 
-	private static boolean allowSheetLoad(
+	private static boolean allowRewardLoad(
 			Entity entity,
 			ServerLevel level,
 			net.minecraft.world.entity.EntitySpawnReason spawnReason,
@@ -391,8 +540,13 @@ public final class RewardService {
 		if (!(entity instanceof ItemEntity item)) {
 			return true;
 		}
-		Optional<AttendanceSheetItem.Binding> binding = AttendanceSheetItem.binding(item.getItem());
-		return binding.isEmpty() || isCurrentBinding(level, binding.get());
+		Optional<AttendanceSheetItem.Binding> sheetBinding = AttendanceSheetItem.binding(item.getItem());
+		if (sheetBinding.isPresent()) {
+			return isCurrentBinding(level, sheetBinding.get());
+		}
+		Optional<InfiniteSlidesRemoteItem.Binding> remoteBinding =
+				InfiniteSlidesRemoteItem.binding(item.getItem());
+		return remoteBinding.isEmpty() || isCurrentRemoteBinding(level, remoteBinding.get());
 	}
 
 	private static void onEntityLoad(Entity entity, ServerLevel level) {
@@ -401,6 +555,9 @@ public final class RewardService {
 		}
 		AttendanceSheetItem.binding(item.getItem())
 				.filter(binding -> isCurrentBinding(level, binding))
+				.ifPresent(binding -> item.setTarget(binding.ownerUuid()));
+		InfiniteSlidesRemoteItem.binding(item.getItem())
+				.filter(binding -> isCurrentRemoteBinding(level, binding))
 				.ifPresent(binding -> item.setTarget(binding.ownerUuid()));
 	}
 
@@ -412,6 +569,17 @@ public final class RewardService {
 				state.status() == PlayerCampaignState.LectureStatus.PASSED
 						&& state.sheetEntitled()
 						&& state.sheetRecoverySequence() == binding.recoverySequence()
+		).isPresent();
+	}
+
+	private static boolean isCurrentRemoteBinding(
+			ServerLevel level,
+			InfiniteSlidesRemoteItem.Binding binding
+	) {
+		return CampaignService.snapshot(level, binding.ownerUuid()).filter(state ->
+				state.status() == PlayerCampaignState.LectureStatus.PASSED
+						&& state.remoteIssued()
+						&& binding.projectionUuid().equals(state.remoteProjectionUuid())
 		).isPresent();
 	}
 
@@ -433,6 +601,14 @@ public final class RewardService {
 	}
 
 	private enum Projection {
+		INVENTORY,
+		FALLBACK,
+		FAILED
+	}
+
+	private enum ProjectionAttempt {
+		SKIPPED,
+		OBSERVED,
 		INVENTORY,
 		FALLBACK,
 		FAILED

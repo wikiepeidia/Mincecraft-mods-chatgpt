@@ -70,7 +70,13 @@ public final class CampaignSavedData extends SavedData {
 					Codec.LONG.optionalFieldOf("sheet_recovery_sequence", 0L)
 							.forGetter(DurableFields::sheetRecoverySequence),
 					Codec.LONG.optionalFieldOf("remote_ready_notice_for_deadline_game_time", 0L)
-							.forGetter(DurableFields::remoteReadyNoticeForDeadlineGameTime)
+							.forGetter(DurableFields::remoteReadyNoticeForDeadlineGameTime),
+					Codec.BOOL.optionalFieldOf("sheet_projection_pending", false)
+							.forGetter(DurableFields::sheetProjectionPending),
+					Codec.BOOL.optionalFieldOf("remote_projection_pending", false)
+							.forGetter(DurableFields::remoteProjectionPending),
+					UUIDUtil.CODEC.optionalFieldOf("remote_projection_uuid")
+							.forGetter(DurableFields::remoteProjectionUuid)
 			).apply(instance, DurableFields::new)
 	);
 
@@ -224,6 +230,13 @@ public final class CampaignSavedData extends SavedData {
 							)
 							: null
 			);
+			UUID remoteProjectionUuid = durable.remoteProjectionUuid().orElseGet(() ->
+					durable.remoteIssued()
+							? PlayerCampaignState.legacyRemoteProjectionUuid(
+									identity.ownerUuid(), identity.deskPos(), identity.attemptCount()
+							)
+							: null
+			);
 			PlayerCampaignState.EncounterRef encounter = hasEncounter
 					? new PlayerCampaignState.EncounterRef(
 							identity.ownerUuid(),
@@ -250,7 +263,10 @@ public final class CampaignSavedData extends SavedData {
 					durable.retakeFallbackEntityUuid().orElse(null),
 					durable.remoteCooldownUntilGameTime(),
 					durable.sheetRecoverySequence(),
-					durable.remoteReadyNoticeForDeadlineGameTime()
+					durable.remoteReadyNoticeForDeadlineGameTime(),
+					durable.sheetProjectionPending(),
+					durable.remoteProjectionPending(),
+					remoteProjectionUuid
 			);
 			return DataResult.success(new EncodedPlayer(identity.mapKeyUuid().orElse(identity.ownerUuid()), state));
 		}
@@ -284,7 +300,10 @@ public final class CampaignSavedData extends SavedData {
 						Optional.ofNullable(state.retakeFallbackEntityUuid()),
 						state.remoteCooldownUntilGameTime(),
 						state.sheetRecoverySequence(),
-						state.remoteReadyNoticeForDeadlineGameTime()
+						state.remoteReadyNoticeForDeadlineGameTime(),
+						state.sheetProjectionPending(),
+						state.remoteProjectionPending(),
+						Optional.ofNullable(state.remoteProjectionUuid())
 				)
 		);
 	}
@@ -416,7 +435,10 @@ public final class CampaignSavedData extends SavedData {
 			Optional<UUID> retakeFallbackEntityUuid,
 			long remoteCooldownUntilGameTime,
 			long sheetRecoverySequence,
-			long remoteReadyNoticeForDeadlineGameTime
+			long remoteReadyNoticeForDeadlineGameTime,
+			boolean sheetProjectionPending,
+			boolean remoteProjectionPending,
+			Optional<UUID> remoteProjectionUuid
 	) {
 	}
 

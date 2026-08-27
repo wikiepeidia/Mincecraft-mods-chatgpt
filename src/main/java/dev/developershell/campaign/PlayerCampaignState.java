@@ -33,7 +33,10 @@ public record PlayerCampaignState(
 		UUID retakeFallbackEntityUuid,
 		long remoteCooldownUntilGameTime,
 		long sheetRecoverySequence,
-		long remoteReadyNoticeForDeadlineGameTime
+		long remoteReadyNoticeForDeadlineGameTime,
+		boolean sheetProjectionPending,
+		boolean remoteProjectionPending,
+		UUID remoteProjectionUuid
 ) implements CampaignSavedData.PlayerProgress {
 	public static final String OVERWORLD_DIMENSION = "minecraft:overworld";
 
@@ -69,6 +72,15 @@ public record PlayerCampaignState(
 				|| (status == LectureStatus.PASSED) != remoteIssued) {
 			throw new IllegalArgumentException("PASSED status requires exactly its Sheet and Remote reward ledgers");
 		}
+		if (sheetProjectionPending && (status != LectureStatus.PASSED || !sheetEntitled)) {
+			throw new IllegalArgumentException("Pending Sheet projection requires a passed Sheet entitlement");
+		}
+		if (remoteProjectionPending && (status != LectureStatus.PASSED || !remoteIssued)) {
+			throw new IllegalArgumentException("Pending Remote projection requires a passed Remote ledger");
+		}
+		if (remoteIssued != (remoteProjectionUuid != null)) {
+			throw new IllegalArgumentException("Remote issued ledger and projection identity must be present together");
+		}
 		if (!retakeEntitled && (retakeEncounterUuid != null
 				|| retakeFallbackReservationUuid != null
 				|| retakeFallbackEntityUuid != null)) {
@@ -93,6 +105,55 @@ public record PlayerCampaignState(
 				|| remoteReadyNoticeForDeadlineGameTime > remoteCooldownUntilGameTime) {
 			throw new IllegalArgumentException("Remote ready notice must identify a committed cooldown deadline");
 		}
+	}
+
+	/**
+	 * Schema-v1 compatibility constructor. Historical records had no independent pending markers;
+	 * a deterministic owner projection identity preserves their no-reissue semantics.
+	 */
+	public PlayerCampaignState(
+			UUID ownerUuid,
+			CampaignChapter chapter,
+			LectureStatus status,
+			int attemptCount,
+			String deskDimension,
+			BlockPos deskPos,
+			Direction deskFacing,
+			BlockPos retryPos,
+			EncounterRef activeEncounterRef,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			UUID retakeEncounterUuid,
+			UUID retakeFallbackReservationUuid,
+			UUID retakeFallbackEntityUuid,
+			long remoteCooldownUntilGameTime,
+			long sheetRecoverySequence,
+			long remoteReadyNoticeForDeadlineGameTime
+	) {
+		this(
+				ownerUuid,
+				chapter,
+				status,
+				attemptCount,
+				deskDimension,
+				deskPos,
+				deskFacing,
+				retryPos,
+				activeEncounterRef,
+				sheetEntitled,
+				remoteIssued,
+				retakeEntitled,
+				retakeEncounterUuid,
+				retakeFallbackReservationUuid,
+				retakeFallbackEntityUuid,
+				remoteCooldownUntilGameTime,
+				sheetRecoverySequence,
+				remoteReadyNoticeForDeadlineGameTime,
+				false,
+				false,
+				remoteIssued ? legacyRemoteProjectionUuid(ownerUuid, deskPos, attemptCount) : null
+		);
 	}
 
 	/**
@@ -189,6 +250,14 @@ public record PlayerCampaignState(
 		Objects.requireNonNull(ownerUuid, "ownerUuid");
 		Objects.requireNonNull(deskPos, "deskPos");
 		String value = "encounter:" + ownerUuid + ":" + deskPos.getX() + ":" + deskPos.getY()
+				+ ":" + deskPos.getZ() + ":" + attemptCount;
+		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
+	}
+
+	static UUID legacyRemoteProjectionUuid(UUID ownerUuid, BlockPos deskPos, int attemptCount) {
+		Objects.requireNonNull(ownerUuid, "ownerUuid");
+		Objects.requireNonNull(deskPos, "deskPos");
+		String value = "remote:" + ownerUuid + ":" + deskPos.getX() + ":" + deskPos.getY()
 				+ ":" + deskPos.getZ() + ":" + attemptCount;
 		return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8));
 	}
