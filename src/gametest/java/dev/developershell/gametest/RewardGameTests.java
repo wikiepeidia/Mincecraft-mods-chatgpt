@@ -64,7 +64,6 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	private static final String VICTORY_KEY = "message.developers_hell.reward.victory";
 	private static final String RECOVERED_KEY = "message.developers_hell.attendance_sheet.recovered";
 	private static final String ALREADY_KEY = "message.developers_hell.attendance_sheet.already";
-	private static final String NOTHING_KEY = "message.developers_hell.attendance_sheet.nothing";
 	private static final String TOOLTIP_KEY = "tooltip.developers_hell.attendance_sheet.proof";
 
 	@GameTest(maxTicks = 160, padding = 24)
@@ -417,10 +416,10 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 
 			removeBoundSheets(level.getServer(), ownerUuid);
 			owner.clearRecordedSystemMessages();
-			context.assertValueEqual(useEmptyHand(level, owner, wrongDesk), InteractionResult.SUCCESS_SERVER,
-					"wrong Desk is a localized recovery no-op");
-			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(NOTHING_KEY),
-					"wrong Desk reports no recoverable Sheet");
+			context.assertValueEqual(useEmptyHand(level, owner, wrongDesk), InteractionResult.PASS,
+					"a nonmatching lectern passes through to vanilla handling");
+			context.assertTrue(owner.recordedSystemMessageKeys().isEmpty(),
+					"a nonmatching lectern emits no recovery feedback");
 			context.assertValueEqual(state(level, ownerUuid), passed,
 					"wrong Desk cannot advance the recovery sequence");
 

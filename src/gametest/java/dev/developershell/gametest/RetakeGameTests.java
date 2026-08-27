@@ -204,10 +204,10 @@ public final class RetakeGameTests implements CustomTestMethodInvoker {
 
 			removeBoundForms(owner, key);
 			owner.clearRecordedSystemMessages();
-			context.assertValueEqual(useBlock(level, owner, wrongDesk), InteractionResult.SUCCESS_SERVER,
-					"wrong Desk is a localized no-op");
-			context.assertValueEqual(owner.recordedSystemMessageKeys(), List.of(NOTHING_KEY),
-					"wrong Desk emits nothing-to-retake copy");
+			context.assertValueEqual(useBlock(level, owner, wrongDesk), InteractionResult.PASS,
+					"empty-hand recovery passes a nonmatching lectern through to vanilla");
+			context.assertTrue(owner.recordedSystemMessageKeys().isEmpty(),
+					"empty-hand recovery emits no copy for a nonmatching lectern");
 			context.assertValueEqual(boundFormCount(owner, key), 0, "wrong Desk does not recover");
 
 			owner.clearRecordedSystemMessages();

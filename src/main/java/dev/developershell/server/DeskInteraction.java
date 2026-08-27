@@ -76,12 +76,7 @@ public final class DeskInteraction {
 				&& state.deskPos().equals(hit.getBlockPos())
 				&& state.deskFacing() == block.getValue(LecternBlock.FACING);
 		if (!matchingDesk) {
-			serverPlayer.sendSystemMessage(Component.translatable(
-					state.status() == PlayerCampaignState.LectureStatus.PASSED
-							? SHEET_NOTHING_KEY
-							: NOTHING_KEY
-			));
-			return InteractionResult.SUCCESS_SERVER;
+			return InteractionResult.PASS;
 		}
 
 		String messageKey;
