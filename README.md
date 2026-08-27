@@ -14,12 +14,15 @@ Use this exact runtime tuple:
 
 Install Fabric for Minecraft `26.2`, place both Fabric API `0.158.0+26.2` and the one ordinary Developer's Hell JAR in that Fabric 26.2 profile's `mods` directory, then launch the profile with Java 25. Keep this profile separate from installations for other Minecraft, Fabric, Forge, or OptiFine versions.
 
-The deadline release output will use this location, but its final checksum and automated gate result will be recorded separately after verification; this README does not claim them in advance:
+The verified deadline release is:
 
 ```text
 dist/developers-hell-0.1.0.jar
-SHA-256: pending separate verified build record
+Size: 408,578 bytes
+SHA-256: c3bd2b6e025b2d8b3c7cb056b31981c719416fb8a7270341fb1b3e737ec6d392
 ```
+
+Its clean Java 25 offline gate passed 106 unit tests, 70 GameTests, the direct-dependency audit, the production build, and a bounded dedicated-server ready/clean-stop smoke. Manual client visual/readability UAT remains pending.
 
 Install only the ordinary remapped release JAR recorded by the final build. Do not substitute a development, sources, test, or arbitrary local rebuild. Earlier Phase 1 and Phase 2 hashes remain historical foundation/Lecture evidence; neither is the checksum for this deadline boss-rush build.
 
