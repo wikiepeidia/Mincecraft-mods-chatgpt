@@ -372,10 +372,13 @@ function Assert-ProductionArchive {
 			'LICENSE_developers-hell',
 			'dev/developershell/DevelopersHell.class',
 			'dev/developershell/client/DevelopersHellClient.class',
+			'dev/developershell/mixin/InventoryRewardDropMixin.class',
+			'dev/developershell/mixin/ServerLevelRewardAdmissionMixin.class',
 			'dev/developershell/module/ModuleGate.class',
 			'dev/developershell/module/ModuleId.class',
 			'dev/developershell/registry/ModItemIds.class',
 			'dev/developershell/registry/ModItems.class',
+			'developers_hell.mixins.json',
 			'assets/developers_hell/lang/en_us.json',
 			'assets/developers_hell/items/foundation_token.json',
 			'assets/developers_hell/models/item/foundation_token.json'
@@ -386,9 +389,22 @@ function Assert-ProductionArchive {
 			}
 		}
 
+		$expectedMixinArtifacts = @(
+			'dev/developershell/mixin/InventoryRewardDropMixin.class',
+			'dev/developershell/mixin/ServerLevelRewardAdmissionMixin.class',
+			'developers_hell.mixins.json'
+		) | Sort-Object
+		$mixinArtifactPattern = '(?i)(?:^|/)(?:mixin|mixins)(?:/|$)|(?:^|/)[^/]*Mixin(?:\$[^/]*)?[.]class$|[.]mixins?[.]json$'
+		$actualMixinArtifacts = @($entryNames | Where-Object {
+			-not $_.EndsWith('/') -and $_ -match $mixinArtifactPattern
+		} | Sort-Object)
+		if (($actualMixinArtifacts -join "`n") -cne ($expectedMixinArtifacts -join "`n")) {
+			throw 'Production archive mixin artifacts do not equal the exact approved reward mixin set.'
+		}
+
 		$unsafeEntryPattern = '(?i)(?:^|/)(?:dev/developershell/gametest|gametest|gametests|test|tests)(?:/|$)|(?:^|/)[^/]*(?:Test|Tests|TestCase)(?:\$[^/]*)?[.]class$|FoundationGameTests(?:\$[^/]*)?[.]class$|ModuleGateTest(?:\$[^/]*)?[.]class$'
 		$shadedPattern = '(?i)^(?:com/openai|okhttp3|retrofit2|io/sentry|com/mixpanel|com/amplitude|com/segment|io/segment|com/google/firebase/remoteconfig|com/launchdarkly|io/getunleash|dev/openfeature|org/apache/http|com/squareup/okhttp|org/eclipse/jetty/client|io/netty/handler/codec/http)(?:/|$)'
-		$residuePattern = '(?i)(?:^|/)(?:com/example|example[-_]?mod|examplemod|modid)(?:/|$)|(?:^|/)(?:mixin|mixins)(?:/|$)|(?:^|/)[^/]*(?:ExampleMod|ExampleMixin)(?:\$[^/]*)?[.]class$|(?:^|/)[^/]*Mixin(?:\$[^/]*)?[.]class$|[.]mixins?[.]json$'
+		$residuePattern = '(?i)(?:^|/)(?:com/example|example[-_]?mod|examplemod|modid)(?:/|$)|(?:^|/)[^/]*(?:ExampleMod|ExampleMixin)(?:\$[^/]*)?[.]class$'
 		$credentialFilePattern = '(?i)(?:^|/)(?:[.]env(?:[.][^/]*)?|credentials?(?:[.][^/]*)?|secrets?(?:[.][^/]*)?|id_rsa|id_ed25519|application[-_]?secrets?[.]properties|[^/]+[.](?:pem|p12|pfx|jks|keystore|key))$'
 
 		$badTests = @($entryNames | Where-Object { $_ -match $unsafeEntryPattern })
@@ -401,7 +417,7 @@ function Assert-ProductionArchive {
 		}
 		$badResidue = @($entryNames | Where-Object { $_ -match $residuePattern })
 		if ($badResidue.Count -gt 0) {
-			throw "Example or mixin residue found in production archive: $($badResidue[0])"
+			throw "Example or template residue found in production archive: $($badResidue[0])"
 		}
 		$badCredentials = @($entryNames | Where-Object { $_ -match $credentialFilePattern })
 		if ($badCredentials.Count -gt 0) {
@@ -411,6 +427,7 @@ function Assert-ProductionArchive {
 		$latin1 = [System.Text.Encoding]::GetEncoding(28591)
 		$archiveStringPattern = '(?i)(?:developers_hell_test|fabric-gametest|java[/\\.]net(?:[/\\.]|\b)|java[/\\.]net[/\\.]http|https?://|wss?://|com[/\\.]openai|okhttp3|retrofit2|io[/\\.]sentry|com[/\\.](?:mixpanel|amplitude|segment)|io[/\\.]segment|remote[-_./ ]?config(?:uration)?|LaunchDarkly|UnleashClient|FirebaseRemoteConfig|OpenAI(?:Api|API|Client|Sdk|SDK|Service)|ChatGPT(?:Api|API|Client|Sdk|SDK|Service)|api[-_. ]?key|access[-_. ]?token|Authorization\s*[:=]|Bearer\s+[A-Za-z0-9._~+/=-]+)'
 		$metadataText = $null
+		$mixinConfigText = $null
 		$totalBytes = [int64] 0
 		foreach ($entry in $entries) {
 			$name = $entry.FullName.Replace('\', '/')
@@ -449,6 +466,9 @@ function Assert-ProductionArchive {
 			if ($name -eq 'fabric.mod.json') {
 				$metadataText = [System.Text.Encoding]::UTF8.GetString($bytes)
 			}
+			if ($name -eq 'developers_hell.mixins.json') {
+				$mixinConfigText = [System.Text.Encoding]::UTF8.GetString($bytes)
+			}
 			if ([regex]::IsMatch($content, $archiveStringPattern)) {
 				throw "Forbidden test/network/remote-service marker found in archive entry: $name"
 			}
@@ -465,15 +485,45 @@ function Assert-ProductionArchive {
 		if ($metadata.id -cne 'developers_hell') {
 			throw 'Root fabric.mod.json must declare production id developers_hell.'
 		}
+		$metadataMixinConfigs = @($metadata.mixins | ForEach-Object { [string] $_ })
+		if ($metadataMixinConfigs.Count -ne 1 -or $metadataMixinConfigs[0] -cne 'developers_hell.mixins.json') {
+			throw 'Root fabric.mod.json must register exactly developers_hell.mixins.json.'
+		}
 		$metadataCompact = $metadataText -replace '\s+', ''
 		if ($metadataCompact -match '(?i)developers_hell_test|fabric-gametest') {
 			throw 'Production metadata contains test mod identity or fabric-gametest entrypoint.'
+		}
+
+		if ([string]::IsNullOrWhiteSpace($mixinConfigText)) {
+			throw 'Approved production mixin config could not be read.'
+		}
+		try {
+			$mixinConfig = $mixinConfigText | ConvertFrom-Json -ErrorAction Stop
+		} catch {
+			throw 'Approved production mixin config is not valid JSON.'
+		}
+		$expectedMixinProperties = @('compatibilityLevel', 'injectors', 'mixins', 'package', 'required') | Sort-Object
+		$actualMixinProperties = @($mixinConfig.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
+		if (($actualMixinProperties -join "`n") -cne ($expectedMixinProperties -join "`n")) {
+			throw 'Approved production mixin config has missing or unknown top-level properties.'
+		}
+		$expectedMixinNames = @('InventoryRewardDropMixin', 'ServerLevelRewardAdmissionMixin')
+		$actualMixinNames = @($mixinConfig.mixins | ForEach-Object { [string] $_ })
+		$injectorProperties = @($mixinConfig.injectors.PSObject.Properties | ForEach-Object { $_.Name })
+		if ($mixinConfig.required -isnot [bool] -or -not [bool] $mixinConfig.required -or
+			[string] $mixinConfig.package -cne 'dev.developershell.mixin' -or
+			[string] $mixinConfig.compatibilityLevel -cne 'JAVA_25' -or
+			($actualMixinNames -join "`n") -cne ($expectedMixinNames -join "`n") -or
+			$injectorProperties.Count -ne 1 -or $injectorProperties[0] -cne 'defaultRequire' -or
+			[int] $mixinConfig.injectors.defaultRequire -ne 1) {
+			throw 'Approved production mixin config does not match the exact required reward hook contract.'
 		}
 
 		$jarHash = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
 		Add-EvidenceDetail "production_archive=$expectedName"
 		Add-EvidenceDetail "production_archive_sha256=$jarHash"
 		Add-EvidenceDetail "production_archive_entries=$($entryNames.Count)"
+		Add-EvidenceDetail "production_archive_mixin_artifacts=$($actualMixinArtifacts.Count)"
 	} catch {
 		if ($_.Exception.Message -match 'central directory|archive|ZIP|End of Central Directory') {
 			throw "Archive inspection failed closed: $($_.Exception.Message)"
@@ -629,7 +679,7 @@ if (-not $SourceAndDependencies) {
 		Add-AuditLine 'PASS: Optional -JarPath was not supplied; source/dependency audit remains complete.'
 		Add-AuditLine ''
 	} else {
-		Invoke-AuditSection -Name 'PRODUCTION_ARCHIVE' -Success 'Exact ordinary JAR has production metadata/license/content only and no test, example, mixin, shaded SDK, remote-service, or credential residue.' -Action {
+		Invoke-AuditSection -Name 'PRODUCTION_ARCHIVE' -Success 'Exact ordinary JAR has the approved reward mixin contract and no test, example, shaded SDK, remote-service, or credential residue.' -Action {
 			Assert-ProductionArchive -RequestedJarPath $JarPath
 		}
 	}
