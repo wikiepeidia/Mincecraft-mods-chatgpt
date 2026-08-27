@@ -573,8 +573,11 @@ function Get-RequiredLectureArchiveEntries {
 }
 
 function Get-LectureArchiveContract {
-    param([Parameter(Mandatory)][string] $JarPath)
-    if ((Split-Path -Leaf $JarPath) -cne $script:ExpectedDistributionName) {
+    param([Parameter(Mandatory)][string] $JarPath, [switch] $AllowTransactionStageName)
+    $leafName = Split-Path -Leaf $JarPath
+    $stageNamePattern = '^[.]' + [regex]::Escape($script:ExpectedDistributionName) + '[.][0-9a-f]{32}[.]stage$'
+    if ($leafName -cne $script:ExpectedDistributionName -and
+        (-not $AllowTransactionStageName -or $leafName -notmatch $stageNamePattern)) {
         throw 'Archive audit accepts only the exact ordinary production JAR name.'
     }
     Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
@@ -1462,6 +1465,16 @@ function Invoke-SelfCheckMode {
         $fresh = Assert-FreshArtifact -JarPath $jar -BuildStartedUtc ([DateTime]::UtcNow.AddSeconds(-5))
         if ($fresh.Sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Fresh-artifact self-check returned an invalid hash.' }
         [void](Get-LectureArchiveContract -JarPath $jar)
+        $validStageJar = Join-Path $fixtureRoot ('.' + $script:ExpectedDistributionName + '.' + [guid]::NewGuid().ToString('N') + '.stage')
+        [System.IO.File]::Copy($jar, $validStageJar)
+        [void](Get-LectureArchiveContract -JarPath $validStageJar -AllowTransactionStageName)
+        $arbitraryStageJar = Join-Path $fixtureRoot 'arbitrary-stage.jar'
+        [System.IO.File]::Copy($jar, $arbitraryStageJar)
+        Assert-SelfCheckRejects -Label 'arbitrary archive name through transaction seam' -Action {
+            Get-LectureArchiveContract -JarPath $arbitraryStageJar -AllowTransactionStageName
+        }
+        [System.IO.File]::Delete($validStageJar)
+        [System.IO.File]::Delete($arbitraryStageJar)
 
         [System.IO.File]::SetLastWriteTimeUtc($jar, [DateTime]::UtcNow.AddMinutes(-10))
         Assert-SelfCheckRejects -Label 'stale ordinary JAR' -Action {
@@ -1576,19 +1589,158 @@ function Invoke-SelfCheckMode {
         Assert-SelfCheckRejects -Label 'out-of-order production shutdown transcript' -Action {
             Assert-ServerTranscript -Text "$($script:ExpectedReadyMarker)`nStopping server`n$($script:ExpectedStopCleanupMarker)`nAll dimensions are saved"
         }
-        $copySource = Join-Path $fixtureRoot 'copy-source.bin'
-        $copyDestination = Join-Path $fixtureRoot 'copy-destination.bin'
-        [System.IO.File]::WriteAllText($copySource, 'new exact bytes', [System.Text.UTF8Encoding]::new($false))
-        [System.IO.File]::WriteAllText($copyDestination, 'old bytes', [System.Text.UTF8Encoding]::new($false))
-        $sourceHashBefore = Get-FileSha256 $copySource
-        Copy-ArtifactAtomically -Source $copySource -Destination $copyDestination
-        if (-not (Test-Path -LiteralPath $copySource -PathType Leaf) -or (Get-FileSha256 $copySource) -cne $sourceHashBefore -or (Get-FileSha256 $copyDestination) -cne $sourceHashBefore) { throw 'Atomic replacement self-check did not preserve exact source/destination bytes.' }
-        [System.IO.File]::WriteAllText($copyDestination, 'preserve on failure', [System.Text.UTF8Encoding]::new($false))
-        $preservedHash = Get-FileSha256 $copyDestination
-        Assert-SelfCheckRejects -Label 'atomic promotion injected failure' -Action {
-            Copy-ArtifactAtomically -Source $copySource -Destination $copyDestination -BeforeReplaceAction { throw 'synthetic pre-replace failure' }
+        $pairSource = Join-Path $fixtureRoot 'pair-source.bin'
+        $pairDistribution = Join-Path $fixtureRoot 'pair-distribution.bin'
+        $pairEvidence = Join-Path $fixtureRoot 'pair-evidence.md'
+        $candidateArtifactText = 'new artifact exact bytes'
+        $candidateEvidenceText = 'new evidence exact bytes'
+        $originalDistributionText = 'old distribution exact bytes'
+        $originalEvidenceText = 'old evidence exact bytes'
+        [System.IO.File]::WriteAllText($pairSource, $candidateArtifactText, [System.Text.UTF8Encoding]::new($false))
+        $sourceHashBefore = Get-FileSha256 $pairSource
+        $resetOriginalPair = {
+            [System.IO.File]::WriteAllText($pairDistribution, $originalDistributionText, [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText($pairEvidence, $originalEvidenceText, [System.Text.UTF8Encoding]::new($false))
         }
-        if ((Get-FileSha256 $copyDestination) -cne $preservedHash -or @(Get-ChildItem -LiteralPath $fixtureRoot -File -Filter '.*.tmp').Count -ne 0) { throw 'Atomic replacement failure did not preserve the old destination or clean exact temp residue.' }
+        $validateSyntheticPair = {
+            param([string] $ArtifactPath, [string] $EvidencePath)
+            if ((Read-SharedTextFile -LiteralPath $ArtifactPath) -cne $candidateArtifactText -or
+                (Read-SharedTextFile -LiteralPath $EvidencePath) -cne $candidateEvidenceText) {
+                throw 'Synthetic publication pair is not internally consistent.'
+            }
+            return $true
+        }
+        $assertNoPublicationResidue = {
+            $residue = @(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -File | Where-Object { $_.Name -match '[.](?:stage|backup)$' })
+            if ($residue.Count -ne 0) { throw 'Publication transaction left stage or backup residue after a complete outcome.' }
+        }
+        $assertOriginalPair = {
+            if ((Read-SharedTextFile -LiteralPath $pairDistribution) -cne $originalDistributionText -or
+                (Read-SharedTextFile -LiteralPath $pairEvidence) -cne $originalEvidenceText) {
+                throw 'Publication rollback did not restore both original files byte-for-byte.'
+            }
+            & $assertNoPublicationResidue
+        }
+
+        & $resetOriginalPair
+        $published = Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair
+        if ((Get-FileSha256 $pairSource) -cne $sourceHashBefore -or
+            (Read-SharedTextFile -LiteralPath $pairDistribution) -cne $candidateArtifactText -or
+            (Read-SharedTextFile -LiteralPath $pairEvidence) -cne $candidateEvidenceText -or
+            [string]$published.DistributionSha256 -cne $sourceHashBefore) {
+            throw 'Successful paired publication did not preserve the source and publish both exact candidates.'
+        }
+        & $assertNoPublicationResidue
+
+        & $resetOriginalPair
+        $cleanupLock = [pscustomobject]@{ Stream=$null; Path=$null }
+        $warningPreferenceBeforeCleanupTest = $WarningPreference
+        $WarningPreference = 'SilentlyContinue'
+        try {
+            $cleanupLockedPublication = Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair -AfterEvidenceReplaceAction {
+                $backups = @(Get-ChildItem -LiteralPath (Split-Path -Parent $pairDistribution) -File | Where-Object { $_.Name -like '.pair-distribution.bin.*.backup' })
+                if ($backups.Count -ne 1) { throw 'Synthetic cleanup-lock hook could not identify the exact distribution backup.' }
+                $cleanupLock.Path = $backups[0].FullName
+                $cleanupLock.Stream = [System.IO.File]::Open($cleanupLock.Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            }
+        } finally {
+            $WarningPreference = $warningPreferenceBeforeCleanupTest
+            if ($null -ne $cleanupLock.Stream) { $cleanupLock.Stream.Dispose() }
+        }
+        if ([string]$cleanupLockedPublication.DistributionSha256 -cne $sourceHashBefore -or
+            (Read-SharedTextFile -LiteralPath $pairDistribution) -cne $candidateArtifactText -or
+            (Read-SharedTextFile -LiteralPath $pairEvidence) -cne $candidateEvidenceText -or
+            [string]::IsNullOrWhiteSpace([string]$cleanupLock.Path) -or
+            -not (Test-Path -LiteralPath $cleanupLock.Path -PathType Leaf)) {
+            throw 'Non-fatal post-commit cleanup failure incorrectly invalidated the published pair or discarded recovery residue.'
+        }
+        [System.IO.File]::Delete($cleanupLock.Path)
+        & $assertNoPublicationResidue
+
+        & $resetOriginalPair
+        Assert-SelfCheckRejects -Label 'recorded previous distribution hash drift' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair -ExpectedOriginalDistributionHash ('0' * 64)
+        }
+        & $assertOriginalPair
+
+        & $resetOriginalPair
+        Assert-SelfCheckRejects -Label 'paired publication stage validation failure' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair { throw 'synthetic stage validation failure' }
+        }
+        & $assertOriginalPair
+
+        & $resetOriginalPair
+        Assert-SelfCheckRejects -Label 'paired publication failure after distribution replace' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair -AfterDistributionReplaceAction { throw 'synthetic first-boundary failure' }
+        }
+        & $assertOriginalPair
+
+        & $resetOriginalPair
+        Assert-SelfCheckRejects -Label 'paired publication failure after evidence replace' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair -AfterEvidenceReplaceAction { throw 'synthetic second-boundary failure' }
+        }
+        & $assertOriginalPair
+
+        & $resetOriginalPair
+        $finalValidationState = [pscustomobject]@{ Calls=0 }
+        $failFinalPairValidation = {
+            param([string] $ArtifactPath, [string] $EvidencePath)
+            $finalValidationState.Calls = [int]$finalValidationState.Calls + 1
+            & $validateSyntheticPair $ArtifactPath $EvidencePath | Out-Null
+            if ($finalValidationState.Calls -eq 2) { throw 'synthetic final pair validation failure' }
+            return $true
+        }
+        Assert-SelfCheckRejects -Label 'paired publication final validation failure' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $failFinalPairValidation
+        }
+        if ($finalValidationState.Calls -ne 2) { throw 'Final pair validation failure injection did not cross both validation boundaries.' }
+        & $assertOriginalPair
+
+        & $resetOriginalPair
+        $lockedEvidence = [System.IO.File]::Open($pairEvidence, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        try {
+            Assert-SelfCheckRejects -Label 'locked evidence destination during paired publication' -Action {
+                Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair
+            }
+        } finally {
+            $lockedEvidence.Dispose()
+        }
+        & $assertOriginalPair
+
+        $absentDistribution = Join-Path $fixtureRoot 'absent-distribution.bin'
+        $absentEvidence = Join-Path $fixtureRoot 'absent-evidence.md'
+        Assert-SelfCheckRejects -Label 'originally absent pair rollback' -Action {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $absentDistribution -EvidenceDestination $absentEvidence -ValidatePair $validateSyntheticPair -AfterEvidenceReplaceAction { throw 'synthetic absent-pair failure' }
+        }
+        if ((Test-Path -LiteralPath $absentDistribution) -or (Test-Path -LiteralPath $absentEvidence)) { throw 'Originally absent publication pair was not restored to absence.' }
+        & $assertNoPublicationResidue
+
+        & $resetOriginalPair
+        $originalDistributionState = Get-OptionalFileState -Path $pairDistribution
+        $lockedBackup = [pscustomobject]@{ Stream=$null; Path=$null }
+        $restoreFailureMessage = $null
+        try {
+            Publish-ArtifactEvidenceTransaction -ArtifactSource $pairSource -EvidenceText $candidateEvidenceText -DistributionDestination $pairDistribution -EvidenceDestination $pairEvidence -ValidatePair $validateSyntheticPair -AfterDistributionReplaceAction {
+                $backups = @(Get-ChildItem -LiteralPath (Split-Path -Parent $pairDistribution) -File | Where-Object { $_.Name -like '.pair-distribution.bin.*.backup' })
+                if ($backups.Count -ne 1) { throw 'Synthetic restore-failure hook could not identify the exact distribution backup.' }
+                $lockedBackup.Path = $backups[0].FullName
+                $lockedBackup.Stream = [System.IO.File]::Open($lockedBackup.Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+                throw 'synthetic rollback trigger with locked backup'
+            }
+            throw 'Restore-failure self-check unexpectedly accepted a failed rollback.'
+        } catch {
+            $restoreFailureMessage = $_.Exception.Message
+        } finally {
+            if ($null -ne $lockedBackup.Stream) { $lockedBackup.Stream.Dispose() }
+        }
+        if ($restoreFailureMessage -notmatch 'Publication rollback was incomplete' -or
+            [string]::IsNullOrWhiteSpace([string]$lockedBackup.Path) -or
+            -not (Test-Path -LiteralPath $lockedBackup.Path -PathType Leaf) -or
+            (Get-FileSha256 -LiteralPath $lockedBackup.Path) -cne [string]$originalDistributionState.Sha256) {
+            throw 'Incomplete publication rollback was not reported with its exact retained recovery backup.'
+        }
+        Restore-PublishedFile -Destination $pairDistribution -Backup $lockedBackup.Path -Original $originalDistributionState
+        & $assertOriginalPair
 
         $source = [System.IO.File]::ReadAllText($script:VerifierScriptPath)
         foreach ($requiredToken in @('Get-LectureArchiveContract','Assert-EvidenceContract','Invoke-BoundedProductionServer','finally','DEVELOPERS_HELL_SERVER_STOPPING_CLEANUP_COMPLETE')) {
@@ -1641,23 +1793,177 @@ function Assert-FoundationAuditGreen {
     return $true
 }
 
-function Copy-ArtifactAtomically {
-    param([Parameter(Mandatory)][string] $Source, [Parameter(Mandatory)][string] $Destination, [scriptblock] $BeforeReplaceAction)
-    $parent = Split-Path -Parent $Destination
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item -ItemType Directory -Path $parent) }
-    $temporary = Join-Path $parent ('.' + (Split-Path -Leaf $Destination) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        [System.IO.File]::Copy($Source, $temporary, $false)
-        if ((Get-FileSha256 $temporary) -cne (Get-FileSha256 $Source)) { throw 'Atomic distribution staging hash mismatch.' }
-        if ($BeforeReplaceAction) { & $BeforeReplaceAction }
-        if (Test-Path -LiteralPath $Destination -PathType Leaf) {
-            [System.IO.File]::Replace($temporary, $Destination, [System.Management.Automation.Language.NullString]::Value, $true)
-        } else {
-            [System.IO.File]::Move($temporary, $Destination)
-        }
-    } finally {
-        if (Test-Path -LiteralPath $temporary -PathType Leaf) { [System.IO.File]::Delete($temporary) }
+function Get-OptionalFileState {
+    param([Parameter(Mandatory)][string] $Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{ Exists=$false; Length=0L; Sha256=$null } }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Publication destination must be absent or an ordinary file.' }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Publication destination must not be a reparse point.' }
+    return [pscustomobject]@{ Exists=$true; Length=[long]$item.Length; Sha256=Get-FileSha256 -LiteralPath $item.FullName }
+}
+
+function Assert-OptionalFileState {
+    param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)] $Expected)
+    $actual = Get-OptionalFileState -Path $Path
+    if ([bool]$actual.Exists -ne [bool]$Expected.Exists -or
+        ($actual.Exists -and ([long]$actual.Length -ne [long]$Expected.Length -or [string]$actual.Sha256 -cne [string]$Expected.Sha256))) {
+        throw 'Publication rollback did not restore the exact original file state.'
     }
+    return $true
+}
+
+function Publish-StagedFile {
+    param(
+        [Parameter(Mandatory)][string] $Stage,
+        [Parameter(Mandatory)][string] $Destination,
+        [Parameter(Mandatory)][string] $Backup,
+        [Parameter(Mandatory)] $Original
+    )
+    if ($Original.Exists) {
+        [System.IO.File]::Replace($Stage, $Destination, $Backup, $true)
+    } else {
+        if (Test-Path -LiteralPath $Destination) { throw 'Absent publication destination appeared during staging.' }
+        [System.IO.File]::Move($Stage, $Destination)
+    }
+}
+
+function Restore-PublishedFile {
+    param(
+        [Parameter(Mandatory)][string] $Destination,
+        [Parameter(Mandatory)][string] $Backup,
+        [Parameter(Mandatory)] $Original
+    )
+    if ($Original.Exists) {
+        if (-not (Test-Path -LiteralPath $Backup -PathType Leaf)) { throw 'Publication recovery backup is missing.' }
+        if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+            [System.IO.File]::Replace($Backup, $Destination, [System.Management.Automation.Language.NullString]::Value, $true)
+        } elseif (-not (Test-Path -LiteralPath $Destination)) {
+            [System.IO.File]::Move($Backup, $Destination)
+        } else {
+            throw 'Publication destination changed type before rollback.'
+        }
+    } elseif (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        [System.IO.File]::Delete($Destination)
+    } elseif (Test-Path -LiteralPath $Destination) {
+        throw 'Originally absent publication destination changed type before rollback.'
+    }
+}
+
+function Publish-ArtifactEvidenceTransaction {
+    param(
+        [Parameter(Mandatory)][string] $ArtifactSource,
+        [Parameter(Mandatory)][string] $EvidenceText,
+        [Parameter(Mandatory)][string] $DistributionDestination,
+        [Parameter(Mandatory)][string] $EvidenceDestination,
+        [Parameter(Mandatory)][scriptblock] $ValidatePair,
+        [string] $ExpectedOriginalDistributionHash,
+        [scriptblock] $AfterDistributionReplaceAction,
+        [scriptblock] $AfterEvidenceReplaceAction
+    )
+    if ([string]::IsNullOrWhiteSpace($EvidenceText)) { throw 'Candidate evidence text must not be empty.' }
+    if ([System.IO.Path]::GetFullPath($DistributionDestination).Equals([System.IO.Path]::GetFullPath($EvidenceDestination), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Distribution and evidence destinations must be distinct.'
+    }
+    foreach ($parent in @((Split-Path -Parent $DistributionDestination),(Split-Path -Parent $EvidenceDestination))) {
+        if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item -ItemType Directory -Path $parent) }
+        $item = Get-Item -LiteralPath $parent -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Publication parent must not be a reparse point.' }
+    }
+
+    $token = [guid]::NewGuid().ToString('N')
+    $distributionParent = Split-Path -Parent $DistributionDestination
+    $evidenceParent = Split-Path -Parent $EvidenceDestination
+    $distributionStage = Join-Path $distributionParent ('.' + (Split-Path -Leaf $DistributionDestination) + '.' + $token + '.stage')
+    $evidenceStage = Join-Path $evidenceParent ('.' + (Split-Path -Leaf $EvidenceDestination) + '.' + $token + '.stage')
+    $distributionBackup = Join-Path $distributionParent ('.' + (Split-Path -Leaf $DistributionDestination) + '.' + $token + '.backup')
+    $evidenceBackup = Join-Path $evidenceParent ('.' + (Split-Path -Leaf $EvidenceDestination) + '.' + $token + '.backup')
+    $originalDistribution = Get-OptionalFileState -Path $DistributionDestination
+    $originalEvidence = Get-OptionalFileState -Path $EvidenceDestination
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedOriginalDistributionHash)) {
+        $actualOriginalHash = if ($originalDistribution.Exists) { [string]$originalDistribution.Sha256 } else { 'absent' }
+        if ($actualOriginalHash -cne $ExpectedOriginalDistributionHash) {
+            throw 'Recorded previous distribution hash no longer matches the transaction input pair.'
+        }
+    }
+    $distributionReplaced = $false
+    $evidenceReplaced = $false
+    $committed = $false
+    $rollbackComplete = $false
+    $publicationResult = $null
+    try {
+        [System.IO.File]::Copy($ArtifactSource, $distributionStage, $false)
+        [System.IO.File]::WriteAllText($evidenceStage, $EvidenceText, [System.Text.UTF8Encoding]::new($false))
+        if ((Get-FileSha256 -LiteralPath $distributionStage) -cne (Get-FileSha256 -LiteralPath $ArtifactSource) -or
+            (Read-SharedTextFile -LiteralPath $evidenceStage) -cne $EvidenceText) {
+            throw 'Publication staging did not preserve exact candidate bytes.'
+        }
+        & $ValidatePair $distributionStage $evidenceStage | Out-Null
+        [void](Assert-OptionalFileState -Path $DistributionDestination -Expected $originalDistribution)
+        [void](Assert-OptionalFileState -Path $EvidenceDestination -Expected $originalEvidence)
+
+        Publish-StagedFile -Stage $distributionStage -Destination $DistributionDestination -Backup $distributionBackup -Original $originalDistribution
+        $distributionReplaced = $true
+        if ($AfterDistributionReplaceAction) { & $AfterDistributionReplaceAction }
+
+        Publish-StagedFile -Stage $evidenceStage -Destination $EvidenceDestination -Backup $evidenceBackup -Original $originalEvidence
+        $evidenceReplaced = $true
+        if ($AfterEvidenceReplaceAction) { & $AfterEvidenceReplaceAction }
+
+        & $ValidatePair $DistributionDestination $EvidenceDestination | Out-Null
+        $finalDistributionHash = Get-FileSha256 -LiteralPath $DistributionDestination
+        $finalEvidenceHash = Get-FileSha256 -LiteralPath $EvidenceDestination
+        if ($finalDistributionHash -cne (Get-FileSha256 -LiteralPath $ArtifactSource) -or
+            (Read-SharedTextFile -LiteralPath $EvidenceDestination) -cne $EvidenceText) {
+            throw 'Final publication pair is not byte-identical to both staged candidates.'
+        }
+        $publicationResult = [pscustomobject]@{
+            DistributionSha256 = $finalDistributionHash
+            EvidenceSha256 = $finalEvidenceHash
+        }
+        $committed = $true
+        $rollbackComplete = $true
+    } catch {
+        $primary = $_
+        $rollbackErrors = [System.Collections.Generic.List[string]]::new()
+        if ($evidenceReplaced) {
+            try { Restore-PublishedFile -Destination $EvidenceDestination -Backup $evidenceBackup -Original $originalEvidence }
+            catch { $rollbackErrors.Add('evidence restore failed') }
+        }
+        if ($distributionReplaced) {
+            try { Restore-PublishedFile -Destination $DistributionDestination -Backup $distributionBackup -Original $originalDistribution }
+            catch { $rollbackErrors.Add('distribution restore failed') }
+        }
+        try { [void](Assert-OptionalFileState -Path $EvidenceDestination -Expected $originalEvidence) }
+        catch { $rollbackErrors.Add('evidence state verification failed') }
+        try { [void](Assert-OptionalFileState -Path $DistributionDestination -Expected $originalDistribution) }
+        catch { $rollbackErrors.Add('distribution state verification failed') }
+        if ($rollbackErrors.Count -ne 0) {
+            throw "$($primary.Exception.Message) Publication rollback was incomplete; recovery backups were retained: $($rollbackErrors -join ', ')."
+        }
+        $rollbackComplete = $true
+        throw $primary
+    } finally {
+        $cleanupErrors = [System.Collections.Generic.List[string]]::new()
+        foreach ($stage in @($distributionStage,$evidenceStage)) {
+            if (Test-Path -LiteralPath $stage -PathType Leaf) {
+                try { [System.IO.File]::Delete($stage) }
+                catch { $cleanupErrors.Add('stage cleanup failed') }
+            }
+        }
+        if ($committed -or $rollbackComplete) {
+            foreach ($backup in @($distributionBackup,$evidenceBackup)) {
+                if (Test-Path -LiteralPath $backup -PathType Leaf) {
+                    try { [System.IO.File]::Delete($backup) }
+                    catch { $cleanupErrors.Add('backup cleanup failed') }
+                }
+            }
+        }
+        if ($cleanupErrors.Count -ne 0) {
+            try { Write-Warning 'Publication pair outcome is final, but temporary recovery-file cleanup was incomplete.' }
+            catch { <# A post-commit diagnostic must never invalidate an already-validated pair. #> }
+        }
+    }
+    return $publicationResult
 }
 
 function New-LectureEvidenceText {
@@ -1771,7 +2077,6 @@ function Invoke-VerifyMode {
     $sourceSnapshot = Get-CleanSourceSnapshot
     $jdk = Get-VerifiedJdk
     $manifest = Get-LectureTestManifest
-    $previousHash = if (Test-Path -LiteralPath $DistributionFile -PathType Leaf) { Get-FileSha256 $DistributionFile } else { 'absent' }
     $buildStartedUtc = [DateTime]::UtcNow
     $gradleArgs = Get-GradleArguments -Jdk $jdk -Tasks @('clean','test','runGameTest','auditDirectDependencies','build')
     $build = Invoke-BoundedBatch -Arguments $gradleArgs -Jdk $jdk -TimeoutSeconds 1200
@@ -1789,12 +2094,27 @@ function Invoke-VerifyMode {
     $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
     $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
 
-    Copy-ArtifactAtomically -Source $jar -Destination $DistributionFile
-    $distributionHash = Get-FileSha256 $DistributionFile
-    if ($distributionHash -cne $artifact.Sha256) { throw 'Promoted distribution does not equal the inspected source/build JAR.' }
+    $distributionHash = $artifact.Sha256
+    $previousHash = if (Test-Path -LiteralPath $DistributionFile -PathType Leaf) { Get-FileSha256 $DistributionFile } else { 'absent' }
     $evidenceText = New-LectureEvidenceText -Hash $distributionHash -PreviousHash $previousHash -Artifact $artifact -Archive $archive -BuildResult $build -AuditResult $audit -ServerResult $server -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -SourceSnapshot $sourceSnapshot
     [void](Assert-EvidenceContract -EvidenceText $evidenceText -DistributionHash $distributionHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
-    [System.IO.File]::WriteAllText($EvidenceFile, $evidenceText, [System.Text.UTF8Encoding]::new($false))
+    $validatePublicationPair = {
+        param([string] $CandidateDistribution, [string] $CandidateEvidence)
+        $candidateHash = Get-FileSha256 -LiteralPath $CandidateDistribution
+        if ($candidateHash -cne $artifact.Sha256) { throw 'Candidate publication JAR does not equal the inspected build artifact.' }
+        $candidateArchive = Get-LectureArchiveContract -JarPath $CandidateDistribution -AllowTransactionStageName
+        if ($candidateArchive.Sha256 -cne $archive.Sha256 -or
+            $candidateArchive.EntryCount -ne $archive.EntryCount -or
+            $candidateArchive.EntriesSha256 -cne $archive.EntriesSha256) {
+            throw 'Candidate publication archive contract changed during staging.'
+        }
+        $candidateEvidenceText = Read-SharedTextFile -LiteralPath $CandidateEvidence
+        [void](Assert-EvidenceContract -EvidenceText $candidateEvidenceText -DistributionHash $candidateHash -Manifest $manifest -TestReceipts $testReceipts -ValidationRows $validationRows -ExpectedSourceSnapshot $sourceSnapshot)
+        return $true
+    }
+    [void](Assert-SourceSnapshotStillClean -Expected $sourceSnapshot)
+    $publication = Publish-ArtifactEvidenceTransaction -ArtifactSource $jar -EvidenceText $evidenceText -DistributionDestination $DistributionFile -EvidenceDestination $EvidenceFile -ValidatePair $validatePublicationPair -ExpectedOriginalDistributionHash $previousHash
+    $distributionHash = [string]$publication.DistributionSha256
     Write-Host "PASS: fresh Phase 2 artifact promoted after all gates; server root PID $($server.RootPid), captured owned children $($server.CapturedCount), SHA-256 $distributionHash"
 }
 
