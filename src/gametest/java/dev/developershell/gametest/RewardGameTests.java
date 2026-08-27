@@ -354,6 +354,16 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest(maxTicks = 100, padding = 24)
+	public void sheetPickupClearsFallbackBeforeStaleDiskCopyCanReload(GameTestHelper context) {
+		assertPickupClearsUuidAuthority(context, owner(1720), "reward-pickup-sheet", false);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void remotePickupClearsFallbackBeforeStaleDiskCopyCanReload(GameTestHelper context) {
+		assertPickupClearsUuidAuthority(context, owner(1721), "reward-pickup-remote", true);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
 	public void rewardFallbackReservationsSurviveTornWriteAndUnloadedChunksWithoutReissue(
 			GameTestHelper context
 	) {
@@ -1151,6 +1161,62 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		ItemStack restored = findBoundSheet(owner, owner.getUUID(), confirmed.sheetRecoverySequence());
 		retainOnlySelected(owner, restored);
 		return restored;
+	}
+
+	private static void assertPickupClearsUuidAuthority(
+			GameTestHelper context,
+			UUID seed,
+			String playerName,
+			boolean remote
+	) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(seed, desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, playerName);
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+			context.assertValueEqual(RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"pickup fixture confirms both durable reward projections");
+			PlayerCampaignState confirmed = state(level, ownerUuid);
+			ItemStack stack = remote
+					? findBoundRemote(owner, ownerUuid, confirmed.remoteProjectionUuid())
+					: findBoundSheet(owner, ownerUuid, confirmed.sheetRecoverySequence());
+			retainOnlySelected(owner, stack);
+			owner.drop(false);
+			List<ItemEntity> dropped = remote
+					? boundRemoteEntities(level.getServer(), ownerUuid, confirmed.remoteProjectionUuid())
+					: boundSheetEntities(level.getServer(), ownerUuid, confirmed.sheetRecoverySequence());
+			context.assertValueEqual(dropped.size(), 1,
+					"the pre-pickup fixture has one exact live fallback");
+			ItemEntity live = dropped.getFirst();
+			ItemEntity staleDisk = diskRoundTripItem(level, live);
+			context.assertValueEqual(staleDisk.getUUID(), live.getUUID(),
+					"the simulated stale disk copy retains the pre-pickup UUID");
+
+			live.setNoPickUpDelay();
+			live.playerTouch(owner);
+			context.assertTrue(live.isRemoved(),
+					"vanilla pickup discards the entity after emptying its ItemStack");
+			PlayerCampaignState pickedUp = state(level, ownerUuid);
+			context.assertTrue((remote ? pickedUp.remoteFallback() : pickedUp.sheetFallback()) == null,
+					"exact UUID lookup clears durable fallback authority despite the empty stack");
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleDisk, level, EntitySpawnReason.LOAD, true),
+					"the stale pre-pickup disk entity cannot reclaim inventory authority");
+			context.assertValueEqual(countLiveRewardRepresentations(
+					level.getServer(), owner, pickedUp, remote), 1,
+					"only the owner's inventory remains authoritative after pickup");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
 	}
 
 	private static ItemStack findBoundSheet(ServerPlayer owner, UUID ownerUuid, long sequence) {

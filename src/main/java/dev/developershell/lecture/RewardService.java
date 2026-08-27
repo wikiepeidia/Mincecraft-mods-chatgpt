@@ -1,6 +1,7 @@
 package dev.developershell.lecture;
 
 import dev.developershell.campaign.CampaignEvent;
+import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
@@ -1010,22 +1011,9 @@ public final class RewardService {
 		if (!(entity instanceof ItemEntity item)) {
 			return;
 		}
-		AttendanceSheetItem.binding(item.getItem()).ifPresent(binding ->
-				trackedSheetFallback(level, binding, item).ifPresent(ref ->
-						recordFallbackUnload(
-								level,
-								new CampaignEvent.SheetProjectionKey(
-										binding.ownerUuid(), binding.recoverySequence()),
-								item
-						)));
-		InfiniteSlidesRemoteItem.binding(item.getItem()).ifPresent(binding ->
-				trackedRemoteFallback(level, binding, item).ifPresent(ref ->
-						recordFallbackUnload(
-								level,
-								new CampaignEvent.RemoteProjectionKey(
-										binding.ownerUuid(), binding.projectionUuid()),
-								item
-						)));
+		CampaignSavedData.get(level).rewardFallbackByEntityUuid(item.getUUID())
+				.filter(authority -> authority.ref().dimension().equals(dimensionId(level)))
+				.ifPresent(authority -> recordFallbackUnload(level, authority.key(), item));
 	}
 
 	private static void recordFallbackUnload(

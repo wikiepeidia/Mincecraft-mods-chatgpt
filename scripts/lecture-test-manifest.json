@@ -165,9 +165,11 @@
       "developers_hell_test:reward_game_tests_owner_q_drop_preserves_confirmed_remote_and_remote_remains_usable",
       "developers_hell_test:reward_game_tests_owner_q_drop_preserves_confirmed_sheet",
       "developers_hell_test:reward_game_tests_real_encounter_victory_reconciles_first_reward",
+      "developers_hell_test:reward_game_tests_remote_pickup_clears_fallback_before_stale_disk_copy_can_reload",
       "developers_hell_test:reward_game_tests_reward_fallback_disk_load_requires_exact_tracked_uuid_and_converges_synchronously",
       "developers_hell_test:reward_game_tests_reward_fallback_reservations_survive_torn_write_and_unloaded_chunks_without_reissue",
       "developers_hell_test:reward_game_tests_remote_only_representation_reconciles_sheet_independently",
+      "developers_hell_test:reward_game_tests_sheet_pickup_clears_fallback_before_stale_disk_copy_can_reload",
       "developers_hell_test:reward_game_tests_sheet_only_representation_reconciles_remote_independently",
       "developers_hell_test:reward_game_tests_sheet_success_remote_failure_retries_only_remote_on_join"
     ],

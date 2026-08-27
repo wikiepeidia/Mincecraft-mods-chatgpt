@@ -398,6 +398,38 @@ public final class CampaignSavedData extends SavedData {
 		return Optional.ofNullable(players.get(mapKeyUuid));
 	}
 
+	/**
+	 * Resolves one exact durable reward-entity identity without consulting its mutable ItemStack.
+	 * Duplicate UUID claims fail closed instead of selecting an arbitrary owner or reward kind.
+	 */
+	public synchronized Optional<RewardFallbackAuthority> rewardFallbackByEntityUuid(UUID entityUuid) {
+		Objects.requireNonNull(entityUuid, "entityUuid");
+		RewardFallbackAuthority match = null;
+		for (PlayerCampaignState state : players.values()) {
+			if (state.sheetFallback() != null && state.sheetFallback().entityUuid().equals(entityUuid)) {
+				if (match != null) {
+					return Optional.empty();
+				}
+				match = new RewardFallbackAuthority(
+						new CampaignEvent.SheetProjectionKey(
+								state.ownerUuid(), state.sheetRecoverySequence()),
+						state.sheetFallback()
+				);
+			}
+			if (state.remoteFallback() != null && state.remoteFallback().entityUuid().equals(entityUuid)) {
+				if (match != null) {
+					return Optional.empty();
+				}
+				match = new RewardFallbackAuthority(
+						new CampaignEvent.RemoteProjectionKey(
+								state.ownerUuid(), state.remoteProjectionUuid()),
+						state.remoteFallback()
+				);
+			}
+		}
+		return Optional.ofNullable(match);
+	}
+
 	public int schemaVersion() {
 		return schemaVersion;
 	}
@@ -528,6 +560,16 @@ public final class CampaignSavedData extends SavedData {
 		private EncodedPlayer {
 			Objects.requireNonNull(mapKeyUuid, "mapKeyUuid");
 			Objects.requireNonNull(state, "state");
+		}
+	}
+
+	public record RewardFallbackAuthority(
+			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef ref
+	) {
+		public RewardFallbackAuthority {
+			Objects.requireNonNull(key, "key");
+			Objects.requireNonNull(ref, "ref");
 		}
 	}
 
