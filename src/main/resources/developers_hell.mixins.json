@@ -3,8 +3,13 @@
   "package": "dev.developershell.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
+    "AbstractContainerMenuRewardDropMixin",
+    "ContainersRewardDropMixin",
     "InventoryRewardDropMixin",
-    "ServerLevelRewardAdmissionMixin"
+    "ItemStackRewardSplitMixin",
+    "ServerLevelRewardAdmissionMixin",
+    "ServerLevelRewardSectionMixin",
+    "ServerPlayerRewardDropMixin"
   ],
   "injectors": {
     "defaultRequire": 1

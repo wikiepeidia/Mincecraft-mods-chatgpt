@@ -34,6 +34,10 @@ public final class RewardServiceGameTestAccess {
 				Objects.requireNonNull(entityUuid, "entityUuid"));
 	}
 
+	public static int pendingLiveTransferCount() {
+		return RewardService.pendingLiveTransferCountForGameTest();
+	}
+
 	private RewardServiceGameTestAccess() {
 	}
 }

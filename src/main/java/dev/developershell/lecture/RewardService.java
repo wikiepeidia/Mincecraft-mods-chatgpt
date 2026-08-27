@@ -8,9 +8,7 @@ import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.AttendanceSheetItem;
 import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.registry.ModItems;
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -29,7 +27,11 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.Container;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -41,14 +43,11 @@ import net.minecraft.world.level.Level;
 public final class RewardService {
 	private static final String VICTORY_KEY = "message.developers_hell.reward.victory";
 	private static final String REMOTE_READY_KEY = "message.developers_hell.remote.ready";
-	private static final Map<ItemEntity, LiveTransfer> LIVE_TRANSFERS = new IdentityHashMap<>();
 	private static final Map<UUID, PendingDimensionTransfer> PENDING_DIMENSION_TRANSFERS =
 			new java.util.HashMap<>();
 	private static final Map<ItemEntity, AdmittedDimensionTransfer> ADMITTED_DIMENSION_TRANSFERS =
 			new IdentityHashMap<>();
 	private static final Map<ItemEntity, Boolean> SUPPRESSED_DIMENSION_UNLOADS =
-			new IdentityHashMap<>();
-	private static final Map<Inventory, List<RejectedDeathDrop>> REJECTED_DEATH_DROPS =
 			new IdentityHashMap<>();
 	private static boolean sheetLifecycleRegistered;
 
@@ -668,7 +667,7 @@ public final class RewardService {
 		return currentFallback(level, key).filter(observed::equals).isPresent();
 	}
 
-	private static boolean ensureProjectionConfirmed(
+	static boolean ensureProjectionConfirmed(
 			ServerLevel level,
 			CampaignEvent.RewardProjectionKey key
 	) {
@@ -685,7 +684,7 @@ public final class RewardService {
 		);
 	}
 
-	private static Optional<PlayerCampaignState.RewardFallbackRef> currentFallback(
+	static Optional<PlayerCampaignState.RewardFallbackRef> currentFallback(
 			ServerLevel level,
 			CampaignEvent.RewardProjectionKey key
 	) {
@@ -777,7 +776,7 @@ public final class RewardService {
 		return server.getLevel(key);
 	}
 
-	private static String dimensionId(ServerLevel level) {
+	static String dimensionId(ServerLevel level) {
 		return level.dimension().identifier().toString();
 	}
 
@@ -831,7 +830,7 @@ public final class RewardService {
 						.equals(ChunkPos.containing(fallbackRef.position()));
 	}
 
-	private static boolean matchesProjection(
+	static boolean matchesProjection(
 			ItemStack stack,
 			CampaignEvent.RewardProjectionKey key
 	) {
@@ -844,6 +843,40 @@ public final class RewardService {
 		return InfiniteSlidesRemoteItem.binding(stack).filter(binding ->
 				binding.ownerUuid().equals(remote.ownerUuid())
 						&& binding.projectionUuid().equals(remote.projectionUuid())).isPresent();
+	}
+
+	/** Ledger validation for an exact vanilla source object; binding data alone is never authority. */
+	static Optional<CampaignEvent.RewardProjectionKey> authoritativeProjectionKey(
+			ServerLevel level,
+			ItemStack stack
+	) {
+		Optional<AttendanceSheetItem.Binding> sheetBinding = AttendanceSheetItem.binding(stack);
+		if (sheetBinding.isPresent()) {
+			AttendanceSheetItem.Binding binding = sheetBinding.get();
+			return CampaignService.snapshot(level, binding.ownerUuid()).filter(state ->
+					state.status() == PlayerCampaignState.LectureStatus.PASSED
+							&& state.sheetEntitled()
+							&& !state.sheetProjectionPending()
+							&& state.sheetFallback() == null
+							&& state.sheetRecoverySequence() == binding.recoverySequence()
+			).map(state -> new CampaignEvent.SheetProjectionKey(
+					binding.ownerUuid(), binding.recoverySequence()));
+		}
+		Optional<InfiniteSlidesRemoteItem.Binding> remoteBinding =
+				InfiniteSlidesRemoteItem.binding(stack);
+		if (remoteBinding.isEmpty()) {
+			return Optional.empty();
+		}
+		InfiniteSlidesRemoteItem.Binding binding = remoteBinding.get();
+		return CampaignService.snapshot(level, binding.ownerUuid()).filter(state ->
+				state.status() == PlayerCampaignState.LectureStatus.PASSED
+						&& state.remoteIssued()
+						&& !state.remoteProjectionPending()
+						&& !state.legacyRemoteAdoptionPending()
+						&& state.remoteFallback() == null
+						&& binding.projectionUuid().equals(state.remoteProjectionUuid())
+		).map(state -> new CampaignEvent.RemoteProjectionKey(
+				binding.ownerUuid(), binding.projectionUuid()));
 	}
 
 	private static Optional<ItemStack> firstRemoteStack(
@@ -882,8 +915,7 @@ public final class RewardService {
 				return allowTrackedRewardLoad(
 						level, key, tracked.get(), item, spawnReason, loadedFromDisk);
 			}
-			return !loadedFromDisk && spawnReason == null
-					&& transferAuthoritativeLiveDrop(level, key, item);
+			return false;
 		}
 		Optional<InfiniteSlidesRemoteItem.Binding> remoteBinding =
 				InfiniteSlidesRemoteItem.binding(item.getItem());
@@ -899,8 +931,7 @@ public final class RewardService {
 			return allowTrackedRewardLoad(
 					level, key, tracked.get(), item, spawnReason, loadedFromDisk);
 		}
-		return !loadedFromDisk && spawnReason == null
-				&& transferAuthoritativeLiveDrop(level, key, item);
+		return false;
 	}
 
 	private static boolean allowTrackedRewardLoad(
@@ -913,7 +944,8 @@ public final class RewardService {
 	) {
 		if (loadedFromDisk) {
 			Entity liveWithDurableUuid = findEntity(level.getServer(), current.entityUuid());
-			return spawnReason == net.minecraft.world.entity.EntitySpawnReason.LOAD
+			return (spawnReason == null
+						|| spawnReason == net.minecraft.world.entity.EntitySpawnReason.LOAD)
 					&& durableChunkContextAllowed(current, item)
 					&& (liveWithDurableUuid == null || liveWithDurableUuid == item);
 		}
@@ -967,82 +999,6 @@ public final class RewardService {
 		return true;
 	}
 
-	private static boolean transferAuthoritativeLiveDrop(
-			ServerLevel level,
-			CampaignEvent.RewardProjectionKey key,
-			ItemEntity item
-	) {
-		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, key.ownerUuid());
-		if (stateView.isEmpty()) {
-			return false;
-		}
-		PlayerCampaignState state = stateView.get();
-		boolean currentProjection = key instanceof CampaignEvent.SheetProjectionKey sheet
-				? state.status() == PlayerCampaignState.LectureStatus.PASSED
-						&& state.sheetEntitled()
-						&& !state.sheetProjectionPending()
-						&& state.sheetFallback() == null
-						&& sheet.recoverySequence() == state.sheetRecoverySequence()
-				: state.status() == PlayerCampaignState.LectureStatus.PASSED
-						&& state.remoteIssued()
-						&& !state.remoteProjectionPending()
-						&& !state.legacyRemoteAdoptionPending()
-						&& state.remoteFallback() == null
-						&& ((CampaignEvent.RemoteProjectionKey) key).projectionUuid()
-								.equals(state.remoteProjectionUuid());
-		if (!currentProjection) {
-			return false;
-		}
-		ServerPlayer owner = level.getServer().getPlayerList().getPlayer(key.ownerUuid());
-		if (owner == null || owner.level() != level) {
-			return false;
-		}
-		Inventory inventory = owner.getInventory();
-		int identitySlot = inventoryIdentitySlot(owner, item.getItem());
-		int selectedSlot = inventory.getSelectedSlot();
-		boolean ownerQDrop = item.getOwner() == owner && inventory.getItem(selectedSlot).isEmpty();
-		boolean ownerDeathDrop = item.getOwner() == null && owner.isDeadOrDying() && identitySlot >= 0;
-		if (!ownerQDrop && !ownerDeathDrop) {
-			return false;
-		}
-
-		PlayerCampaignState.RewardFallbackRef transferred = new PlayerCampaignState.RewardFallbackRef(
-				item.getUUID(), dimensionId(level), item.blockPosition(), true);
-		CampaignTransition transition = CampaignService.apply(
-				level,
-				new CampaignEvent.RewardFallback(
-						key,
-						transferred.entityUuid(),
-						transferred.dimension(),
-						transferred.position(),
-						CampaignEvent.RewardFallbackOperation.TRANSFERRED
-				),
-				ignored -> {
-				}
-		);
-		if (!transition.accepted()
-				|| currentFallback(level, key).filter(transferred::equals).isEmpty()) {
-			return false;
-		}
-		LIVE_TRANSFERS.put(item, new LiveTransfer(
-				key,
-				transferred,
-				inventory,
-				ownerDeathDrop ? identitySlot : selectedSlot,
-				ownerDeathDrop
-		));
-		return true;
-	}
-
-	private static int inventoryIdentitySlot(ServerPlayer owner, ItemStack expected) {
-		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
-			if (owner.getInventory().getItem(slot) == expected) {
-				return slot;
-			}
-		}
-		return -1;
-	}
-
 	/** Synchronous compensation invoked after Minecraft finishes its private entity-add transaction. */
 	public static synchronized void onEntityAddResult(Entity entity, boolean added) {
 		if (!(entity instanceof ItemEntity item)) {
@@ -1061,34 +1017,7 @@ public final class RewardService {
 			PENDING_DIMENSION_TRANSFERS.remove(
 					item.getUUID(), dimensionTransfer.pending());
 		}
-		LiveTransfer transfer = LIVE_TRANSFERS.remove(item);
-		if (added || transfer == null || !(item.level() instanceof ServerLevel level)) {
-			return;
-		}
-		CampaignTransition rollback = CampaignService.apply(
-				level,
-				new CampaignEvent.RewardFallback(
-						transfer.key(),
-						transfer.ref().entityUuid(),
-						transfer.ref().dimension(),
-						transfer.ref().position(),
-						CampaignEvent.RewardFallbackOperation.CLEARED,
-						transfer.ref()
-				),
-				ignored -> {
-				}
-		);
-		if (!rollback.accepted() || currentFallback(level, transfer.key()).isPresent()) {
-			return;
-		}
-		if (transfer.deathDrop()) {
-			REJECTED_DEATH_DROPS.computeIfAbsent(
-					transfer.inventory(), ignored -> new ArrayList<>())
-					.add(new RejectedDeathDrop(transfer.restoreSlot(), item.getItem()));
-		}
-		else {
-			restoreRejectedReward(transfer.inventory(), transfer.restoreSlot(), item.getItem());
-		}
+		RewardDropGuard.onEntityAddResult(item, added);
 	}
 
 	private static boolean compensateRejectedPendingDimensionTransfer(ItemEntity candidate) {
@@ -1162,38 +1091,64 @@ public final class RewardService {
 		return pending.sourceLevel().addFreshEntity(restored);
 	}
 
-	/** Restores exact death-drop stacks after vanilla has finished clearing every source slot. */
-	public static synchronized void onDeathInventoryDropComplete(Inventory inventory) {
-		Objects.requireNonNull(inventory, "inventory");
-		List<RejectedDeathDrop> rejected = REJECTED_DEATH_DROPS.remove(inventory);
-		if (rejected == null) {
-			return;
-		}
-		for (RejectedDeathDrop drop : rejected) {
-			restoreRejectedReward(inventory, drop.restoreSlot(), drop.stack());
-		}
+	public static void onQDropStart(ServerPlayer player) {
+		RewardDropGuard.beginQDrop(player);
 	}
 
-	private static void restoreRejectedReward(Inventory inventory, int preferredSlot, ItemStack stack) {
-		if (stack.isEmpty()) {
-			return;
-		}
-		int target = preferredSlot >= 0
-				&& preferredSlot < inventory.getContainerSize()
-				&& inventory.getItem(preferredSlot).isEmpty()
-				? preferredSlot
-				: inventory.getFreeSlot();
-		if (target < 0) {
-			throw new IllegalStateException("Rejected reward add lost its reserved inventory slot");
-		}
-		inventory.setItem(target, stack);
+	public static void onQDropComplete(ServerPlayer player) {
+		RewardDropGuard.endQDrop(player);
+	}
+
+	public static void onDeathInventoryDropStart(Inventory inventory) {
+		RewardDropGuard.beginDeathDrop(inventory);
+	}
+
+	public static void onDeathInventoryDropComplete(Inventory inventory) {
+		RewardDropGuard.endDeathDrop(inventory);
+	}
+
+	public static void onMenuClickStart(
+			AbstractContainerMenu menu,
+			int slotIndex,
+			ContainerInput input,
+			Player player
+	) {
+		RewardDropGuard.beginMenuClick(menu, slotIndex, input, player);
+	}
+
+	public static void onMenuClickComplete(AbstractContainerMenu menu) {
+		RewardDropGuard.endMenuClick(menu);
+	}
+
+	public static void onMenuCloseStart(ServerPlayer player) {
+		RewardDropGuard.beginMenuClose(player);
+	}
+
+	public static void onMenuCloseComplete(ServerPlayer player) {
+		RewardDropGuard.endMenuClose(player);
+	}
+
+	public static void onContainerDropStart(Level level, Container container) {
+		RewardDropGuard.beginContainerDrop(level, container);
+	}
+
+	public static void onContainerDropComplete(Container container) {
+		RewardDropGuard.endContainerDrop(container);
+	}
+
+	public static void onRewardSourceSplit(ItemStack source, ItemStack result) {
+		RewardDropGuard.onStackSplit(source, result);
+	}
+
+	public static void onEntityAddStart(Entity entity) {
+		RewardDropGuard.onEntityAddStart(entity);
 	}
 
 	private static synchronized void onEntityLoad(Entity entity, ServerLevel level) {
 		if (!(entity instanceof ItemEntity item) || level.getEntity(item.getUUID()) != item) {
 			return;
 		}
-		LIVE_TRANSFERS.remove(item);
+		RewardDropGuard.onEntityLoaded(item);
 		AdmittedDimensionTransfer dimensionTransfer = ADMITTED_DIMENSION_TRANSFERS.remove(item);
 		if (dimensionTransfer != null) {
 			if (!markFallbackMaterialized(
@@ -1257,6 +1212,43 @@ public final class RewardService {
 						recordFallbackUnload(level, authority.key(), authority.ref(), item);
 					}
 				});
+	}
+
+	/** Records accessible-to-accessible section movement that Fabric does not expose as unload/load. */
+	public static synchronized void onEntitySectionChange(Entity entity) {
+		if (!(entity instanceof ItemEntity item)
+				|| !(item.level() instanceof ServerLevel level)
+				|| level.getEntity(item.getUUID()) != item) {
+			return;
+		}
+		CampaignSavedData.get(level).rewardFallbackByEntityUuid(item.getUUID())
+				.filter(authority -> authority.ref().materialized())
+				.filter(authority -> authority.ref().dimension().equals(dimensionId(level)))
+				.filter(authority -> matchesProjection(item.getItem(), authority.key()))
+				.ifPresent(authority -> {
+					PlayerCampaignState.RewardFallbackRef relocated = authority.ref().at(
+							dimensionId(level), item.blockPosition(), true);
+					if (!relocated.equals(authority.ref())) {
+						CampaignService.apply(
+								level,
+								new CampaignEvent.RewardFallback(
+										authority.key(),
+										relocated.entityUuid(),
+										relocated.dimension(),
+										relocated.position(),
+										CampaignEvent.RewardFallbackOperation.RELOCATED,
+										authority.ref()
+								),
+								ignored -> {
+								}
+						);
+					}
+				});
+	}
+
+	/** Package-private read-only GameTest seam for synchronous source-ticket cleanup. */
+	static int pendingLiveTransferCountForGameTest() {
+		return RewardDropGuard.pendingTransferCount();
 	}
 
 	private static void beginDimensionTransfer(
@@ -1365,29 +1357,6 @@ public final class RewardService {
 		FALLBACK,
 		WAITING,
 		FAILED
-	}
-
-	private record LiveTransfer(
-			CampaignEvent.RewardProjectionKey key,
-			PlayerCampaignState.RewardFallbackRef ref,
-			Inventory inventory,
-			int restoreSlot,
-			boolean deathDrop
-	) {
-		private LiveTransfer {
-			Objects.requireNonNull(key, "key");
-			Objects.requireNonNull(ref, "ref");
-			Objects.requireNonNull(inventory, "inventory");
-			if (restoreSlot < 0 || restoreSlot >= inventory.getContainerSize()) {
-				throw new IllegalArgumentException("restoreSlot outside owner inventory");
-			}
-		}
-	}
-
-	private record RejectedDeathDrop(int restoreSlot, ItemStack stack) {
-		private RejectedDeathDrop {
-			Objects.requireNonNull(stack, "stack");
-		}
 	}
 
 	private record PendingDimensionTransfer(

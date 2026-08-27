@@ -293,6 +293,7 @@ public sealed interface CampaignEvent permits
 		TRANSFERRED("transferred"),
 		MATERIALIZED("materialized"),
 		RELOCATED("relocated"),
+		REQUEUED("requeued"),
 		LOST("lost"),
 		CLEARED("cleared");
 

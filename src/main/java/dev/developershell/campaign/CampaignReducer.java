@@ -365,6 +365,16 @@ public final class CampaignReducer {
 		if (!Objects.equals(current, event.expectedPrior())) {
 			return noOp(state, "stale_reward_fallback_context");
 		}
+		if (event.operation() == CampaignEvent.RewardFallbackOperation.REQUEUED) {
+			PlayerCampaignState next = copyRewardProjectionAndFallbackState(
+					state,
+					sheet || state.sheetProjectionPending(),
+					!sheet || state.remoteProjectionPending(),
+					sheet ? null : state.sheetFallback(),
+					sheet ? state.remoteFallback() : null
+			);
+			return CampaignTransition.accepted(next, "reward_fallback_requeued");
+		}
 		PlayerCampaignState.RewardFallbackRef nextRef = switch (event.operation()) {
 			case MATERIALIZED -> current.at(event.dimension(), event.position(), true);
 			case RELOCATED -> current.materialized()
@@ -372,7 +382,8 @@ public final class CampaignReducer {
 					: null;
 			case LOST -> null;
 			case CLEARED -> null;
-			case RESERVE, TRANSFERRED -> throw new IllegalStateException("initial operations handled above");
+			case RESERVE, TRANSFERRED, REQUEUED ->
+					throw new IllegalStateException("initial or requeue operations handled above");
 		};
 		if (event.operation() == CampaignEvent.RewardFallbackOperation.RELOCATED && nextRef == null) {
 			return noOp(state, "reward_fallback_not_materialized");
@@ -721,6 +732,41 @@ public final class CampaignReducer {
 				state.remoteProjectionPending(),
 				state.remoteProjectionUuid(),
 				state.legacyRemoteAdoptionPending(),
+				sheetFallback,
+				remoteFallback
+		);
+	}
+
+	private static PlayerCampaignState copyRewardProjectionAndFallbackState(
+			PlayerCampaignState state,
+			boolean sheetProjectionPending,
+			boolean remoteProjectionPending,
+			PlayerCampaignState.RewardFallbackRef sheetFallback,
+			PlayerCampaignState.RewardFallbackRef remoteFallback
+	) {
+		return new PlayerCampaignState(
+				state.ownerUuid(),
+				state.chapter(),
+				state.status(),
+				state.attemptCount(),
+				state.deskDimension(),
+				state.deskPos(),
+				state.deskFacing(),
+				state.retryPos(),
+				state.activeEncounterRef(),
+				state.sheetEntitled(),
+				state.remoteIssued(),
+				state.retakeEntitled(),
+				state.retakeEncounterUuid(),
+				state.retakeFallbackReservationUuid(),
+				state.retakeFallbackEntityUuid(),
+				state.remoteCooldownUntilGameTime(),
+				state.sheetRecoverySequence(),
+				state.remoteReadyNoticeForDeadlineGameTime(),
+				sheetProjectionPending,
+				remoteProjectionPending,
+				state.remoteProjectionUuid(),
+				false,
 				sheetFallback,
 				remoteFallback
 		);

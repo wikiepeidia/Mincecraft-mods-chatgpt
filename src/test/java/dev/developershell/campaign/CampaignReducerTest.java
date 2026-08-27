@@ -700,6 +700,49 @@ final class CampaignReducerTest {
 		assertFalse(confirmed.remoteProjectionPending());
 		assertEquals(relocatedState.remoteFallback(), confirmed.remoteFallback());
 
+		CampaignTransition sheetRequeued = CampaignReducer.reduce(
+				Optional.of(confirmed),
+				new CampaignEvent.RewardFallback(
+						sheetKey,
+						confirmed.sheetFallback().entityUuid(),
+						confirmed.sheetFallback().dimension(),
+						confirmed.sheetFallback().position(),
+						CampaignEvent.RewardFallbackOperation.REQUEUED,
+						confirmed.sheetFallback()
+				));
+		assertAccepted(sheetRequeued, "reward_fallback_requeued");
+		assertTrue(sheetRequeued.nextState().orElseThrow().sheetProjectionPending());
+		assertEquals(null, sheetRequeued.nextState().orElseThrow().sheetFallback());
+		assertFalse(sheetRequeued.nextState().orElseThrow().remoteProjectionPending());
+		assertEquals(confirmed.remoteFallback(), sheetRequeued.nextState().orElseThrow().remoteFallback());
+		assertNoOp(
+				CampaignReducer.reduce(sheetRequeued.nextState(), new CampaignEvent.RewardFallback(
+						sheetKey,
+						confirmed.sheetFallback().entityUuid(),
+						confirmed.sheetFallback().dimension(),
+						confirmed.sheetFallback().position(),
+						CampaignEvent.RewardFallbackOperation.REQUEUED,
+						confirmed.sheetFallback())),
+				sheetRequeued.nextState().orElseThrow(),
+				"wrong_reward_fallback"
+		);
+
+		CampaignTransition remoteRequeued = CampaignReducer.reduce(
+				Optional.of(confirmed),
+				new CampaignEvent.RewardFallback(
+						remoteKey,
+						confirmed.remoteFallback().entityUuid(),
+						confirmed.remoteFallback().dimension(),
+						confirmed.remoteFallback().position(),
+						CampaignEvent.RewardFallbackOperation.REQUEUED,
+						confirmed.remoteFallback()
+				));
+		assertAccepted(remoteRequeued, "reward_fallback_requeued");
+		assertTrue(remoteRequeued.nextState().orElseThrow().remoteProjectionPending());
+		assertEquals(null, remoteRequeued.nextState().orElseThrow().remoteFallback());
+		assertFalse(remoteRequeued.nextState().orElseThrow().legacyRemoteAdoptionPending());
+		assertEquals(confirmed.sheetFallback(), remoteRequeued.nextState().orElseThrow().sheetFallback());
+
 		CampaignTransition recovered = CampaignReducer.reduce(
 				Optional.of(confirmed),
 				new CampaignEvent.RecoverSheet(OWNER, confirmed.sheetRecoverySequence()));
