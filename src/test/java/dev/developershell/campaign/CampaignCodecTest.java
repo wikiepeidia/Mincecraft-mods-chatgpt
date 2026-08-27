@@ -2,6 +2,7 @@ package dev.developershell.campaign;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonElement;
@@ -28,7 +29,7 @@ final class CampaignCodecTest {
 	private static final BlockPos RETRY = new BlockPos(11, 72, -12);
 
 	@Test
-	void schemaOneRoundTripsEveryDurableFieldWithStableNames() {
+	void schemaOneRoundTripsPassedRewardFieldsWithStableNames() {
 		PlayerCampaignState state = new PlayerCampaignState(
 				OWNER,
 				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
@@ -41,10 +42,10 @@ final class CampaignCodecTest {
 				null,
 				true,
 				true,
-				true,
-				ENCOUNTER,
+				false,
 				null,
-				FALLBACK,
+				null,
+				null,
 				9_000L,
 				6L,
 				8_000L
@@ -57,8 +58,9 @@ final class CampaignCodecTest {
 		assertEquals(encodeUuid(OWNER), encodedPlayer.get("map_key_uuid"));
 		assertEquals("lecture_passed", encodedPlayer.get("chapter").getAsString());
 		assertEquals("passed", encodedPlayer.get("lecture_status").getAsString());
-		assertEquals(encodeUuid(ENCOUNTER), encodedPlayer.get("retake_encounter_uuid"));
+		assertFalse(encodedPlayer.has("retake_encounter_uuid"));
 		assertFalse(encodedPlayer.has("retake_fallback_reservation_uuid"));
+		assertFalse(encodedPlayer.has("retake_fallback_entity_uuid"));
 		assertEquals(6L, encodedPlayer.get("sheet_recovery_sequence").getAsLong());
 		assertEquals(8_000L, encodedPlayer.get("remote_ready_notice_for_deadline_game_time").getAsLong());
 
@@ -165,6 +167,45 @@ final class CampaignCodecTest {
 						  \"retry_pos\":[11,72,-12],
 						  \"encounter_uuid\":\"c0de0000-0000-4000-8000-000000000511\",
 						  \"sheet_entitled\":false,\"remote_issued\":false
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"pre_lecture\",\"lecture_status\":\"retake_ready\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],\"sheet_entitled\":false,
+						  \"remote_issued\":false
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"pre_lecture\",\"lecture_status\":\"ready\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],\"sheet_entitled\":false,
+						  \"remote_issued\":false,\"retake_entitled\":true,
+						  \"retake_encounter_uuid\":\"c0de0000-0000-4000-8000-000000000511\"
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"lecture_passed\",\"lecture_status\":\"passed\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],\"sheet_entitled\":false,
+						  \"remote_issued\":true
+						}]}"""),
+				JsonParser.parseString("""
+						{\"schema\":1,\"players\":[{
+						  \"map_key_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"owner_uuid\":\"c0de0000-0000-4000-8000-000000000501\",
+						  \"chapter\":\"pre_lecture\",\"lecture_status\":\"ready\",\"attempt_count\":1,
+						  \"desk_pos\":[11,72,-9],\"desk_facing\":\"north\",
+						  \"retry_pos\":[11,72,-12],
+						  \"encounter_uuid\":\"c0de0000-0000-4000-8000-000000000511\",
+						  \"professor_uuid\":\"c0de0000-0000-4000-8000-000000000521\",
+						  \"sheet_entitled\":false,\"remote_issued\":false
 						}]}""")
 		);
 
@@ -179,6 +220,57 @@ final class CampaignCodecTest {
 			}).accepted());
 			assertFalse(decoded.isDirty());
 		}
+	}
+
+	@Test
+	void recordConstructorRejectsUnreachableCrossFieldStates() {
+		PlayerCampaignState.EncounterRef active = new PlayerCampaignState.EncounterRef(
+				OWNER, ENCOUNTER, PROFESSOR, 1
+		);
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.ACTIVE, null, false, false, false, null
+		));
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.READY, active, false, false, false, null
+		));
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.RETAKE_READY, null, false, false, false, null
+		));
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.READY, null, false, false, true, ENCOUNTER
+		));
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED, null, false, true, false, null
+		));
+		assertThrows(IllegalArgumentException.class, () -> state(
+				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
+				PlayerCampaignState.LectureStatus.READY, null, true, true, false, null
+		));
+		assertThrows(IllegalArgumentException.class, () -> new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
+				0,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				true,
+				true,
+				false,
+				null,
+				null,
+				null,
+				0L,
+				0L,
+				0L
+		));
 	}
 
 	@Test
@@ -316,6 +408,37 @@ final class CampaignCodecTest {
 				false,
 				false,
 				false,
+				null,
+				0L,
+				0L,
+				0L
+		);
+	}
+
+	private static PlayerCampaignState state(
+			PlayerCampaignState.CampaignChapter chapter,
+			PlayerCampaignState.LectureStatus status,
+			PlayerCampaignState.EncounterRef activeEncounter,
+			boolean sheetEntitled,
+			boolean remoteIssued,
+			boolean retakeEntitled,
+			UUID retakeEncounterUuid
+	) {
+		return new PlayerCampaignState(
+				OWNER,
+				chapter,
+				status,
+				1,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				activeEncounter,
+				sheetEntitled,
+				remoteIssued,
+				retakeEntitled,
+				retakeEncounterUuid,
+				null,
 				null,
 				0L,
 				0L,

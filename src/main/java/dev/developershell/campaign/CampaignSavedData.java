@@ -183,6 +183,9 @@ public final class CampaignSavedData extends SavedData {
 		DurableFields durable = raw.durable();
 		boolean hasEncounter = durable.encounterUuid().isPresent();
 		boolean hasProfessor = durable.professorUuid().isPresent();
+		if (identity.status() != PlayerCampaignState.LectureStatus.READY && identity.attemptCount() < 1) {
+			return DataResult.error(() -> "non-READY campaign status requires a positive attempt");
+		}
 		if (hasEncounter != hasProfessor) {
 			return DataResult.error(() -> "encounter_uuid and professor_uuid must be present together");
 		}
@@ -191,6 +194,14 @@ public final class CampaignSavedData extends SavedData {
 		}
 		if (identity.status() != PlayerCampaignState.LectureStatus.ACTIVE && hasEncounter) {
 			return DataResult.error(() -> "inactive lecture state must not retain encounter identity");
+		}
+		if ((identity.status() == PlayerCampaignState.LectureStatus.RETAKE_READY)
+				!= durable.retakeEntitled()) {
+			return DataResult.error(() -> "RETAKE_READY status and Retake entitlement must be present together");
+		}
+		boolean passed = identity.status() == PlayerCampaignState.LectureStatus.PASSED;
+		if (passed != durable.sheetEntitled() || passed != durable.remoteIssued()) {
+			return DataResult.error(() -> "PASSED status requires exactly its Sheet and Remote reward ledgers");
 		}
 
 		PlayerCampaignState.CampaignChapter chapter = identity.chapter().orElseGet(() ->

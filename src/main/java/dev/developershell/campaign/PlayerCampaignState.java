@@ -44,6 +44,9 @@ public record PlayerCampaignState(
 		if (attemptCount < 0) {
 			throw new IllegalArgumentException("attemptCount must be non-negative");
 		}
+		if (status != LectureStatus.READY && attemptCount < 1) {
+			throw new IllegalArgumentException("non-READY campaign status requires a positive attempt");
+		}
 		Objects.requireNonNull(deskDimension, "deskDimension");
 		deskPos = Objects.requireNonNull(deskPos, "deskPos").immutable();
 		Objects.requireNonNull(deskFacing, "deskFacing");
@@ -52,6 +55,19 @@ public record PlayerCampaignState(
 				&& (!ownerUuid.equals(activeEncounterRef.ownerUuid())
 				|| attemptCount != activeEncounterRef.attemptNumber())) {
 			throw new IllegalArgumentException("active encounter identity must match owner and attempt");
+		}
+		if ((status == LectureStatus.ACTIVE) != (activeEncounterRef != null)) {
+			throw new IllegalArgumentException("ACTIVE status and active encounter identity must be present together");
+		}
+		if ((status == LectureStatus.RETAKE_READY) != retakeEntitled) {
+			throw new IllegalArgumentException("RETAKE_READY status and Retake entitlement must be present together");
+		}
+		if ((status == LectureStatus.PASSED) != (chapter == CampaignChapter.LECTURE_PASSED)) {
+			throw new IllegalArgumentException("PASSED status and LECTURE_PASSED chapter must be present together");
+		}
+		if ((status == LectureStatus.PASSED) != sheetEntitled
+				|| (status == LectureStatus.PASSED) != remoteIssued) {
+			throw new IllegalArgumentException("PASSED status requires exactly its Sheet and Remote reward ledgers");
 		}
 		if (!retakeEntitled && (retakeEncounterUuid != null
 				|| retakeFallbackReservationUuid != null
