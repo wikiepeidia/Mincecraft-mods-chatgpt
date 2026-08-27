@@ -411,6 +411,7 @@ final class DevHellConfigTest {
 		assertSame(loadResult, runtime.loadResult());
 		assertSame(config, runtime.config());
 		assertFalse(runtime.campaignService().campaignEnabled());
+		assertEquals(7, runtime.campaignService().arenaSearchRadius());
 		assertEquals(Set.of(ModuleId.GIT_HAPPENS, ModuleId.PYTHON_TOOLS), runtime.moduleGate().enabledModules());
 		assertEquals(
 				new LectureRules(140, 120, 20, 15, 10, 30, 10),

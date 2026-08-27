@@ -19,8 +19,10 @@ public final class LectureGeometry {
 	private static final int INTERIOR_RIGHT_MIN = -7;
 	private static final int INTERIOR_RIGHT_MAX = 7;
 	private static final int COMBAT_CENTER_FORWARD = 9;
-	private static final int RETRY_RADIUS_MIN = 2;
-	private static final int RETRY_RADIUS_MAX = 5;
+	private static final int NORMAL_RETRY_RADIUS_MIN = 2;
+	public static final int MIN_RETRY_SEARCH_RADIUS = 1;
+	public static final int MAX_RETRY_SEARCH_RADIUS = 8;
+	public static final int DEFAULT_RETRY_SEARCH_RADIUS = 5;
 	private static final int ATTENDANCE_ANCHOR_OFFSET = 4;
 	private static final double INTERIOR_FORWARD_MIN_EDGE = INTERIOR_FORWARD_MIN - 0.5D;
 	private static final double INTERIOR_FORWARD_MAX_EDGE = INTERIOR_FORWARD_MAX + 0.5D;
@@ -90,21 +92,29 @@ public final class LectureGeometry {
 	}
 
 	public static Layout layout(BlockPos deskPos, Direction forward) {
+		return layout(deskPos, forward, DEFAULT_RETRY_SEARCH_RADIUS);
+	}
+
+	public static Layout layout(BlockPos deskPos, Direction forward, int retrySearchRadius) {
 		Objects.requireNonNull(deskPos, "deskPos");
 		Objects.requireNonNull(forward, "forward");
 		if (!forward.getAxis().isHorizontal()) {
 			throw new IllegalArgumentException("Lecture arena facing must be horizontal");
 		}
-		return new Layout(deskPos, forward, forward.getClockWise());
+		return new Layout(deskPos, forward, forward.getClockWise(), retrySearchRadius);
 	}
 
-	public record Layout(BlockPos deskPos, Direction forward, Direction right) {
+	public record Layout(BlockPos deskPos, Direction forward, Direction right, int retrySearchRadius) {
 		public Layout {
 			deskPos = Objects.requireNonNull(deskPos, "deskPos").immutable();
 			Objects.requireNonNull(forward, "forward");
 			Objects.requireNonNull(right, "right");
 			if (!forward.getAxis().isHorizontal() || right != forward.getClockWise()) {
 				throw new IllegalArgumentException("Lecture local axes must be horizontal and clockwise");
+			}
+			if (retrySearchRadius < MIN_RETRY_SEARCH_RADIUS
+					|| retrySearchRadius > MAX_RETRY_SEARCH_RADIUS) {
+				throw new IllegalArgumentException("Retry search radius must be between 1 and 8");
 			}
 		}
 
@@ -143,19 +153,21 @@ public final class LectureGeometry {
 		}
 
 		/**
-		 * Duplicate-free nearest-shell retry order. The first candidate is L-2F; subsequent
-		 * candidates cover the complete behind/side wedge through Chebyshev radius five.
+		 * Duplicate-free nearest-shell retry order through the configured maximum Chebyshev
+		 * radius. Normal searches start at L-2F; radius one is the bounded exception so the
+		 * smallest accepted configuration still probes its complete shell.
 		 */
 		public List<BlockPos> retryCandidates() {
-			List<BlockPos> candidates = new ArrayList<>(44);
+			List<BlockPos> candidates = new ArrayList<>();
 			Direction back = forward.getOpposite();
-			for (int shell = RETRY_RADIUS_MIN; shell <= RETRY_RADIUS_MAX; shell++) {
+			int minimumShell = Math.min(NORMAL_RETRY_RADIUS_MIN, retrySearchRadius);
+			for (int shell = minimumShell; shell <= retrySearchRadius; shell++) {
 				candidates.add(deskPos.relative(back, shell).immutable());
 				for (int lateral = 1; lateral <= shell; lateral++) {
 					candidates.add(deskPos.relative(back, shell).relative(right, lateral).immutable());
 					candidates.add(deskPos.relative(back, shell).relative(right, -lateral).immutable());
 				}
-				for (int distance = shell - 1; distance >= RETRY_RADIUS_MIN; distance--) {
+				for (int distance = shell - 1; distance >= minimumShell; distance--) {
 					candidates.add(deskPos.relative(back, distance).relative(right, shell).immutable());
 					candidates.add(deskPos.relative(back, distance).relative(right, -shell).immutable());
 				}

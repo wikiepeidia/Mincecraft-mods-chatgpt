@@ -126,7 +126,8 @@ public final class CursedInternshipContractItem extends Item {
 				(ServerLevel) level,
 				serverPlayer,
 				hit.getBlockPos(),
-				facing
+				facing,
+				service.arenaSearchRadius()
 		);
 		if (validation instanceof ArenaValidationResult.Rejected rejected) {
 			serverPlayer.sendSystemMessage(Component.translatable(rejected.reason().translationKey()));

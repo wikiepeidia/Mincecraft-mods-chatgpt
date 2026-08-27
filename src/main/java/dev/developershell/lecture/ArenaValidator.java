@@ -27,12 +27,22 @@ public final class ArenaValidator {
 			BlockPos deskPos,
 			Direction deskFacing
 	) {
+		return validate(level, player, deskPos, deskFacing, LectureGeometry.DEFAULT_RETRY_SEARCH_RADIUS);
+	}
+
+	public static ArenaValidationResult validate(
+			ServerLevel level,
+			ServerPlayer player,
+			BlockPos deskPos,
+			Direction deskFacing,
+			int retrySearchRadius
+	) {
 		Objects.requireNonNull(level, "level");
 		Objects.requireNonNull(player, "player");
 		if (player.level() != level || !level.getServer().isSameThread()) {
 			return new ArenaValidationResult.Rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
-		return validate(new ServerWorld(level), player.getUUID(), deskPos, deskFacing);
+		return validate(new ServerWorld(level), player.getUUID(), deskPos, deskFacing, retrySearchRadius);
 	}
 
 	public static ArenaValidationResult validate(
@@ -40,6 +50,16 @@ public final class ArenaValidator {
 			UUID ownerUuid,
 			BlockPos deskPos,
 			Direction deskFacing
+	) {
+		return validate(world, ownerUuid, deskPos, deskFacing, LectureGeometry.DEFAULT_RETRY_SEARCH_RADIUS);
+	}
+
+	public static ArenaValidationResult validate(
+			ReadOnlyWorld world,
+			UUID ownerUuid,
+			BlockPos deskPos,
+			Direction deskFacing,
+			int retrySearchRadius
 	) {
 		Objects.requireNonNull(world, "world");
 		Objects.requireNonNull(ownerUuid, "ownerUuid");
@@ -53,7 +73,7 @@ public final class ArenaValidator {
 			return rejected(ArenaRejection.WRONG_DIMENSION);
 		}
 
-		LectureGeometry.Layout layout = LectureGeometry.layout(deskPos, deskFacing);
+		LectureGeometry.Layout layout = LectureGeometry.layout(deskPos, deskFacing, retrySearchRadius);
 		if (world.hasActiveEncounter(ownerUuid, deskPos)) {
 			return rejected(ArenaRejection.ACTIVE_ENCOUNTER);
 		}

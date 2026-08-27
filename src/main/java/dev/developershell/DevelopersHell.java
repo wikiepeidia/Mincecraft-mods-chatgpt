@@ -52,6 +52,7 @@ public final class DevelopersHell implements ModInitializer {
 		CampaignLifecycle.register(runtime);
 		runtime.lectureManager().initialize();
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
+		ModItems.RETAKE_FORM.bindArenaSearchRadius(runtime.campaignService().arenaSearchRadius());
 		DeskInteraction.register();
 		DevHellCommands.register(runtime);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {

@@ -190,6 +190,23 @@ final class LectureGeometryTest {
 	}
 
 	@Test
+	void retryRadiusOneAndEightBoundTheCompleteConfiguredShells() {
+		LectureGeometry.Layout radiusOne = LectureGeometry.layout(DESK, Direction.NORTH, 1);
+		assertEquals(1, radiusOne.retrySearchRadius());
+		assertEquals(3, radiusOne.retryCandidates().size());
+		assertEquals(DESK.relative(Direction.SOUTH), radiusOne.retryCandidates().getFirst());
+		assertEquals(3, new HashSet<>(radiusOne.retryCandidates()).size());
+
+		LectureGeometry.Layout radiusEight = LectureGeometry.layout(DESK, Direction.NORTH, 8);
+		assertEquals(8, radiusEight.retrySearchRadius());
+		assertEquals(119, radiusEight.retryCandidates().size());
+		assertEquals(119, new HashSet<>(radiusEight.retryCandidates()).size());
+		assertTrue(radiusEight.retryCandidates().contains(DESK.relative(Direction.SOUTH, 8)));
+		assertTrue(radiusEight.retryCandidates().stream().allMatch(candidate ->
+				Math.max(Math.abs(candidate.getX() - DESK.getX()), Math.abs(candidate.getZ() - DESK.getZ())) <= 8));
+	}
+
+	@Test
 	void typedResultsAndEveryRejectionExposeStableLocalizationKeys() {
 		Map<ArenaRejection, String> expectedKeys = Map.of(
 				ArenaRejection.WRONG_TARGET, "message.developers_hell.contract.find_lectern",
@@ -223,5 +240,7 @@ final class LectureGeometryTest {
 	void verticalFacingCannotCreateAHorizontalArena() {
 		assertThrows(IllegalArgumentException.class, () -> LectureGeometry.layout(DESK, Direction.UP));
 		assertThrows(IllegalArgumentException.class, () -> LectureGeometry.layout(DESK, Direction.DOWN));
+		assertThrows(IllegalArgumentException.class, () -> LectureGeometry.layout(DESK, Direction.NORTH, 0));
+		assertThrows(IllegalArgumentException.class, () -> LectureGeometry.layout(DESK, Direction.NORTH, 9));
 	}
 }

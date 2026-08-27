@@ -4,6 +4,7 @@ import dev.developershell.campaign.CampaignService;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.lecture.ArenaValidationResult;
 import dev.developershell.lecture.ArenaValidator;
+import dev.developershell.lecture.LectureGeometry;
 import dev.developershell.lecture.RetakeService;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -28,9 +29,24 @@ import net.minecraft.world.phys.BlockHitResult;
 public final class RetakeFormItem extends Item {
 	private static final String TOOLTIP_KEY = "tooltip.developers_hell.retake_form.desk";
 	private static final String NOTHING_KEY = "message.developers_hell.retake.nothing";
+	private boolean radiusBound;
+	private volatile int arenaSearchRadius = LectureGeometry.DEFAULT_RETRY_SEARCH_RADIUS;
 
 	public RetakeFormItem(Properties properties) {
 		super(properties);
+	}
+
+	/** Binds the immutable accepted runtime config before interaction callbacks are registered. */
+	public synchronized void bindArenaSearchRadius(int arenaSearchRadius) {
+		if (arenaSearchRadius < LectureGeometry.MIN_RETRY_SEARCH_RADIUS
+				|| arenaSearchRadius > LectureGeometry.MAX_RETRY_SEARCH_RADIUS) {
+			throw new IllegalArgumentException("Arena search radius must be between 1 and 8");
+		}
+		if (radiusBound && this.arenaSearchRadius != arenaSearchRadius) {
+			throw new IllegalStateException("Retake interaction already bound to another arena search radius");
+		}
+		this.arenaSearchRadius = arenaSearchRadius;
+		radiusBound = true;
 	}
 
 	@Override
@@ -104,7 +120,8 @@ public final class RetakeFormItem extends Item {
 				serverLevel,
 				serverPlayer,
 				hit.getBlockPos(),
-				block.getValue(LecternBlock.FACING)
+				block.getValue(LecternBlock.FACING),
+				arenaSearchRadius
 		);
 		if (validation instanceof ArenaValidationResult.Rejected rejected) {
 			serverPlayer.sendSystemMessage(Component.translatable(rejected.reason().translationKey()));

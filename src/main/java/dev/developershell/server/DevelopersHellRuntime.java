@@ -65,7 +65,10 @@ public final class DevelopersHellRuntime {
 				tuning.quizTelegraphTicks(),
 				tuning.attendanceTelegraphTicks()
 		);
-		CampaignServiceAdapter campaignService = new CampaignServiceAdapter(config.campaignEnabled());
+		CampaignServiceAdapter campaignService = new CampaignServiceAdapter(
+				config.campaignEnabled(),
+				tuning.arenaSearchRadius()
+		);
 		LifecycleAdapter lifecycle = new LifecycleAdapter();
 		return new DevelopersHellRuntime(
 				loadResult,
@@ -230,13 +233,19 @@ public final class DevelopersHellRuntime {
 	/** One-shot behavior adapter over the retained state-before-effects campaign service. */
 	public static final class CampaignServiceAdapter {
 		private final boolean campaignEnabled;
+		private final int arenaSearchRadius;
 
-		private CampaignServiceAdapter(boolean campaignEnabled) {
+		private CampaignServiceAdapter(boolean campaignEnabled, int arenaSearchRadius) {
 			this.campaignEnabled = campaignEnabled;
+			this.arenaSearchRadius = arenaSearchRadius;
 		}
 
 		public boolean campaignEnabled() {
 			return campaignEnabled;
+		}
+
+		public int arenaSearchRadius() {
+			return arenaSearchRadius;
 		}
 
 		public ArenaValidationResult start(
