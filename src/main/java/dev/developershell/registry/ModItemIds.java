@@ -19,6 +19,10 @@ public final class ModItemIds {
 	public static final ResourceKey<Item> RED_PEN = itemKey("red_pen");
 	public static final ResourceKey<Item> DEFINITELY_LEGITIMATE_DIPLOMA =
 			itemKey("definitely_legitimate_diploma");
+	public static final ResourceKey<Item> PIP_WAND = itemKey("pip_wand");
+	public static final ResourceKey<Item> VENV_FLASK = itemKey("venv_flask");
+	public static final ResourceKey<Item> PYTHON_PICKAXE = itemKey("python_pickaxe");
+	public static final ResourceKey<Item> DEPENDENCY_CONFLICT = itemKey("dependency_conflict");
 
 	private static final List<ResourceKey<Item>> FOUNDATION_CATALOG = List.of(FOUNDATION_TOKEN);
 	private static final List<ResourceKey<Item>> PHASE_TWO_CATALOG = List.of(
@@ -35,6 +39,12 @@ public final class ModItemIds {
 			RED_PEN,
 			DEFINITELY_LEGITIMATE_DIPLOMA
 	);
+	private static final List<ResourceKey<Item>> PYTHON_TOOLS_CATALOG = List.of(
+			PIP_WAND,
+			VENV_FLASK,
+			PYTHON_PICKAXE,
+			DEPENDENCY_CONFLICT
+	);
 
 	/** Retained Phase 1 catalog view for source compatibility. */
 	public static List<ResourceKey<Item>> all() {
@@ -49,6 +59,11 @@ public final class ModItemIds {
 	/** Stable item identities added by the emergency Contract-to-Diploma slice. */
 	public static List<ResourceKey<Item>> bossRush() {
 		return BOSS_RUSH_CATALOG;
+	}
+
+	/** Stable identities for the offline-only Python comedy module. */
+	public static List<ResourceKey<Item>> pythonTools() {
+		return PYTHON_TOOLS_CATALOG;
 	}
 
 	private static ResourceKey<Item> itemKey(String path) {

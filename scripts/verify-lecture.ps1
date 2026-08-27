@@ -557,6 +557,17 @@ function Get-RequiredLectureArchiveEntries {
         'dev/developershell/registry/ModEntities.class',
         'dev/developershell/registry/ModItemIds.class',
         'dev/developershell/registry/ModItems.class',
+		'dev/developershell/python/FakePackage.class',
+		'dev/developershell/python/PipEnvironment.class',
+		'dev/developershell/python/PipOutcome.class',
+		'dev/developershell/python/PythonToolsState.class',
+		'dev/developershell/python/PythonToolsSavedData.class',
+		'dev/developershell/python/BoundedOreTraversal.class',
+		'dev/developershell/python/RecursionCooldown.class',
+		'dev/developershell/python/PythonToolsRuntime.class',
+		'dev/developershell/python/PipWandItem.class',
+		'dev/developershell/python/VenvFlaskItem.class',
+		'dev/developershell/python/PythonPickaxeItem.class',
         'dev/developershell/server/CampaignLifecycle.class',
         'dev/developershell/server/DeskInteraction.class',
         'dev/developershell/server/DevelopersHellRuntime.class',
@@ -566,11 +577,19 @@ function Get-RequiredLectureArchiveEntries {
         'assets/developers_hell/items/retake_form.json',
         'assets/developers_hell/items/attendance_sheet.json',
         'assets/developers_hell/items/infinite_slides_remote.json',
+		'assets/developers_hell/items/pip_wand.json',
+		'assets/developers_hell/items/venv_flask.json',
+		'assets/developers_hell/items/python_pickaxe.json',
+		'assets/developers_hell/items/dependency_conflict.json',
         'assets/developers_hell/models/item/foundation_token.json',
         'assets/developers_hell/models/item/cursed_unpaid_internship_contract.json',
         'assets/developers_hell/models/item/retake_form.json',
         'assets/developers_hell/models/item/attendance_sheet.json',
         'assets/developers_hell/models/item/infinite_slides_remote.json',
+		'assets/developers_hell/models/item/pip_wand.json',
+		'assets/developers_hell/models/item/venv_flask.json',
+		'assets/developers_hell/models/item/python_pickaxe.json',
+		'assets/developers_hell/models/item/dependency_conflict.json',
         'data/developers_hell/advancement/a_suspicious_opportunity.json',
         'data/developers_hell/recipe/cursed_unpaid_internship_contract.json'
     )
@@ -634,6 +653,11 @@ function Get-LectureArchiveContract {
                 $content -match '(?i)(?:net/minecraft/client|com/mojang/blaze3d)') {
                 throw "Common production class links a client-only namespace: $name"
             }
+			if ($name.StartsWith('dev/developershell/python/', [System.StringComparison]::Ordinal) -and
+				$name.EndsWith('.class', [System.StringComparison]::OrdinalIgnoreCase) -and
+				$content -match '(?i)(?:java/lang/ProcessBuilder|java/lang/Process|java/lang/Runtime|java/io/File|java/nio/file|javax/script|org/python|jython|graalpython)') {
+				throw "Python comedy class links a forbidden process/file/script execution surface: $name"
+			}
             $scannableContent = $content
             if ($name.EndsWith('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
                 $telemetryKeys = [regex]::Matches($scannableContent, '(?i)"sends_telemetry_event"\s*:')
@@ -1667,9 +1691,12 @@ function Invoke-SelfCheckMode {
         $commentedSource = Join-Path $receiptRoot 'CommentOnlyGameTest.java'
         [System.IO.File]::WriteAllText($commentedSource, '// @GameTest is documentation, not an execution receipt.', [System.Text.UTF8Encoding]::new($false))
         $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
-        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 106 -or $testReceipts.GameTestCount -ne 70) {
-            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 106/70 manifest drifted.'
-        }
+		if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or
+			$testReceipts.UnitCount -ne $manifest.ExpectedUnitIds.Count -or
+			$testReceipts.UnitCount -lt 136 -or
+			$testReceipts.GameTestCount -ne 70) {
+			throw 'Comment-only source affected receipt-derived execution counts, Python coverage fell below the 136-case deadline floor, or the reviewed 70-GameTest manifest drifted.'
+		}
         $wrongRoot = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -UnitRootElement 'testsuites'
         Assert-SelfCheckRejects -Label 'unit receipt wrong XML root element' -Action {
             Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $wrongRoot.UnitDirectory -GameTestReportPath $wrongRoot.GameTestPath
@@ -1955,6 +1982,10 @@ function Assert-IndependentProductionSourceContract {
         if ($text -match '(?i)\bimport\s+(?:static\s+)?java[.]net(?:[.]|\b)|\bjava[.]net[.]|\b(?:HttpClient|HttpRequest|HttpResponse|URLConnection|HttpURLConnection|ServerSocket|DatagramSocket|WebSocket)\b|\b(?:openConnection|openStream)\s*\(|\b(?:https?|wss?)://|\bcom[.]openai\b|\b(?:OpenAI|ChatGPT)(?:Api|API|Client|Sdk|SDK|Service|Connector|Transport)\b|\b(?:AnalyticsClient|TelemetryClient|MixpanelAPI|AmplitudeClient|SegmentAnalytics)\b|\b(?:LaunchDarkly|UnleashClient|FirebaseRemoteConfig|OpenFeatureClient)\b') {
             throw "Independent source scan found an operational network/API/telemetry surface: $($file.Name)"
         }
+		if ($file.FullName -like '*\src\main\java\dev\developershell\python\*' -and
+			$text -match '(?i)\b(?:ProcessBuilder|ProcessHandle|Runtime[.]getRuntime\s*\(|ScriptEngine|Class[.]forName\s*\()\b|\bimport\s+(?:static\s+)?(?:java[.]io|java[.]nio[.]file|javax[.]script|org[.]python)(?:[.]|\b)') {
+			throw "Independent source scan found a forbidden Python/process/file/script execution surface: $($file.Name)"
+		}
     }
     return $true
 }

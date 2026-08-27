@@ -1,0 +1,6 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "developers_hell:item/venv_flask"
+  }
+}

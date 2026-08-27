@@ -6,6 +6,7 @@ import dev.developershell.bossrush.BossRushProgress;
 import dev.developershell.config.DevHellConfig;
 import dev.developershell.lecture.RetakeService;
 import dev.developershell.module.ModuleId;
+import dev.developershell.python.PythonToolsRuntime;
 import dev.developershell.server.CampaignLifecycle;
 import dev.developershell.server.DevelopersHellRuntime;
 import java.util.Objects;
@@ -32,8 +33,9 @@ public final class DevHellCommands {
 	private static final String RETAKE_NOTHING_KEY = "message.developers_hell.retake.nothing";
 	private static final String BOSS_RUSH_STATUS_KEY = "command.developers_hell.bossrush.status";
 
-	public static void register(DevelopersHellRuntime runtime) {
+	public static void register(DevelopersHellRuntime runtime, PythonToolsRuntime pythonTools) {
 		Objects.requireNonNull(runtime, "runtime");
+		Objects.requireNonNull(pythonTools, "pythonTools");
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("devhell")
 						.then(Commands.literal("status").executes(context -> showStatus(
@@ -68,6 +70,9 @@ public final class DevHellCommands {
 														StringArgumentType.getString(context, "boss")
 												))))
 						)
+						.then(Commands.literal("python")
+								.then(Commands.literal("demo").executes(context ->
+										pythonTools.giveDemoTools(context.getSource().getPlayerOrException()))))
 		));
 	}
 

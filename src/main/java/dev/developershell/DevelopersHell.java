@@ -4,6 +4,7 @@ import dev.developershell.command.DevHellCommands;
 import dev.developershell.config.ConfigIssue;
 import dev.developershell.config.DevHellConfigLoader;
 import dev.developershell.lecture.RetakeService;
+import dev.developershell.python.PythonToolsRuntime;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import dev.developershell.server.CampaignLifecycle;
@@ -30,6 +31,7 @@ public final class DevelopersHell implements ModInitializer {
 
 		DevHellConfigLoader.LoadResult loadResult = DevHellConfigLoader.loadFromConfigDirectory();
 		DevelopersHellRuntime runtime = DevelopersHellRuntime.create(loadResult);
+		PythonToolsRuntime pythonTools = new PythonToolsRuntime(runtime.moduleGate());
 		LOGGER.info(
 				"Developer's Hell config source={}, campaignEnabled={}, difficulty={}, enabledModules={}/{}",
 				loadResult.sourceStatus().serializedName(),
@@ -54,7 +56,8 @@ public final class DevelopersHell implements ModInitializer {
 		ModItems.CURSED_UNPAID_INTERNSHIP_CONTRACT.registerInteraction(runtime.campaignService());
 		ModItems.RETAKE_FORM.bindArenaSearchRadius(runtime.campaignService().arenaSearchRadius());
 		DeskInteraction.register();
-		DevHellCommands.register(runtime);
+		pythonTools.register();
+		DevHellCommands.register(runtime, pythonTools);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			runtime.lectureManager().tick(server);
 			runtime.bossRushManager().tick(server);

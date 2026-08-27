@@ -4,11 +4,15 @@ import dev.developershell.item.CursedInternshipContractItem;
 import dev.developershell.item.AttendanceSheetItem;
 import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.item.RetakeFormItem;
+import dev.developershell.python.PipWandItem;
+import dev.developershell.python.PythonPickaxeItem;
+import dev.developershell.python.VenvFlaskItem;
 import java.util.function.Function;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ToolMaterial;
 
 public final class ModItems {
 	public static final Item FOUNDATION_TOKEN =
@@ -56,6 +60,28 @@ public final class ModItems {
 	);
 	public static final Item DEFINITELY_LEGITIMATE_DIPLOMA = register(
 			ModItemIds.DEFINITELY_LEGITIMATE_DIPLOMA,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final PipWandItem PIP_WAND = register(
+			ModItemIds.PIP_WAND,
+			PipWandItem::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final VenvFlaskItem VENV_FLASK = register(
+			ModItemIds.VENV_FLASK,
+			VenvFlaskItem::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final PythonPickaxeItem PYTHON_PICKAXE = register(
+			ModItemIds.PYTHON_PICKAXE,
+			PythonPickaxeItem::new,
+			new Item.Properties()
+					.stacksTo(1)
+					.pickaxe(ToolMaterial.DIAMOND, 1.0F, -2.8F)
+	);
+	public static final Item DEPENDENCY_CONFLICT = register(
+			ModItemIds.DEPENDENCY_CONFLICT,
 			Item::new,
 			new Item.Properties().stacksTo(1)
 	);

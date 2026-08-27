@@ -18,11 +18,11 @@ The verified deadline release is:
 
 ```text
 dist/developers-hell-0.1.0.jar
-Size: 408,578 bytes
-SHA-256: c3bd2b6e025b2d8b3c7cb056b31981c719416fb8a7270341fb1b3e737ec6d392
+Size: 458,667 bytes
+SHA-256: 01891bac9e27d208d3eaa454fb0bbd2511c7684903630f99a90d5a75de609516
 ```
 
-Its clean Java 25 offline gate passed 106 unit tests, 70 GameTests, the direct-dependency audit, the production build, and a bounded dedicated-server ready/clean-stop smoke. Manual client visual/readability UAT remains pending.
+Its clean Java 25 offline gate passed 199 unit tests, 70 GameTests, the direct-dependency audit, and the production build. The earlier campaign artifact passed a bounded dedicated-server ready/clean-stop smoke; a fresh smoke of this Python-tool artifact and manual client visual/readability UAT remain pending.
 
 Install only the ordinary remapped release JAR recorded by the final build. Do not substitute a development, sources, test, or arbitrary local rebuild. Earlier Phase 1 and Phase 2 hashes remain historical foundation/Lecture evidence; neither is the checksum for this deadline boss-rush build.
 
@@ -57,6 +57,20 @@ The bounded sequence is Jury, Chairman, the local fictional-sponsor countdown, a
 
 The original Contract/Lecture route remains available and independent of the direct boss-rush start.
 
+## Offline Python Tools
+
+With the `python_tools` module enabled, this deadline build exposes the bounded demo loadout:
+
+```text
+/devhell python demo
+```
+
+- Sneak-use the **pip Wand** to cycle through four authored local package jokes. Ordinary use installs the selected simulation for a bounded XP-level price, applies one short vanilla effect, or produces one visible **Dependency Conflict** without double-charging or double-granting.
+- Use the **venv Flask** to clear a pending conflict or deterministically isolate the selected simulated package. Repeated use is protected by a short server-tick cooldown.
+- Break an ore with the **Python Pickaxe** to traverse only a connected same-block ore vein. The server plans a stable six-direction path first, never force-loads chunks or crosses dimensions, respects block/tool break rules, and stops at strict block, node, distance, height, border, and cooldown bounds. A truncated traversal reports a visible simulated `RecursionError`.
+
+These names are jokes over finite Java state machines. The mod never runs Python or pip, opens a shell or browser, reads or writes source files, connects to an account/API, downloads packages, or uses the network for these tools. Automated unit/GameTest/build gates cover the shipped JAR; manual in-world item feel, cue readability, and client visuals remain explicitly pending.
+
 ## Lecture campaign
 
 1. Carry paper and an ink sac to unlock **A Suspicious Opportunity**, then craft the Cursed Unpaid Internship Contract with those two ingredients in any shapeless crafting grid.
@@ -71,7 +85,7 @@ The Phase 2 evidence files document the earlier Lecture-only automated baseline.
 
 ## Known deadline limitations
 
-This build intentionally defers the Python, terminal, Git, Totem, Duck, and Deadline chaos modules; Metadata Roulette; custom models, textures, sounds, GUI, cinematics, and other custom assets. It also does not claim exhaustive handling of exotic reward-custody or crash-window paths. Manual visual client UAT for encounter readability, rendering, comfort, and fun remains pending until a human completes it.
+This build intentionally defers the terminal, Git, Totem, Duck, and Deadline chaos modules; Metadata Roulette; custom models, textures, sounds, GUI, cinematics, and other custom assets. Python Tools uses vanilla icons and bounded server-authoritative adapters rather than a GUI or bespoke art. It also does not claim exhaustive handling of exotic reward-custody or crash-window paths. Manual visual client UAT for encounter readability, rendering, Python-tool feel, comfort, and fun remains pending until a human completes it.
 
 ## Contributor proof contract
 
