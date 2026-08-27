@@ -48,9 +48,25 @@ public final class CampaignService {
 			ArenaValidationResult.Accepted arena,
 			ItemStack contract
 	) {
+		return start(
+				player,
+				arena,
+				contract,
+				(level, owner, progress, afterSpawn) ->
+						LectureEncounterManager.start(level, owner, progress, afterSpawn)
+		);
+	}
+
+	static ArenaValidationResult start(
+			ServerPlayer player,
+			ArenaValidationResult.Accepted arena,
+			ItemStack contract,
+			RuntimeStarter runtimeStarter
+	) {
 		java.util.Objects.requireNonNull(player, "player");
 		java.util.Objects.requireNonNull(arena, "arena");
 		java.util.Objects.requireNonNull(contract, "contract");
+		java.util.Objects.requireNonNull(runtimeStarter, "runtimeStarter");
 		if (!(player.level() instanceof ServerLevel level)
 				|| !level.getServer().isSameThread()
 				|| player.isSpectator()
@@ -60,16 +76,17 @@ public final class CampaignService {
 		}
 
 		CampaignSavedData data = CampaignSavedData.get(level);
+		UUID ownerUuid = player.getUUID();
+		Optional<PlayerCampaignState> previousState = data.player(ownerUuid);
 		int nextAttempt;
 		try {
-			nextAttempt = data.player(player.getUUID())
+			nextAttempt = previousState
 					.map(state -> Math.addExact(state.attemptCount(), 1))
 					.orElse(1);
 		}
 		catch (ArithmeticException exception) {
 			return rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
-		UUID ownerUuid = player.getUUID();
 		var layout = arena.layout();
 		var deskPos = layout.deskPos();
 		var deskFacing = layout.forward();
@@ -90,11 +107,11 @@ public final class CampaignService {
 		boolean[] runtimeStarted = {false};
 		CampaignTransition transition = apply(data, start, effect -> {
 			if (effect instanceof CampaignTransition.EffectIntent.StartEncounter) {
-				player.sendSystemMessage(Component.translatable(CONTRACT_SIGNED_KEY));
-				runtimeStarted[0] = LectureEncounterManager.start(
+				runtimeStarted[0] = runtimeStarter.start(
 						level,
 						player,
-						data.player(ownerUuid).orElseThrow()
+						data.player(ownerUuid).orElseThrow(),
+						() -> player.sendSystemMessage(Component.translatable(CONTRACT_SIGNED_KEY))
 				);
 			}
 		});
@@ -104,19 +121,22 @@ public final class CampaignService {
 					: ArenaRejection.SPAWN_CAPACITY);
 		}
 		if (!runtimeStarted[0]) {
-			apply(
-					data,
-					new CampaignEvent.Terminal(ownerUuid, encounterUuid, CampaignEvent.TerminalReason.ABORT),
-					effect -> {
-						if (effect instanceof CampaignTransition.EffectIntent.CleanupEncounter cleanup) {
-							LectureEncounterManager.cleanup(cleanup.encounterUuid());
-						}
-					}
-			);
+			data.restoreAfterFailedStart(ownerUuid, transition.nextState().orElseThrow(), previousState);
+			LectureEncounterManager.cleanup(encounterUuid);
 			return rejected(ArenaRejection.SPAWN_CAPACITY);
 		}
 		contract.shrink(1);
 		return arena;
+	}
+
+	@FunctionalInterface
+	interface RuntimeStarter {
+		boolean start(
+				ServerLevel level,
+				ServerPlayer player,
+				CampaignSavedData.PlayerProgress progress,
+				Runnable afterSpawn
+		);
 	}
 
 	/**

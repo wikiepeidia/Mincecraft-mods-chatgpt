@@ -334,6 +334,28 @@ public final class CampaignSavedData extends SavedData {
 		return true;
 	}
 
+	/** Restores the exact pre-start record only while the failed START is still current. */
+	synchronized boolean restoreAfterFailedStart(
+			UUID ownerUuid,
+			PlayerCampaignState failedStartState,
+			Optional<PlayerCampaignState> previousState
+	) {
+		Objects.requireNonNull(ownerUuid, "ownerUuid");
+		Objects.requireNonNull(failedStartState, "failedStartState");
+		Objects.requireNonNull(previousState, "previousState");
+		if (!isWritableSchema() || !Objects.equals(players.get(ownerUuid), failedStartState)) {
+			return false;
+		}
+		if (previousState.isPresent()) {
+			players.put(ownerUuid, previousState.orElseThrow());
+		}
+		else {
+			players.remove(ownerUuid);
+		}
+		setDirty();
+		return true;
+	}
+
 	synchronized boolean hasActiveDeskForOther(
 			UUID ownerUuid,
 			String deskDimension,

@@ -59,6 +59,22 @@ public final class LectureEncounterManager {
 			ServerPlayer owner,
 			CampaignSavedData.PlayerProgress progress
 	) {
+		return start(level, owner, progress, () -> {
+		});
+	}
+
+	/**
+	 * Starts the runtime and invokes {@code afterSpawn} only after the Professor spawn is committed,
+	 * but before presentation construction emits its initial messages. This lets the Contract
+	 * transaction acknowledge a successful spawn without ever acknowledging a rejected spawn.
+	 */
+	public static synchronized boolean start(
+			ServerLevel level,
+			ServerPlayer owner,
+			CampaignSavedData.PlayerProgress progress,
+			Runnable afterSpawn
+	) {
+		java.util.Objects.requireNonNull(afterSpawn, "afterSpawn");
 		UUID encounterUuid = progress.encounterUuid();
 		if (encounterUuid == null
 				|| progress.professorUuid() == null
@@ -84,6 +100,7 @@ public final class LectureEncounterManager {
 			professor.discard();
 			return false;
 		}
+		afterSpawn.run();
 
 		LectureStateMachine.Output initial = LectureStateMachine.start(
 				encounterUuid,

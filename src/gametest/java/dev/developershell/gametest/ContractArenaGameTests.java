@@ -4,9 +4,14 @@ import com.mojang.authlib.GameProfile;
 import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.campaign.CampaignServiceGameTestAccess;
 import dev.developershell.campaign.PlayerCampaignState;
+import dev.developershell.lecture.ArenaRejection;
+import dev.developershell.lecture.ArenaValidationResult;
+import dev.developershell.lecture.ArenaValidator;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureGeometry;
+import dev.developershell.lecture.RetakeService;
 import dev.developershell.registry.ModEntities;
 import dev.developershell.registry.ModItems;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -39,7 +44,9 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.illager.Vindicator;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
@@ -66,6 +73,7 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 	private static final UUID MAGMA_OWNER = owner(610);
 	private static final UUID FIRE_OWNER = owner(611);
 	private static final UUID FIRE_RETRY_OWNER = owner(612);
+	private static final UUID FAILED_RUNTIME_OWNER = owner(613);
 
 	@GameTest(maxTicks = 80, padding = 24)
 	public void wrongTargetRejectionIsAtomic(GameTestHelper context) {
@@ -329,6 +337,52 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 		}
 	}
 
+	@GameTest(maxTicks = 80, padding = 24)
+	public void failedRuntimeStartRollsBackWithoutFalseSuccessOrHiddenRetake(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		WorldEdits edits = new WorldEdits(level);
+		ConnectedPlayer connection = null;
+		try {
+			buildValidArena(edits, desk, FACING);
+			connection = createSurvivalPlayer(context, level, FAILED_RUNTIME_OWNER, "arena-runtime-failure");
+			RecordingServerPlayer player = connection.player();
+			ItemStack contract = contract(player, 1);
+			ArenaValidationResult validation = ArenaValidator.validate(level, player, desk, FACING);
+			context.assertTrue(validation instanceof ArenaValidationResult.Accepted,
+					"runtime-failure fixture must pass arena validation first");
+			int runtimeCountBefore = LectureEncounterManager.activeRuntimeCount();
+			player.clearRecordedSystemMessages();
+
+			ArenaValidationResult result = CampaignServiceGameTestAccess.startWithRuntimeFailure(
+					player,
+					(ArenaValidationResult.Accepted) validation,
+					contract
+			);
+			context.assertTrue(result instanceof ArenaValidationResult.Rejected,
+					"false runtime starter returns a rejection");
+			context.assertValueEqual(((ArenaValidationResult.Rejected) result).reason(),
+					ArenaRejection.SPAWN_CAPACITY, "false runtime starter uses the spawn rejection family");
+			context.assertTrue(CampaignSavedData.get(level).player(FAILED_RUNTIME_OWNER).isEmpty(),
+					"failed initial runtime restores the exact absent pre-start state");
+			context.assertValueEqual(contract.getCount(), 1, "failed runtime leaves the Contract unconsumed");
+			context.assertTrue(player.recordedSystemMessageKeys().isEmpty(),
+					"failed runtime emits no signed-success message");
+			context.assertValueEqual(LectureEncounterManager.activeRuntimeCount(), runtimeCountBefore,
+					"failed runtime leaves the bounded runtime registry unchanged");
+			context.assertValueEqual(professors(level), 0, "failed runtime leaves no Professor");
+			context.assertValueEqual(countItem(player, ModItems.RETAKE_FORM), 0,
+					"rollback requires no inventory Retake Form");
+			context.assertValueEqual(boundRetakeFallbacks(level, FAILED_RUNTIME_OWNER), 0,
+					"rollback leaves no hidden or fallback Retake Form");
+			context.succeed();
+		}
+		finally {
+			close(connection);
+			edits.restore();
+		}
+	}
+
 	@GameTest(maxTicks = 100, padding = 24)
 	public void activeEncounterRejectionIsAtomic(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
@@ -497,6 +551,31 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 
 	private static int professors(ServerLevel level) {
 		return level.getEntities(ModEntities.PROFESSOR, entity -> true).size();
+	}
+
+	private static int countItem(ServerPlayer player, Item item) {
+		int count = 0;
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			if (stack.getItem() == item) {
+				count += stack.getCount();
+			}
+		}
+		return count;
+	}
+
+	private static int boundRetakeFallbacks(ServerLevel level, UUID ownerUuid) {
+		return level.getEntitiesOfClass(
+				ItemEntity.class,
+				new net.minecraft.world.phys.AABB(
+						-30_000_000, level.getMinY(), -30_000_000,
+						30_000_000, level.getMaxY(), 30_000_000
+				),
+				entity -> RetakeService.formKey(entity.getItem())
+						.map(PlayerCampaignState.RetakeKey::ownerUuid)
+						.filter(ownerUuid::equals)
+						.isPresent()
+		).size();
 	}
 
 	private static void abort(ServerLevel level, UUID ownerUuid, UUID encounterUuid) {
