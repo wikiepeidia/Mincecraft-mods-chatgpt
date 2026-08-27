@@ -40,9 +40,8 @@ public final class DevelopersHell implements ModInitializer {
 		);
 		for (ConfigIssue issue : loadResult.issues()) {
 			LOGGER.warn(
-					"Developer's Hell config issue path={} rejected={} expected={}",
+					"Developer's Hell config issue path={} expected={}",
 					issue.path(),
-					issue.rejectedValue(),
 					issue.expected()
 			);
 		}

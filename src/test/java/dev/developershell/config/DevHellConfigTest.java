@@ -154,7 +154,7 @@ final class DevHellConfigTest {
 				validDocument().replace("\"professorHealth\": 120", "\"professorHealth\": 80")
 		);
 		assertEquals(DevHellConfigLoader.SourceStatus.INVALID_DEFAULTED, impossible.sourceStatus());
-		assertIssue(impossible, "$.lecture.professorHealth", "80", "81..400");
+		assertIssue(impossible, "$.lecture.professorHealth", "<below-minimum>", "81..400");
 
 		DevHellConfigLoader.LoadResult minimumPlayable = loadDocument(
 				validDocument().replace("\"professorHealth\": 120", "\"professorHealth\": 81")
@@ -439,6 +439,40 @@ final class DevHellConfigTest {
 		assertTrue(issue.rejectedValue().length() <= ConfigIssue.MAX_FIELD_LENGTH);
 		assertTrue(issue.expected().length() <= ConfigIssue.MAX_FIELD_LENGTH);
 		assertPublicSafe(List.of(issue));
+	}
+
+	@Test
+	void arbitrarySecretScalarsAndPersonalPropertyNamesUseOnlyTypedSentinels() {
+		for (String secret : List.of(
+				"sk-proj-AbCd1234",
+				"ghp_A1b2C3d4E5f6",
+				"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature",
+				"A1".repeat(64),
+				"CorrectHorseBatteryStaple2026"
+		)) {
+			DevHellConfigLoader.LoadResult result = loadDocument(
+					validDocument().replace("\"difficulty\": \"standard\"", "\"difficulty\": \"" + secret + "\"")
+			);
+			assertIssue(result, "$.difficulty", "<invalid-enum>", "story|relaxed|standard|intense");
+			assertFalse(result.issues().toString().contains(secret), () -> "issue leaked secret: " + result.issues());
+		}
+
+		String personalName = "NguyenVanAn";
+		DevHellConfigLoader.LoadResult unknownName = loadDocument(
+				validDocument().replace(
+						"\"campaignEnabled\": true,",
+						"\"campaignEnabled\": true,\n"
+								+ "  \"" + personalName + "\": true,\n"
+								+ "  \"" + personalName + "\": false,"
+				)
+		);
+		assertIssue(unknownName, "$", "<unknown-property>", "known schema-v1 property");
+		assertIssue(unknownName, "$", "<duplicate>", "property appears exactly once");
+		assertFalse(unknownName.issues().toString().contains(personalName));
+
+		ConfigIssue direct = new ConfigIssue("$." + personalName, "Password123456", "known property");
+		assertEquals("$", direct.path());
+		assertEquals("<redacted>", direct.rejectedValue());
 	}
 
 	private static DevHellConfigLoader.LoadResult loadDocument(String document) {

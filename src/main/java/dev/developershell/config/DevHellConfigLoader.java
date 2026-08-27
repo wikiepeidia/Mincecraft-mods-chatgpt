@@ -351,10 +351,12 @@ public final class DevHellConfigLoader {
 			return null;
 		}
 		String path = childPath(parentPath, name);
-		if (!(node instanceof ScalarNode scalar)
-				|| scalar.type != ScalarType.NUMBER
-				|| !scalar.value.matches("-?(?:0|[1-9][0-9]*)")) {
+		if (!(node instanceof ScalarNode scalar) || scalar.type != ScalarType.NUMBER) {
 			issues.add(new ConfigIssue(path, describe(node), expected));
+			return null;
+		}
+		if (!scalar.value.matches("-?(?:0|[1-9][0-9]*)")) {
+			issues.add(new ConfigIssue(path, "<invalid-number>", expected));
 			return null;
 		}
 		long value;
@@ -362,11 +364,15 @@ public final class DevHellConfigLoader {
 			value = Long.parseLong(scalar.value);
 		}
 		catch (NumberFormatException exception) {
-			issues.add(new ConfigIssue(path, scalar.value, expected));
+			issues.add(new ConfigIssue(path, "<invalid-number>", expected));
 			return null;
 		}
-		if (value < minimum || value > maximum) {
-			issues.add(new ConfigIssue(path, scalar.value, expected));
+		if (value < minimum) {
+			issues.add(new ConfigIssue(path, "<below-minimum>", expected));
+			return null;
+		}
+		if (value > maximum) {
+			issues.add(new ConfigIssue(path, "<above-maximum>", expected));
 			return null;
 		}
 		return (int) value;
@@ -391,7 +397,7 @@ public final class DevHellConfigLoader {
 		}
 		T parsed = parser.apply(scalar.value);
 		if (parsed == null) {
-			issues.add(new ConfigIssue(path, scalar.value, expected));
+			issues.add(new ConfigIssue(path, "<invalid-enum>", expected));
 		}
 		return parsed;
 	}
@@ -420,7 +426,7 @@ public final class DevHellConfigLoader {
 		Set<String> expectedSet = Set.copyOf(expectedNames);
 		for (String name : object.values.keySet()) {
 			if (!expectedSet.contains(name)) {
-				issues.add(new ConfigIssue(path, name, expected));
+				issues.add(new ConfigIssue(path, "<unknown-property>", expected));
 			}
 		}
 	}
@@ -476,7 +482,11 @@ public final class DevHellConfigLoader {
 
 	private static String describe(JsonNode node) {
 		if (node instanceof ScalarNode scalar) {
-			return scalar.value;
+			return switch (scalar.type) {
+				case STRING -> "<string>";
+				case NUMBER -> "<number>";
+				case BOOLEAN -> "<boolean>";
+			};
 		}
 		if (node instanceof ObjectNode) {
 			return "<object>";
