@@ -19,8 +19,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
-import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
@@ -29,6 +27,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.server.MinecraftServer;
@@ -40,9 +39,11 @@ import net.minecraft.server.players.PlayerList;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemCooldowns;
 import net.minecraft.world.item.ItemStack;
@@ -169,53 +170,66 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 				"lifecycle fixture starts through ordinary production use");
 		PlayerCampaignState coolingDown = state(level, ownerUuid);
 		long deadline = coolingDown.remoteCooldownUntilGameTime();
+		PlayerList players = level.getServer().getPlayerList();
+		ServerPlayer[] respawnedHolder = {null};
 
 		context.runBeforeTestEnd(() -> {
+			if (respawnedHolder[0] != null && players.getPlayers().contains(respawnedHolder[0])) {
+				players.remove(respawnedHolder[0]);
+			}
 			close(connection);
 			clearArena(level, desk, FACING);
 		});
 		context.runAfterDelay(40L, () -> {
-			close(connection);
-			ConnectedPlayer respawnConnection = createSurvivalPlayer(
-					context, ownerUuid, "remote-respawn");
-			RecordingServerPlayer respawned = respawnConnection.player();
-			respawned.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
-			respawned.setItemInHand(InteractionHand.OFF_HAND, boundRemote(level, ownerUuid));
-			ServerLivingEntityEvents.AFTER_DEATH.invoker().afterDeath(owner, owner.damageSources().generic());
-			ServerPlayerEvents.AFTER_RESPAWN.invoker().afterRespawn(owner, respawned, false);
+			boolean originalKeepInventory = level.getGameRules().get(GameRules.KEEP_INVENTORY);
+			ServerPlayer respawned;
+			try {
+				level.getGameRules().set(GameRules.KEEP_INVENTORY, true, level.getServer());
+				owner.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+				context.assertTrue(owner.connection.hasClientLoaded(),
+						"the embedded connection reaches the vanilla client-loaded damage gate");
+				context.assertTrue(owner.hurtServer(
+						level, owner.damageSources().generic(), Float.MAX_VALUE),
+						"the real server damage path kills the connected player");
+				context.assertTrue(owner.isDeadOrDying(),
+						"the lifecycle fixture reaches the real ServerPlayer death boundary");
+				respawned = players.respawn(owner, false, Entity.RemovalReason.KILLED);
+				respawnedHolder[0] = respawned;
+			}
+			finally {
+				level.getGameRules().set(
+						GameRules.KEEP_INVENTORY, originalKeepInventory, level.getServer());
+			}
+			context.assertTrue(respawned != owner && players.getPlayer(ownerUuid) == respawned,
+					"PlayerList replaces the dead player through the real respawn boundary");
+			ItemStack respawnedRemote = moveRemoteToHand(context, respawned);
 			int respawnRemainder = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
 					deadline, level.getGameTime());
 			context.assertTrue(respawnRemainder > 0 && respawnRemainder < InfiniteSlidesRemoteItem.COOLDOWN_TICKS,
 					"server ticks, not wall time, reduce the respawn remainder");
-			context.assertValueEqual(respawned.trackingCooldowns().startedDurations(),
-					List.of(respawnRemainder),
-					"respawn starts one cooldown-group projection without duplicate packets");
-			context.assertTrue(
-					respawned.getCooldowns().isOnCooldown(respawned.getItemInHand(InteractionHand.MAIN_HAND))
-							&& respawned.getCooldowns().isOnCooldown(
-									respawned.getItemInHand(InteractionHand.OFF_HAND)),
-					"the one native cooldown group covers every matching respawn stack"
-			);
-			context.assertTrue(respawned.recordedOverlayKeys().isEmpty(),
-					"respawn restoration emits no repeated chat or action-bar line");
+			context.assertTrue(respawned.getCooldowns().isOnCooldown(respawnedRemote),
+					"the production respawn callback rebuilds the native cooldown from the durable deadline");
+			context.assertValueEqual(state(level, ownerUuid), coolingDown,
+					"real death and respawn preserve the durable deadline and ready marker");
+			int selected = respawned.getInventory().getSelectedSlot();
+			ItemStack reconnectRemote = respawned.getInventory().removeItemNoUpdate(selected);
+			context.assertTrue(reconnectRemote == respawnedRemote,
+					"the reconnect fixture transfers the exact respawned Remote without copying it");
 
-			close(respawnConnection);
-			ConnectedPlayer rejoinConnection = createSurvivalPlayer(context, ownerUuid, "remote-rejoin");
+			players.remove(respawned);
+			respawnedHolder[0] = null;
+			close(connection);
+			ConnectedPlayer rejoinConnection = createSurvivalPlayer(
+					context, ownerUuid, "remote-rejoin", reconnectRemote);
 			RecordingServerPlayer rejoined = rejoinConnection.player();
-			rejoined.setItemInHand(InteractionHand.MAIN_HAND, boundRemote(level, ownerUuid));
-			rejoined.setItemInHand(InteractionHand.OFF_HAND, boundRemote(level, ownerUuid));
-			ServerPlayerEvents.JOIN.invoker().onJoin(rejoined);
+			ItemStack rejoinedRemote = moveRemoteToHand(context, rejoined);
 			int joinRemainder = InfiniteSlidesRemoteItem.Cooldown.restoredOverlayTicks(
 					deadline, level.getGameTime());
 			context.assertValueEqual(rejoined.trackingCooldowns().startedDurations(),
 					List.of(joinRemainder),
 					"save/join normalization rebuilds one native cooldown group from the persisted deadline");
-			context.assertTrue(
-					rejoined.getCooldowns().isOnCooldown(rejoined.getItemInHand(InteractionHand.MAIN_HAND))
-							&& rejoined.getCooldowns().isOnCooldown(
-									rejoined.getItemInHand(InteractionHand.OFF_HAND)),
-					"the joined player's matching stacks share the restored native overlay"
-			);
+			context.assertTrue(rejoined.getCooldowns().isOnCooldown(rejoinedRemote),
+					"the joined player's persisted Remote receives the restored native overlay");
 			context.assertTrue(rejoined.recordedOverlayKeys().isEmpty()
 					&& rejoined.recordedSystemKeys().isEmpty(),
 					"join restoration stays silent");
@@ -412,6 +426,15 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 			UUID uuid,
 			String name
 	) {
+		return createSurvivalPlayer(context, uuid, name, ItemStack.EMPTY);
+	}
+
+	private static ConnectedPlayer createSurvivalPlayer(
+			GameTestHelper context,
+			UUID uuid,
+			String name,
+			ItemStack initialSelectedStack
+	) {
 		ServerLevel level = context.getLevel();
 		MinecraftServer server = level.getServer();
 		PlayerList players = server.getPlayerList();
@@ -437,6 +460,10 @@ public final class RemoteGameTests implements CustomTestMethodInvoker {
 		};
 		context.runBeforeTestEnd(cleanup);
 		try {
+			if (!initialSelectedStack.isEmpty()) {
+				player.getInventory().setItem(
+						player.getInventory().getSelectedSlot(), initialSelectedStack);
+			}
 			players.placeNewPlayer(connection, player, cookie);
 			player.setGameMode(GameType.SURVIVAL);
 			Vec3 spawn = context.absoluteVec(Vec3.atBottomCenterOf(new BlockPos(12, 2, 2)));

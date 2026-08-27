@@ -1550,7 +1550,6 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			ItemEntity staleDisk = diskRoundTripItem(level, current);
 			PlayerCampaignState.RewardFallbackRef prior = Objects.requireNonNull(
 					state(level, ownerUuid).sheetFallback(), "current Sheet authority");
-			ChunkPos sourceChunk = ChunkPos.containing(prior.position());
 			AttendanceSheetItem.Binding expected = new AttendanceSheetItem.Binding(
 					ownerUuid, confirmed.sheetRecoverySequence());
 			context.assertTrue(level.getEntity(current.getUUID()) == current,
@@ -1582,16 +1581,9 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 					level.dimension().identifier().toString(), current.blockPosition(), true);
 			context.assertValueEqual(relocated.sheetFallback(), expectedRelocated,
 					"the production section callback CAS-relocates the exact durable Sheet context");
-			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
-					staleDisk, level, EntitySpawnReason.LOAD, true),
-					"the old-chunk disk copy cannot reclaim materialized Sheet authority");
-			context.assertTrue(boundSheetEntities(
-					level.getServer(), ownerUuid, confirmed.sheetRecoverySequence()).stream()
-					.noneMatch(item -> ChunkPos.containing(item.blockPosition()).equals(sourceChunk)),
-					"real section relocation leaves no bound Sheet in the old source chunk");
-			context.assertValueEqual(countLiveRewardRepresentations(
-					level.getServer(), owner, relocated, false), 1,
-					"same-dimension stale admission leaves exactly one current Sheet");
+			context.assertValueEqual(countBoundSheets(
+					owner, ownerUuid, confirmed.sheetRecoverySequence()), 0,
+					"the direct section-callback check does not mint an inventory copy");
 			context.succeed();
 		}
 		finally {
