@@ -63,6 +63,9 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 	private static final UUID ACTIVE_OWNER = owner(607);
 	private static final UUID SPAWN_OWNER = owner(608);
 	private static final UUID VALID_OWNER = owner(609);
+	private static final UUID MAGMA_OWNER = owner(610);
+	private static final UUID FIRE_OWNER = owner(611);
+	private static final UUID FIRE_RETRY_OWNER = owner(612);
 
 	@GameTest(maxTicks = 80, padding = 24)
 	public void wrongTargetRejectionIsAtomic(GameTestHelper context) {
@@ -181,6 +184,27 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 	}
 
 	@GameTest(maxTicks = 80, padding = 24)
+	public void magmaFloorRejectionIsAtomic(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		WorldEdits edits = new WorldEdits(level);
+		ConnectedPlayer connection = null;
+		try {
+			buildValidArena(edits, desk, FACING);
+			edits.set(LectureGeometry.layout(desk, FACING).floorAt(17, 8), Blocks.MAGMA_BLOCK.defaultBlockState());
+			connection = createSurvivalPlayer(context, level, MAGMA_OWNER, "arena-magma");
+			RecordingServerPlayer player = connection.player();
+			assertAtomicRejection(context, level, player, contract(player, 1), desk, edits, InteractionResult.FAIL,
+					"message.developers_hell.contract.rejected.floor");
+			context.succeed();
+		}
+		finally {
+			close(connection);
+			edits.restore();
+		}
+	}
+
+	@GameTest(maxTicks = 80, padding = 24)
 	public void insufficientHeadroomRejectionIsAtomic(GameTestHelper context) {
 		ServerLevel level = context.getLevel();
 		BlockPos desk = context.absolutePos(RELATIVE_DESK);
@@ -190,6 +214,27 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 			buildValidArena(edits, desk, FACING);
 			edits.set(LectureGeometry.layout(desk, FACING).floorAt(2, -7).above(4), Blocks.STONE.defaultBlockState());
 			connection = createSurvivalPlayer(context, level, HEADROOM_OWNER, "arena-headroom");
+			RecordingServerPlayer player = connection.player();
+			assertAtomicRejection(context, level, player, contract(player, 1), desk, edits, InteractionResult.FAIL,
+					"message.developers_hell.contract.rejected.headroom");
+			context.succeed();
+		}
+		finally {
+			close(connection);
+			edits.restore();
+		}
+	}
+
+	@GameTest(maxTicks = 80, padding = 24)
+	public void fireOccupancyRejectionIsAtomic(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		WorldEdits edits = new WorldEdits(level);
+		ConnectedPlayer connection = null;
+		try {
+			buildValidArena(edits, desk, FACING);
+			edits.set(LectureGeometry.layout(desk, FACING).floorAt(2, -7).above(), Blocks.FIRE.defaultBlockState());
+			connection = createSurvivalPlayer(context, level, FIRE_OWNER, "arena-fire");
 			RecordingServerPlayer player = connection.player();
 			assertAtomicRejection(context, level, player, contract(player, 1), desk, edits, InteractionResult.FAIL,
 					"message.developers_hell.contract.rejected.headroom");
@@ -215,6 +260,35 @@ public final class ContractArenaGameTests implements CustomTestMethodInvoker {
 				edits.set(candidate.above(), Blocks.AIR.defaultBlockState());
 			}
 			connection = createSurvivalPlayer(context, level, RETRY_OWNER, "arena-retry");
+			RecordingServerPlayer player = connection.player();
+			assertAtomicRejection(context, level, player, contract(player, 1), desk, edits, InteractionResult.FAIL,
+					"message.developers_hell.contract.rejected.retry");
+			context.succeed();
+		}
+		finally {
+			close(connection);
+			edits.restore();
+		}
+	}
+
+	@GameTest(maxTicks = 80, padding = 24)
+	public void fireRetryRejectionIsAtomic(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		WorldEdits edits = new WorldEdits(level);
+		ConnectedPlayer connection = null;
+		try {
+			buildValidArena(edits, desk, FACING);
+			LectureGeometry.Layout layout = LectureGeometry.layout(desk, FACING);
+			for (BlockPos candidate : layout.retryCandidates()) {
+				edits.set(candidate.below(), Blocks.AIR.defaultBlockState());
+				edits.set(candidate, Blocks.AIR.defaultBlockState());
+				edits.set(candidate.above(), Blocks.AIR.defaultBlockState());
+			}
+			BlockPos hazardousRetry = layout.retryCandidates().getFirst();
+			edits.set(hazardousRetry.below(), Blocks.STONE.defaultBlockState());
+			edits.set(hazardousRetry, Blocks.FIRE.defaultBlockState());
+			connection = createSurvivalPlayer(context, level, FIRE_RETRY_OWNER, "arena-fire-retry");
 			RecordingServerPlayer player = connection.player();
 			assertAtomicRejection(context, level, player, contract(player, 1), desk, edits, InteractionResult.FAIL,
 					"message.developers_hell.contract.rejected.retry");

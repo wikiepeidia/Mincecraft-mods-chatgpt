@@ -9,10 +9,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LecternBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -70,13 +72,13 @@ public final class ArenaValidator {
 		}
 
 		for (BlockPos floor : layout.boundaryFloorPositions()) {
-			if (!world.hasSolidSupport(floor)) {
+			if (!world.isSafeStandingSurface(floor)) {
 				return rejected(ArenaRejection.NON_SOLID_FLOOR);
 			}
 		}
 		for (BlockPos floor : layout.interiorFloorPositions()) {
 			for (int height = 1; height <= 4; height++) {
-				if (!world.isPassableAndNonHazardous(floor.above(height))) {
+				if (!world.isSafeOccupancy(floor.above(height))) {
 					return rejected(ArenaRejection.INSUFFICIENT_HEADROOM);
 				}
 			}
@@ -89,9 +91,9 @@ public final class ArenaValidator {
 			if (world.isLoadedAndInsideBorder(support)
 					&& world.isLoadedAndInsideBorder(candidate)
 					&& world.isLoadedAndInsideBorder(upperBody)
-					&& world.hasSolidSupport(support)
-					&& world.isPassableAndNonHazardous(candidate)
-					&& world.isPassableAndNonHazardous(upperBody)) {
+					&& world.isSafeStandingSurface(support)
+					&& world.isSafeOccupancy(candidate)
+					&& world.isSafeOccupancy(upperBody)) {
 				retryPos = candidate;
 				break;
 			}
@@ -119,9 +121,9 @@ public final class ArenaValidator {
 
 		boolean isLoadedAndInsideBorder(BlockPos pos);
 
-		boolean hasSolidSupport(BlockPos pos);
+		boolean isSafeStandingSurface(BlockPos pos);
 
-		boolean isPassableAndNonHazardous(BlockPos pos);
+		boolean isSafeOccupancy(BlockPos pos);
 
 		boolean hasActiveEncounter(UUID ownerUuid, BlockPos deskPos);
 
@@ -153,14 +155,17 @@ public final class ArenaValidator {
 		}
 
 		@Override
-		public boolean hasSolidSupport(BlockPos pos) {
-			return level.getBlockState(pos).isFaceSturdy(level, pos, Direction.UP);
+		public boolean isSafeStandingSurface(BlockPos pos) {
+			BlockState state = level.getBlockState(pos);
+			return state.isFaceSturdy(level, pos, Direction.UP) && !isHarmfulOrTrapping(state);
 		}
 
 		@Override
-		public boolean isPassableAndNonHazardous(BlockPos pos) {
-			return level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()
-					&& level.getFluidState(pos).isEmpty();
+		public boolean isSafeOccupancy(BlockPos pos) {
+			BlockState state = level.getBlockState(pos);
+			return state.getCollisionShape(level, pos).isEmpty()
+					&& level.getFluidState(pos).isEmpty()
+					&& !isHarmfulOrTrapping(state);
 		}
 
 		@Override
@@ -192,6 +197,21 @@ public final class ArenaValidator {
 			return LectureEncounterManager.activeRuntimeSnapshots(level.getServer()).stream()
 					.noneMatch(runtime -> runtime.level() == level && runtime.ownerUuid().equals(ownerUuid));
 		}
+	}
+
+	private static boolean isHarmfulOrTrapping(BlockState state) {
+		if (state.is(BlockTags.FIRE)
+				|| state.is(Blocks.MAGMA_BLOCK)
+				|| state.is(Blocks.CACTUS)
+				|| state.is(Blocks.SWEET_BERRY_BUSH)
+				|| state.is(Blocks.WITHER_ROSE)
+				|| state.is(Blocks.POWDER_SNOW)
+				|| state.is(Blocks.COBWEB)
+				|| state.is(Blocks.POINTED_DRIPSTONE)) {
+			return true;
+		}
+		return state.is(BlockTags.CAMPFIRES)
+				&& state.getValueOrElse(BlockStateProperties.LIT, false);
 	}
 
 	private ArenaValidator() {
