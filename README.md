@@ -16,10 +16,10 @@ Install Fabric for Minecraft `26.2`, place Fabric API and the one ordinary mod J
 
 ```text
 dist/developers-hell-0.1.0.jar
-SHA-256: cd114cab56f6d697aaa0400373dc87b709b778c8952e753685dd815953e494a0
+SHA-256: 768723bb534b5e35553a9b714f23c416c838b3688791a552cdf0bc91fdebf423
 ```
 
-Do not substitute a development, sources, test, or separately rebuilt JAR. The current Phase 2 verifier built from clean source commit `494ccf0773611c1e8061b64eefdae9e11aa45f12` (tree `4267ce1eb009444b4a039aebfe53017267e0b669`), inspected the ordinary build JAR, exercised the real dedicated-server stopping callback, and atomically promoted the JAR/evidence pair only after every automated gate passed. The earlier Phase 1 clean-checkout online/offline proof remains historical foundation evidence for hash `8d3006…ea5c8`; it is not a client-UAT claim for the current Phase 2 hash.
+Do not substitute a development, sources, test, or separately rebuilt JAR. The current Phase 2 verifier built from clean source commit `f68a8a404c5e1318c2c860cff08e03951b715b4b` (tree `3400035f77fd13586643450284c87d1aeca6054d`), inspected the ordinary build JAR, exercised the real dedicated-server stopping callback, and atomically promoted the JAR/evidence pair only after every automated gate passed. The earlier Phase 1 clean-checkout online/offline proof remains historical foundation evidence for hash `8d3006…ea5c8`; it is not a client-UAT claim for the current Phase 2 hash.
 
 Once the game files and libraries are downloaded, ordinary singleplayer play is offline. This is distinct from both Gradle's cache-only `--offline` mode and the release proof's operating-system firewall isolation:
 
@@ -39,7 +39,7 @@ No OpenAI or ChatGPT API, account, subscription, network service, telemetry, ana
 
 The session reads one complete strict local file at `config/developers-hell.json`. On first run it attempts to write the safe schema-v1 template. Missing, malformed, duplicate, unknown, symlinked, non-regular, or oversized input activates the complete immutable defaults; no partial values are applied and rejected bytes are not rewritten. `/devhell status` shows the accepted source, campaign/difficulty/accessibility values, schedules, and all eight module gates. Restart the game/server after changing the file because one validated snapshot is held for the session.
 
-Automated Phase 2 evidence is green for all nine validation IDs: 88 exact unit-test receipts, 47 exact GameTest receipts, dependency/source/archive gates, equal source/build/dist hashes, and a bounded dedicated server whose log ordered `FIRST_TICK_READY -> STOPPING_CLEANUP_COMPLETE -> Stopping server -> All dimensions are saved`. This does **not** prove visual readability, fun, audio balance, motion comfort, or model rendering. No client was launched by the verifier; seven direct-client backstops remain `PENDING` in `02-LECTURE-EVIDENCE.md`.
+Automated Phase 2 evidence is green for all nine validation IDs: 88 exact unit-test receipts, 55 exact GameTest receipts, dependency/source/archive gates, equal source/build/dist hashes, and a bounded dedicated server whose log ordered `FIRST_TICK_READY -> STOPPING_CLEANUP_COMPLETE -> Stopping server -> All dimensions are saved`. This does **not** prove visual readability, fun, audio balance, motion comfort, or model rendering. No client was launched by the verifier; seven direct-client backstops remain `PENDING` in `02-LECTURE-EVIDENCE.md`.
 
 ## Contributor proof contract
 
