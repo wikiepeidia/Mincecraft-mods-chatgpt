@@ -14,6 +14,7 @@ public sealed interface CampaignEvent permits
 		CampaignEvent.RecoverSheet,
 		CampaignEvent.ConfirmSheetProjection,
 		CampaignEvent.ConfirmRemoteProjection,
+		CampaignEvent.ResolveLegacyRemoteAbsence,
 		CampaignEvent.StartRemoteCooldown,
 		CampaignEvent.RemoteReadyNotice {
 	UUID ownerUuid();
@@ -152,6 +153,13 @@ public sealed interface CampaignEvent permits
 
 	record ConfirmRemoteProjection(UUID ownerUuid, UUID projectionUuid) implements CampaignEvent {
 		public ConfirmRemoteProjection {
+			Objects.requireNonNull(ownerUuid, "ownerUuid");
+			Objects.requireNonNull(projectionUuid, "projectionUuid");
+		}
+	}
+
+	record ResolveLegacyRemoteAbsence(UUID ownerUuid, UUID projectionUuid) implements CampaignEvent {
+		public ResolveLegacyRemoteAbsence {
 			Objects.requireNonNull(ownerUuid, "ownerUuid");
 			Objects.requireNonNull(projectionUuid, "projectionUuid");
 		}

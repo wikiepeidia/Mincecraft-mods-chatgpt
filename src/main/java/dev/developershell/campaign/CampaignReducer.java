@@ -44,6 +44,9 @@ public final class CampaignReducer {
 		if (event instanceof CampaignEvent.ConfirmRemoteProjection confirmRemote) {
 			return confirmRemoteProjection(state, confirmRemote);
 		}
+		if (event instanceof CampaignEvent.ResolveLegacyRemoteAbsence resolveLegacyRemote) {
+			return resolveLegacyRemoteAbsence(state, resolveLegacyRemote);
+		}
 		if (event instanceof CampaignEvent.StartRemoteCooldown startRemoteCooldown) {
 			return reduceRemoteCooldown(state, startRemoteCooldown);
 		}
@@ -232,7 +235,12 @@ public final class CampaignReducer {
 			return noOp(state, "stale_sheet_projection");
 		}
 		return CampaignTransition.accepted(
-				copyRewardProjectionState(state, false, state.remoteProjectionPending()),
+				copyRewardProjectionState(
+						state,
+						false,
+						state.remoteProjectionPending(),
+						state.legacyRemoteAdoptionPending()
+				),
 				"sheet_projection_confirmed"
 		);
 	}
@@ -249,8 +257,28 @@ public final class CampaignReducer {
 			return noOp(state, "stale_remote_projection");
 		}
 		return CampaignTransition.accepted(
-				copyRewardProjectionState(state, state.sheetProjectionPending(), false),
+				copyRewardProjectionState(state, state.sheetProjectionPending(), false, false),
 				"remote_projection_confirmed"
+		);
+	}
+
+	private static CampaignTransition resolveLegacyRemoteAbsence(
+			PlayerCampaignState state,
+			CampaignEvent.ResolveLegacyRemoteAbsence event
+	) {
+		if (!state.legacyRemoteAdoptionPending()
+				|| !state.remoteProjectionPending()
+				|| !event.projectionUuid().equals(state.remoteProjectionUuid())) {
+			return noOp(state, "legacy_remote_not_pending");
+		}
+		return CampaignTransition.accepted(
+				copyRewardProjectionState(
+						state,
+						state.sheetProjectionPending(),
+						true,
+						false
+				),
+				"legacy_remote_absence_resolved"
 		);
 	}
 
@@ -504,14 +532,16 @@ public final class CampaignReducer {
 				remoteReadyNoticeForDeadlineGameTime,
 				state.sheetProjectionPending(),
 				state.remoteProjectionPending(),
-				state.remoteProjectionUuid()
+				state.remoteProjectionUuid(),
+				state.legacyRemoteAdoptionPending()
 		);
 	}
 
 	private static PlayerCampaignState copyRewardProjectionState(
 			PlayerCampaignState state,
 			boolean sheetProjectionPending,
-			boolean remoteProjectionPending
+			boolean remoteProjectionPending,
+			boolean legacyRemoteAdoptionPending
 	) {
 		return new PlayerCampaignState(
 				state.ownerUuid(),
@@ -534,7 +564,8 @@ public final class CampaignReducer {
 				state.remoteReadyNoticeForDeadlineGameTime(),
 				sheetProjectionPending,
 				remoteProjectionPending,
-				state.remoteProjectionUuid()
+				state.remoteProjectionUuid(),
+				legacyRemoteAdoptionPending
 		);
 	}
 

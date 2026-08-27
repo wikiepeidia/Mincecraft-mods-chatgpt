@@ -3,6 +3,7 @@ package dev.developershell.gametest;
 import com.mojang.authlib.GameProfile;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
+import dev.developershell.campaign.CampaignServiceGameTestAccess;
 import dev.developershell.campaign.CampaignTransition;
 import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.AttendanceSheetItem;
@@ -30,6 +31,7 @@ import net.fabricmc.fabric.api.gametest.v1.CustomTestMethodInvoker;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
@@ -50,6 +52,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
@@ -65,6 +68,107 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	private static final String RECOVERED_KEY = "message.developers_hell.attendance_sheet.recovered";
 	private static final String ALREADY_KEY = "message.developers_hell.attendance_sheet.already";
 	private static final String TOOLTIP_KEY = "tooltip.developers_hell.attendance_sheet.proof";
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void legacySchemaOneDeliveredRemoteAdoptsAtMostOneOwnerHeldStack(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1691), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-legacy-delivered");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState migrated = legacyRemoteMigrationState(ownerUuid, desk, FACING, 3);
+			CampaignServiceGameTestAccess.replaceState(level, migrated);
+			owner.getInventory().setItem(0, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			owner.getInventory().setItem(1, new ItemStack(ModItems.INFINITE_SLIDES_REMOTE));
+			ItemStack partialBinding = InfiniteSlidesRemoteItem.bound(
+					new InfiniteSlidesRemoteItem.Binding(ownerUuid, UUID.randomUUID()));
+			CustomData.update(DataComponents.CUSTOM_DATA, partialBinding,
+					tag -> tag.remove("developers_hell_remote_projection"));
+			owner.getInventory().setItem(2, partialBinding);
+
+			context.assertValueEqual(
+					RewardService.reconcilePending(owner),
+					RewardService.Outcome.ALREADY_PRESENT,
+					"one owner-held schema-1 Remote is adopted before confirmation"
+			);
+			PlayerCampaignState resolved = state(level, ownerUuid);
+			context.assertFalse(resolved.remoteProjectionPending(),
+					"adopted legacy Remote confirms the durable projection");
+			context.assertFalse(resolved.legacyRemoteAdoptionPending(),
+					"adoption resolution cannot replay");
+			context.assertValueEqual(
+					countBoundRemotes(owner, ownerUuid, resolved.remoteProjectionUuid()),
+					1,
+					"at most one owner-held legacy Remote becomes authoritative"
+			);
+			context.assertTrue(InfiniteSlidesRemoteItem.isUnboundLegacy(owner.getInventory().getItem(1)),
+					"the second legacy Remote remains inert and unbound");
+			context.assertFalse(InfiniteSlidesRemoteItem.isUnboundLegacy(owner.getInventory().getItem(2)),
+					"a partial private binding fails closed instead of being adopted");
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.ALREADY_PRESENT,
+					"reconciliation replay binds and issues nothing else");
+			context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), 3,
+					"migration neither deletes nor duplicates old physical stacks");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void legacySchemaOneFailedRemotePersistsPendingThenRecoversOnce(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(owner(1692), desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			connection = createSurvivalPlayer(context, ownerUuid, "reward-legacy-failed");
+			RecordingServerPlayer owner = connection.player();
+			PlayerCampaignState migrated = legacyRemoteMigrationState(ownerUuid, desk, FACING, 4);
+			CampaignServiceGameTestAccess.replaceState(level, migrated);
+
+			context.assertValueEqual(
+					RewardServiceGameTestAccess.reconcilePending(
+							owner,
+							stack -> stack.getItem() == ModItems.INFINITE_SLIDES_REMOTE
+					),
+					RewardService.Outcome.MATERIALIZATION_FAILED,
+					"absence is persisted before a failed replacement attempt"
+			);
+			PlayerCampaignState pending = state(level, ownerUuid);
+			context.assertTrue(pending.remoteProjectionPending(),
+					"old failed delivery remains durably retryable");
+			context.assertFalse(pending.legacyRemoteAdoptionPending(),
+					"known absence transitions to ordinary pending before materialization");
+			context.assertValueEqual(pending.remoteProjectionUuid(), migrated.remoteProjectionUuid(),
+					"migration never changes the reserved projection identity");
+			context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), 0,
+					"failed retry creates no hidden Remote");
+
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.INVENTORY_ISSUED,
+					"a later reconciliation recovers the old failed grant");
+			PlayerCampaignState complete = state(level, ownerUuid);
+			context.assertFalse(complete.remoteProjectionPending(), "successful retry confirms once");
+			context.assertValueEqual(
+					countBoundRemotes(owner, ownerUuid, complete.remoteProjectionUuid()),
+					1,
+					"old failed grant produces exactly one bound Remote"
+			);
+			context.assertValueEqual(RewardService.reconcilePending(owner), RewardService.Outcome.ALREADY_PRESENT,
+					"completed migration cannot reissue");
+			context.assertValueEqual(countItem(owner, ModItems.INFINITE_SLIDES_REMOTE), 1,
+					"replay preserves exactly one Remote");
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+		}
+	}
 
 	@GameTest(maxTicks = 160, padding = 24)
 	public void realEncounterVictoryReconcilesFirstReward(GameTestHelper context) {
@@ -606,6 +710,39 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 
 	private static PlayerCampaignState state(ServerLevel level, UUID ownerUuid) {
 		return CampaignSavedData.get(level).player(ownerUuid).orElseThrow();
+	}
+
+	private static PlayerCampaignState legacyRemoteMigrationState(
+			UUID ownerUuid,
+			BlockPos desk,
+			Direction facing,
+			int attempt
+	) {
+		UUID projectionUuid = PlayerCampaignState.legacyRemoteProjectionUuid(ownerUuid, desk, attempt);
+		return new PlayerCampaignState(
+				ownerUuid,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
+				attempt,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				desk,
+				facing,
+				desk.relative(facing.getOpposite(), 2),
+				null,
+				true,
+				true,
+				false,
+				null,
+				null,
+				null,
+				0L,
+				0L,
+				0L,
+				false,
+				true,
+				projectionUuid,
+				true
+		);
 	}
 
 	private static LectureStateMachine.State combatState(GameTestHelper context, UUID encounterUuid) {

@@ -529,6 +529,65 @@ final class CampaignReducerTest {
 	}
 
 	@Test
+	void legacyRemoteAbsencePersistsNormalPendingBeforeProjectionAndCannotReplay() {
+		UUID projectionUuid = PlayerCampaignState.legacyRemoteProjectionUuid(OWNER, DESK, 4);
+		PlayerCampaignState legacy = new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
+				4,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				true,
+				true,
+				false,
+				null,
+				null,
+				null,
+				0L,
+				0L,
+				0L,
+				false,
+				true,
+				projectionUuid,
+				true
+		);
+		assertNoOp(
+				CampaignReducer.reduce(
+						Optional.of(legacy),
+						new CampaignEvent.ResolveLegacyRemoteAbsence(OWNER, STALE_ENCOUNTER)
+				),
+				legacy,
+				"legacy_remote_not_pending"
+		);
+
+		CampaignEvent.ResolveLegacyRemoteAbsence resolve =
+				new CampaignEvent.ResolveLegacyRemoteAbsence(OWNER, projectionUuid);
+		CampaignTransition resolved = CampaignReducer.reduce(Optional.of(legacy), resolve);
+		assertAccepted(resolved, "legacy_remote_absence_resolved");
+		PlayerCampaignState normalPending = resolved.nextState().orElseThrow();
+		assertTrue(normalPending.remoteProjectionPending());
+		assertFalse(normalPending.legacyRemoteAdoptionPending());
+		assertEquals(projectionUuid, normalPending.remoteProjectionUuid());
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(normalPending), resolve),
+				normalPending,
+				"legacy_remote_not_pending"
+		);
+
+		CampaignTransition confirmed = CampaignReducer.reduce(
+				Optional.of(normalPending),
+				new CampaignEvent.ConfirmRemoteProjection(OWNER, projectionUuid)
+		);
+		assertAccepted(confirmed, "remote_projection_confirmed");
+		assertFalse(confirmed.nextState().orElseThrow().remoteProjectionPending());
+		assertFalse(confirmed.nextState().orElseThrow().legacyRemoteAdoptionPending());
+	}
+
+	@Test
 	void retakeFallbackReservationAndLossAreReplaySafe() {
 		PlayerCampaignState failed = failedState(OWNER, 3, null);
 		PlayerCampaignState.RetakeKey key = failed.retakeKey().orElseThrow();

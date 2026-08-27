@@ -3,14 +3,14 @@
   "unit_suites": {
     "dev.developershell.campaign.CampaignCodecTest": [
       "serviceCommitsBeforeEffectsAndNoOpWritesNothing()",
-      "legacyPassedSaveDefaultsToMaterializedAndBackfillsStableRemoteIdentity()",
-      "schemaOneRoundTripsMaterializationReservationForReloadRecovery()",
+      "schemaOneRemoteFieldPresenceMigratesLegacyAndExplicitProjectionStates()",
+      "schemaTwoRoundTripsMaterializationReservationForReloadRecovery()",
       "recordConstructorRejectsUnreachableCrossFieldStates()",
       "futureSchemaIsVisibleReadOnlyAndRoundTripsUnknownPayload()",
       "mapKeyMismatchIsVisibleAndReadOnly()",
       "missingAndCorruptSchemaOneRemainExplicitReadOnlyAndPreserveRaw()",
       "activeReloadNormalizationPersistsOnceAndThenNoOps()",
-      "schemaOneRoundTripsPassedRewardFieldsWithStableNames()",
+      "schemaTwoRoundTripsPassedRewardFieldsWithStableNames()",
       "legacySchemaOneRetakeBackfillsOnlyMissingOptionalIdentity()"
     ],
     "dev.developershell.campaign.CampaignReducerTest": [
@@ -31,6 +31,7 @@
       "remoteCooldownAndReadyNoticeNeverShortenOrReplay()",
       "retakeServicePersistsAcceptedStartBeforePhysicalClearAndRejectsWithoutEffects()",
       "reloadNormalizationClearsOnlyMatchingActiveIntentOnce()",
+      "legacyRemoteAbsencePersistsNormalPendingBeforeProjectionAndCannotReplay()",
       "firstRewardProjectionConfirmationsAreIndependentAndReplaySafe()",
       "transitionFactoriesAreImmutableAndNoOpCannotCarryEffects()",
       "startAcceptsImplicitReadyAndRetakeExactlyOnce()"
@@ -153,6 +154,8 @@
       "developers_hell_test:reward_game_tests_direct_death_and_compatibility_victory_cannot_bypass_manager",
       "developers_hell_test:reward_game_tests_failed_both_recover_at_desk_and_lost_remote_does_not_replay",
       "developers_hell_test:reward_game_tests_full_inventory_victory_uses_owner_targeted_fallback_without_replay",
+      "developers_hell_test:reward_game_tests_legacy_schema_one_delivered_remote_adopts_at_most_one_owner_held_stack",
+      "developers_hell_test:reward_game_tests_legacy_schema_one_failed_remote_persists_pending_then_recovers_once",
       "developers_hell_test:reward_game_tests_matching_desk_recovers_only_missing_sheet_without_reward_replay",
       "developers_hell_test:reward_game_tests_real_encounter_victory_reconciles_first_reward",
       "developers_hell_test:reward_game_tests_remote_only_representation_reconciles_sheet_independently",

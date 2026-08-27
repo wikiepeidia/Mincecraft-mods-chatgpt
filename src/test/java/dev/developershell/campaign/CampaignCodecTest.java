@@ -29,7 +29,7 @@ final class CampaignCodecTest {
 	private static final BlockPos RETRY = new BlockPos(11, 72, -12);
 
 	@Test
-	void schemaOneRoundTripsPassedRewardFieldsWithStableNames() {
+	void schemaTwoRoundTripsPassedRewardFieldsWithStableNames() {
 		PlayerCampaignState state = new PlayerCampaignState(
 				OWNER,
 				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
@@ -68,6 +68,7 @@ final class CampaignCodecTest {
 		assertEquals(8_000L, encodedPlayer.get("remote_ready_notice_for_deadline_game_time").getAsLong());
 		assertTrue(encodedPlayer.get("sheet_projection_pending").getAsBoolean());
 		assertTrue(encodedPlayer.get("remote_projection_pending").getAsBoolean());
+		assertFalse(encodedPlayer.get("legacy_remote_adoption_pending").getAsBoolean());
 		assertEquals(encodeUuid(ENCOUNTER), encodedPlayer.get("remote_projection_uuid"));
 
 		CampaignSavedData decoded = decode(root);
@@ -101,6 +102,7 @@ final class CampaignCodecTest {
 				0L
 		);
 		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, state))).getAsJsonObject();
+		root.addProperty("schema", 1);
 		JsonObject encodedPlayer = root.getAsJsonArray("players").get(0).getAsJsonObject();
 		encodedPlayer.remove("retake_encounter_uuid");
 
@@ -120,7 +122,7 @@ final class CampaignCodecTest {
 	}
 
 	@Test
-	void schemaOneRoundTripsMaterializationReservationForReloadRecovery() {
+	void schemaTwoRoundTripsMaterializationReservationForReloadRecovery() {
 		PlayerCampaignState reserved = new PlayerCampaignState(
 				OWNER,
 				PlayerCampaignState.CampaignChapter.PRE_LECTURE,
@@ -247,7 +249,7 @@ final class CampaignCodecTest {
 	}
 
 	@Test
-	void legacyPassedSaveDefaultsToMaterializedAndBackfillsStableRemoteIdentity() {
+	void schemaOneRemoteFieldPresenceMigratesLegacyAndExplicitProjectionStates() {
 		PlayerCampaignState state = new PlayerCampaignState(
 				OWNER,
 				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
@@ -270,18 +272,69 @@ final class CampaignCodecTest {
 		);
 		JsonObject root = encode(CampaignSavedData.createForTesting(Map.of(OWNER, state))).getAsJsonObject();
 		JsonObject encoded = root.getAsJsonArray("players").get(0).getAsJsonObject();
+		root.addProperty("schema", 1);
 		encoded.remove("sheet_projection_pending");
 		encoded.remove("remote_projection_pending");
 		encoded.remove("remote_projection_uuid");
+		encoded.remove("legacy_remote_adoption_pending");
 
 		CampaignSavedData decoded = decode(root);
 		PlayerCampaignState migrated = decoded.player(OWNER).orElseThrow();
+		assertEquals(CampaignSavedData.SCHEMA_VERSION, decoded.schemaVersion());
+		assertTrue(decoded.isDirty());
 		assertFalse(migrated.sheetProjectionPending());
-		assertFalse(migrated.remoteProjectionPending());
+		assertTrue(migrated.remoteProjectionPending());
+		assertTrue(migrated.legacyRemoteAdoptionPending());
 		assertEquals(PlayerCampaignState.legacyRemoteProjectionUuid(OWNER, DESK, 7),
 				migrated.remoteProjectionUuid());
-		assertTrue(encode(decoded).getAsJsonObject().getAsJsonArray("players").get(0).getAsJsonObject()
-				.has("remote_projection_uuid"));
+
+		JsonObject migratedRoot = encode(decoded).getAsJsonObject();
+		assertEquals(CampaignSavedData.SCHEMA_VERSION, migratedRoot.get("schema").getAsInt());
+		assertTrue(migratedRoot.getAsJsonArray("players").get(0).getAsJsonObject()
+				.get("legacy_remote_adoption_pending").getAsBoolean());
+
+		JsonObject brokenResave = migratedRoot.deepCopy();
+		brokenResave.addProperty("schema", 1);
+		JsonObject brokenPlayer = brokenResave.getAsJsonArray("players").get(0).getAsJsonObject();
+		brokenPlayer.addProperty("remote_projection_pending", false);
+		brokenPlayer.remove("legacy_remote_adoption_pending");
+		PlayerCampaignState repaired = decode(brokenResave).player(OWNER).orElseThrow();
+		assertTrue(repaired.remoteProjectionPending());
+		assertTrue(repaired.legacyRemoteAdoptionPending());
+
+		JsonObject explicitProjection = encode(CampaignSavedData.createForTesting(Map.of(
+				OWNER,
+				new PlayerCampaignState(
+						OWNER,
+						PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+						PlayerCampaignState.LectureStatus.PASSED,
+						7,
+						PlayerCampaignState.OVERWORLD_DIMENSION,
+						DESK,
+						Direction.NORTH,
+						RETRY,
+						null,
+						true,
+						true,
+						false,
+						null,
+						null,
+						null,
+						9_000L,
+						6L,
+						8_000L,
+						false,
+						false,
+						ENCOUNTER
+				)
+		))).getAsJsonObject();
+		explicitProjection.addProperty("schema", 1);
+		explicitProjection.getAsJsonArray("players").get(0).getAsJsonObject()
+				.remove("legacy_remote_adoption_pending");
+		PlayerCampaignState explicit = decode(explicitProjection).player(OWNER).orElseThrow();
+		assertFalse(explicit.remoteProjectionPending());
+		assertFalse(explicit.legacyRemoteAdoptionPending());
+		assertEquals(ENCOUNTER, explicit.remoteProjectionUuid());
 	}
 
 	@Test
@@ -332,6 +385,30 @@ final class CampaignCodecTest {
 				0L,
 				0L,
 				0L
+		));
+		assertThrows(IllegalArgumentException.class, () -> new PlayerCampaignState(
+				OWNER,
+				PlayerCampaignState.CampaignChapter.LECTURE_PASSED,
+				PlayerCampaignState.LectureStatus.PASSED,
+				1,
+				PlayerCampaignState.OVERWORLD_DIMENSION,
+				DESK,
+				Direction.NORTH,
+				RETRY,
+				null,
+				true,
+				true,
+				false,
+				null,
+				null,
+				null,
+				0L,
+				0L,
+				0L,
+				false,
+				false,
+				ENCOUNTER,
+				true
 		));
 	}
 

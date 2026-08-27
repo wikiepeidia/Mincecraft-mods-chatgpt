@@ -1495,8 +1495,8 @@ function Invoke-SelfCheckMode {
         $commentedSource = Join-Path $receiptRoot 'CommentOnlyGameTest.java'
         [System.IO.File]::WriteAllText($commentedSource, '// @GameTest is documentation, not an execution receipt.', [System.Text.UTF8Encoding]::new($false))
         $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
-        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 86 -or $testReceipts.GameTestCount -ne 41) {
-            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 86/41 manifest drifted.'
+        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 87 -or $testReceipts.GameTestCount -ne 43) {
+            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 87/43 manifest drifted.'
         }
         $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
         $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults

@@ -384,6 +384,34 @@ public final class RewardService {
 					? ProjectionAttempt.OBSERVED
 					: ProjectionAttempt.FAILED;
 		}
+		if (state.legacyRemoteAdoptionPending()) {
+			for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+				ItemStack candidate = owner.getInventory().getItem(slot);
+				if (!InfiniteSlidesRemoteItem.isUnboundLegacy(candidate)) {
+					continue;
+				}
+				if (!InfiniteSlidesRemoteItem.bindLegacy(candidate, binding)) {
+					return ProjectionAttempt.FAILED;
+				}
+				owner.getInventory().setChanged();
+				return confirmRemoteProjection(level, binding)
+						? ProjectionAttempt.OBSERVED
+						: ProjectionAttempt.FAILED;
+			}
+
+			CampaignTransition resolved = CampaignService.apply(
+					level,
+					new CampaignEvent.ResolveLegacyRemoteAbsence(
+							state.ownerUuid(), state.remoteProjectionUuid()
+					),
+					ignored -> {
+					}
+			);
+			if (!resolved.accepted()) {
+				return ProjectionAttempt.FAILED;
+			}
+			state = resolved.nextState().orElseThrow();
+		}
 		Projection projection = materialize(
 				level,
 				owner,

@@ -91,6 +91,37 @@ public final class InfiniteSlidesRemoteItem extends Item {
 	}
 
 	/**
+	 * Identifies only the pre-schema-2 Remote shape. A partially tagged stack remains malformed
+	 * and cannot be claimed by migration.
+	 */
+	public static boolean isUnboundLegacy(ItemStack stack) {
+		Objects.requireNonNull(stack, "stack");
+		if (stack.isEmpty() || stack.getItem() != ModItems.INFINITE_SLIDES_REMOTE) {
+			return false;
+		}
+		CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+		if (customData == null || customData.isEmpty()) {
+			return true;
+		}
+		CompoundTag tag = customData.copyTag();
+		return !tag.contains(OWNER_TAG) && !tag.contains(PROJECTION_TAG);
+	}
+
+	/** Binds one owner-held legacy Remote in place while preserving unrelated components. */
+	public static boolean bindLegacy(ItemStack stack, Binding binding) {
+		Objects.requireNonNull(stack, "stack");
+		Objects.requireNonNull(binding, "binding");
+		if (!isUnboundLegacy(stack)) {
+			return false;
+		}
+		CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+			tag.store(OWNER_TAG, UUIDUtil.CODEC, binding.ownerUuid());
+			tag.store(PROJECTION_TAG, UUIDUtil.CODEC, binding.projectionUuid());
+		});
+		return InfiniteSlidesRemoteItem.binding(stack).filter(binding::equals).isPresent();
+	}
+
+	/**
 	 * Registers the pre-vanilla item callback once. Minecraft checks native cooldown before
 	 * calling {@link #use}; this callback preserves rejected-use feedback while leaving the
 	 * persisted deadline authoritative.

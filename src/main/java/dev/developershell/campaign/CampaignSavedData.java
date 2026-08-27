@@ -25,7 +25,8 @@ import net.minecraft.world.level.saveddata.SavedDataType;
 
 /** Durable, Overworld-owned state for the campaign's first lecture slice. */
 public final class CampaignSavedData extends SavedData {
-	public static final int SCHEMA_VERSION = 1;
+	public static final int SCHEMA_VERSION = 2;
+	private static final int LEGACY_SCHEMA_VERSION = 1;
 
 	private static final Codec<PlayerCampaignState.LectureStatus> STATUS_CODEC = Codec.STRING.comapFlatMap(
 			value -> decodeName("lecture status", value, PlayerCampaignState.LectureStatus::fromSerializedName),
@@ -36,7 +37,7 @@ public final class CampaignSavedData extends SavedData {
 			PlayerCampaignState.CampaignChapter::serializedName
 	);
 
-	/* MapCodec groups keep schema-v1 fields flat while avoiding RecordCodecBuilder's 16-field ceiling. */
+	/* MapCodec groups keep persisted fields flat while avoiding RecordCodecBuilder's 16-field ceiling. */
 	private static final MapCodec<IdentityFields> IDENTITY_FIELDS_CODEC = RecordCodecBuilder.mapCodec(instance ->
 			instance.group(
 					UUIDUtil.CODEC.optionalFieldOf("map_key_uuid").forGetter(IdentityFields::mapKeyUuid),
@@ -71,12 +72,14 @@ public final class CampaignSavedData extends SavedData {
 							.forGetter(DurableFields::sheetRecoverySequence),
 					Codec.LONG.optionalFieldOf("remote_ready_notice_for_deadline_game_time", 0L)
 							.forGetter(DurableFields::remoteReadyNoticeForDeadlineGameTime),
-					Codec.BOOL.optionalFieldOf("sheet_projection_pending", false)
+					Codec.BOOL.optionalFieldOf("sheet_projection_pending")
 							.forGetter(DurableFields::sheetProjectionPending),
-					Codec.BOOL.optionalFieldOf("remote_projection_pending", false)
+					Codec.BOOL.optionalFieldOf("remote_projection_pending")
 							.forGetter(DurableFields::remoteProjectionPending),
 					UUIDUtil.CODEC.optionalFieldOf("remote_projection_uuid")
-							.forGetter(DurableFields::remoteProjectionUuid)
+							.forGetter(DurableFields::remoteProjectionUuid),
+					Codec.BOOL.optionalFieldOf("legacy_remote_adoption_pending")
+							.forGetter(DurableFields::legacyRemoteAdoptionPending)
 			).apply(instance, DurableFields::new)
 	);
 
@@ -85,17 +88,16 @@ public final class CampaignSavedData extends SavedData {
 			DURABLE_FIELDS_CODEC.forGetter(RawPlayer::durable)
 	).apply(instance, RawPlayer::new));
 
-	private static final Codec<EncodedPlayer> PLAYER_CODEC = RAW_PLAYER_CODEC.comapFlatMap(
-			CampaignSavedData::decodePlayer,
-			CampaignSavedData::encodePlayer
-	);
-
-	private static final Codec<CampaignSavedData> SCHEMA_ONE_CODEC = RecordCodecBuilder.create(instance ->
+	private static final Codec<RawDocument> RAW_DOCUMENT_CODEC = RecordCodecBuilder.create(instance ->
 			instance.group(
-					Codec.intRange(SCHEMA_VERSION, SCHEMA_VERSION).fieldOf("schema")
-							.forGetter(CampaignSavedData::schemaVersion),
-					PLAYER_CODEC.listOf().fieldOf("players").forGetter(CampaignSavedData::encodedPlayers)
-			).apply(instance, CampaignSavedData::decodeSchemaOne)
+					Codec.intRange(LEGACY_SCHEMA_VERSION, SCHEMA_VERSION).fieldOf("schema")
+							.forGetter(RawDocument::schemaVersion),
+					RAW_PLAYER_CODEC.listOf().fieldOf("players").forGetter(RawDocument::players)
+			).apply(instance, RawDocument::new)
+	);
+	private static final Codec<CampaignSavedData> WRITABLE_DOCUMENT_CODEC = RAW_DOCUMENT_CODEC.comapFlatMap(
+			CampaignSavedData::decodeDocument,
+			CampaignSavedData::encodeDocument
 	);
 
 	/**
@@ -104,7 +106,7 @@ public final class CampaignSavedData extends SavedData {
 	 * fresh schema-1 object. Its original Dynamic is retained byte-for-byte at the data-model level.
 	 */
 	private static final Codec<Either<CampaignSavedData, Dynamic<?>>> ENVELOPE_CODEC = Codec.either(
-			SCHEMA_ONE_CODEC,
+			WRITABLE_DOCUMENT_CODEC,
 			Codec.PASSTHROUGH
 	);
 	private static final Codec<CampaignSavedData> CODEC = ENVELOPE_CODEC.xmap(
@@ -156,10 +158,16 @@ public final class CampaignSavedData extends SavedData {
 		);
 	}
 
-	private static CampaignSavedData decodeSchemaOne(int schemaVersion, List<EncodedPlayer> encodedPlayers) {
+	private static DataResult<CampaignSavedData> decodeDocument(RawDocument document) {
 		Map<UUID, PlayerCampaignState> players = new LinkedHashMap<>();
 		boolean valid = true;
-		for (EncodedPlayer encodedPlayer : encodedPlayers) {
+		for (RawPlayer rawPlayer : document.players()) {
+			DataResult<EncodedPlayer> decoded = decodePlayer(rawPlayer, document.schemaVersion());
+			if (decoded.error().isPresent()) {
+				String message = decoded.error().orElseThrow().message();
+				return DataResult.error(() -> message);
+			}
+			EncodedPlayer encodedPlayer = decoded.result().orElseThrow();
 			UUID mapKeyUuid = encodedPlayer.mapKeyUuid();
 			PlayerCampaignState state = encodedPlayer.state();
 			boolean duplicateKey = players.putIfAbsent(mapKeyUuid, state) != null;
@@ -167,13 +175,21 @@ public final class CampaignSavedData extends SavedData {
 				valid = false;
 			}
 		}
-		return new CampaignSavedData(
-				schemaVersion,
+		CampaignSavedData data = new CampaignSavedData(
+				valid ? SCHEMA_VERSION : document.schemaVersion(),
 				players,
 				valid,
 				valid ? ReadDisposition.WRITABLE : ReadDisposition.INVALID_OWNER_KEYS,
 				null
 		);
+		if (valid && document.schemaVersion() < SCHEMA_VERSION) {
+			data.setDirty();
+		}
+		return DataResult.success(data);
+	}
+
+	private static RawDocument encodeDocument(CampaignSavedData data) {
+		return new RawDocument(data.schemaVersion(), data.rawPlayers());
 	}
 
 	private static CampaignSavedData readOnlyRaw(Dynamic<?> rawDocument) {
@@ -184,9 +200,15 @@ public final class CampaignSavedData extends SavedData {
 		return new CampaignSavedData(discoveredSchema, Map.of(), true, disposition, rawDocument);
 	}
 
-	private static DataResult<EncodedPlayer> decodePlayer(RawPlayer raw) {
+	private static DataResult<EncodedPlayer> decodePlayer(RawPlayer raw, int schemaVersion) {
 		IdentityFields identity = raw.identity();
 		DurableFields durable = raw.durable();
+		if (schemaVersion == SCHEMA_VERSION
+				&& (durable.sheetProjectionPending().isEmpty()
+					|| durable.remoteProjectionPending().isEmpty()
+					|| durable.legacyRemoteAdoptionPending().isEmpty())) {
+			return DataResult.error(() -> "schema-2 reward projection markers must be present");
+		}
 		boolean hasEncounter = durable.encounterUuid().isPresent();
 		boolean hasProfessor = durable.professorUuid().isPresent();
 		if (identity.status() != PlayerCampaignState.LectureStatus.READY && identity.attemptCount() < 1) {
@@ -230,13 +252,24 @@ public final class CampaignSavedData extends SavedData {
 							)
 							: null
 			);
+			UUID legacyProjectionUuid = durable.remoteIssued()
+					? PlayerCampaignState.legacyRemoteProjectionUuid(
+							identity.ownerUuid(), identity.deskPos(), identity.attemptCount()
+					)
+					: null;
 			UUID remoteProjectionUuid = durable.remoteProjectionUuid().orElseGet(() ->
 					durable.remoteIssued()
-							? PlayerCampaignState.legacyRemoteProjectionUuid(
-									identity.ownerUuid(), identity.deskPos(), identity.attemptCount()
-							)
+							? legacyProjectionUuid
 							: null
 			);
+			boolean legacyRemoteAdoptionPending = schemaVersion == LEGACY_SCHEMA_VERSION
+					&& passed
+					&& (durable.legacyRemoteAdoptionPending().orElse(false)
+							|| (durable.remoteProjectionUuid().isEmpty()
+									&& durable.remoteProjectionPending().isEmpty())
+							|| durable.remoteProjectionUuid().filter(legacyProjectionUuid::equals).isPresent());
+			boolean remoteProjectionPending = legacyRemoteAdoptionPending
+					|| durable.remoteProjectionPending().orElse(false);
 			PlayerCampaignState.EncounterRef encounter = hasEncounter
 					? new PlayerCampaignState.EncounterRef(
 							identity.ownerUuid(),
@@ -264,9 +297,10 @@ public final class CampaignSavedData extends SavedData {
 					durable.remoteCooldownUntilGameTime(),
 					durable.sheetRecoverySequence(),
 					durable.remoteReadyNoticeForDeadlineGameTime(),
-					durable.sheetProjectionPending(),
-					durable.remoteProjectionPending(),
-					remoteProjectionUuid
+					durable.sheetProjectionPending().orElse(false),
+					remoteProjectionPending,
+					remoteProjectionUuid,
+					legacyRemoteAdoptionPending
 			);
 			return DataResult.success(new EncodedPlayer(identity.mapKeyUuid().orElse(identity.ownerUuid()), state));
 		}
@@ -301,9 +335,10 @@ public final class CampaignSavedData extends SavedData {
 						state.remoteCooldownUntilGameTime(),
 						state.sheetRecoverySequence(),
 						state.remoteReadyNoticeForDeadlineGameTime(),
-						state.sheetProjectionPending(),
-						state.remoteProjectionPending(),
-						Optional.ofNullable(state.remoteProjectionUuid())
+						Optional.of(state.sheetProjectionPending()),
+						Optional.of(state.remoteProjectionPending()),
+						Optional.ofNullable(state.remoteProjectionUuid()),
+						Optional.of(state.legacyRemoteAdoptionPending())
 				)
 		);
 	}
@@ -399,10 +434,11 @@ public final class CampaignSavedData extends SavedData {
 		);
 	}
 
-	private synchronized List<EncodedPlayer> encodedPlayers() {
-		List<EncodedPlayer> encodedPlayers = new ArrayList<>(players.size());
-		players.forEach((mapKeyUuid, state) -> encodedPlayers.add(new EncodedPlayer(mapKeyUuid, state)));
-		return encodedPlayers;
+	private synchronized List<RawPlayer> rawPlayers() {
+		List<RawPlayer> rawPlayers = new ArrayList<>(players.size());
+		players.forEach((mapKeyUuid, state) ->
+				rawPlayers.add(encodePlayer(new EncodedPlayer(mapKeyUuid, state))));
+		return rawPlayers;
 	}
 
 	static UUID deterministicUuid(String kind, UUID ownerUuid, BlockPos deskPos, int attemptCount) {
@@ -436,13 +472,20 @@ public final class CampaignSavedData extends SavedData {
 			long remoteCooldownUntilGameTime,
 			long sheetRecoverySequence,
 			long remoteReadyNoticeForDeadlineGameTime,
-			boolean sheetProjectionPending,
-			boolean remoteProjectionPending,
-			Optional<UUID> remoteProjectionUuid
+			Optional<Boolean> sheetProjectionPending,
+			Optional<Boolean> remoteProjectionPending,
+			Optional<UUID> remoteProjectionUuid,
+			Optional<Boolean> legacyRemoteAdoptionPending
 	) {
 	}
 
 	private record RawPlayer(IdentityFields identity, DurableFields durable) {
+	}
+
+	private record RawDocument(int schemaVersion, List<RawPlayer> players) {
+		private RawDocument {
+			players = List.copyOf(players);
+		}
 	}
 
 	private record EncodedPlayer(UUID mapKeyUuid, PlayerCampaignState state) {
