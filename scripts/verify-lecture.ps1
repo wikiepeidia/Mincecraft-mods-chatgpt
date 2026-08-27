@@ -1667,8 +1667,8 @@ function Invoke-SelfCheckMode {
         $commentedSource = Join-Path $receiptRoot 'CommentOnlyGameTest.java'
         [System.IO.File]::WriteAllText($commentedSource, '// @GameTest is documentation, not an execution receipt.', [System.Text.UTF8Encoding]::new($false))
         $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
-        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 88 -or $testReceipts.GameTestCount -ne 66) {
-            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 88/66 manifest drifted.'
+        if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 106 -or $testReceipts.GameTestCount -ne 70) {
+            throw 'Comment-only source affected receipt-derived execution counts or the reviewed 106/70 manifest drifted.'
         }
         $wrongRoot = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -UnitRootElement 'testsuites'
         Assert-SelfCheckRejects -Label 'unit receipt wrong XML root element' -Action {

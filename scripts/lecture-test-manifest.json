@@ -1,6 +1,34 @@
 {
   "schema_version": 1,
   "unit_suites": {
+    "dev.developershell.bossrush.BossRushProgressTest": [
+      "legalChainAdvancesAndRecordsEachFirstClearOnce()",
+      "illegalTransitionsFailClosed()",
+      "restartNormalizationUsesLastDurableCheckpoint()",
+      "existingRewardFlagsMakeReplayedCompletionProgressionNeutral()",
+      "completedCheckpointNeverReopensAFirstClearGrantAfterRestart()"
+    ],
+    "dev.developershell.bossrush.BossRushResourcesTest": [
+      "stableItemCatalogAndVanillaModelChainsResolve()",
+      "everyPlayerFacingBossRushCueIsTranslated()"
+    ],
+    "dev.developershell.bossrush.BossRushRulesTest": [
+      "encounterCountsAndTimersStayStrictlyBounded()",
+      "scopeAndAcceptanceGeometryIncludeTheirReadableBoundaries()",
+      "contextOverflowUsesOneFiniteRingRatherThanUnboundedArea()",
+      "unlockConditionsRequireEachNamedMechanic()"
+    ],
+    "dev.developershell.bossrush.BossRushRuntimeStateTest": [
+      "ownershipIsExactAndEntityTrackingIsDeduplicated()",
+      "runtimeTimerIsBounded()",
+      "cleanupIsIdempotentAndClosesTheLedger()"
+    ],
+    "dev.developershell.bossrush.BossRushSavedDataTest": [
+      "codecRoundTripsStableStageAndFirstClearFlags()",
+      "mutationsAreOwnerIsolatedAndFirstClearIsIdempotent()",
+      "failedSpawnRollbackRequiresExactCurrentState()",
+      "statusSnapshotNeverNormalizesAnActiveRuntime()"
+    ],
     "dev.developershell.campaign.CampaignCodecTest": [
       "serviceCommitsBeforeEffectsAndNoOpWritesNothing()",
       "schemaOneRemoteFieldPresenceMigratesLegacyAndExplicitProjectionStates()",
@@ -107,6 +135,12 @@
     ]
   },
   "gametest_suites": {
+    "boss_rush": [
+      "developers_hell_test:boss_rush_game_tests_chairman_uses_rubrics_revisions_and_the_acceptance_pad",
+      "developers_hell_test:boss_rush_game_tests_codex_countdown_agents_and_max_reasoning_grant_one_diploma",
+      "developers_hell_test:boss_rush_game_tests_direct_chain_normalizes_abort_and_replay_cannot_duplicate_rewards",
+      "developers_hell_test:boss_rush_game_tests_jury_requires_its_owner_and_cleans_five_bounded_entities"
+    ],
     "contract_arena": [
       "developers_hell_test:contract_arena_game_tests_active_encounter_rejection_is_atomic",
       "developers_hell_test:contract_arena_game_tests_failed_runtime_start_rolls_back_without_false_success_or_hidden_retake",
@@ -201,7 +235,7 @@
     {
       "id": "02-STATE-01",
       "description": "monotonic replay-safe persistence receipt",
-      "unit_suites": ["dev.developershell.campaign.CampaignCodecTest", "dev.developershell.campaign.CampaignReducerTest"],
+      "unit_suites": ["dev.developershell.campaign.CampaignCodecTest", "dev.developershell.campaign.CampaignReducerTest", "dev.developershell.bossrush.BossRushProgressTest", "dev.developershell.bossrush.BossRushSavedDataTest"],
       "gametest_suites": [],
       "gates": []
     },
@@ -222,14 +256,14 @@
     {
       "id": "02-BOSS-01",
       "description": "boss identity, acts, damage, and vulnerability receipt",
-      "unit_suites": ["dev.developershell.lecture.LectureStateMachineTest"],
-      "gametest_suites": ["lecture_boss"],
+      "unit_suites": ["dev.developershell.lecture.LectureStateMachineTest", "dev.developershell.bossrush.BossRushRulesTest", "dev.developershell.bossrush.BossRushResourcesTest"],
+      "gametest_suites": ["lecture_boss", "boss_rush"],
       "gates": []
     },
     {
       "id": "02-LIFE-01",
       "description": "terminal, reload, orphan, and server-stop cleanup receipt",
-      "unit_suites": [],
+      "unit_suites": ["dev.developershell.bossrush.BossRushRuntimeStateTest"],
       "gametest_suites": ["lecture_lifecycle"],
       "gates": []
     },

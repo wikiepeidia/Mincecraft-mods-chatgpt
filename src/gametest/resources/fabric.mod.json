@@ -12,7 +12,8 @@
       "dev.developershell.gametest.RetakeGameTests",
       "dev.developershell.gametest.LectureBossGameTests",
       "dev.developershell.gametest.RewardGameTests",
-      "dev.developershell.gametest.RemoteGameTests"
+      "dev.developershell.gametest.RemoteGameTests",
+      "dev.developershell.gametest.BossRushGameTests"
     ]
   }
 }
