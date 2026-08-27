@@ -3,7 +3,6 @@ package dev.developershell.entity;
 import dev.developershell.campaign.CampaignService;
 import dev.developershell.lecture.LectureEncounterManager;
 import dev.developershell.lecture.LectureRules;
-import dev.developershell.lecture.LectureStateMachine;
 import dev.developershell.registry.ModEntities;
 import java.util.Objects;
 import java.util.UUID;
@@ -81,41 +80,35 @@ public final class ProfessorInfiniteSlidesEntity extends ModEntities.ProfessorEn
 	@Override
 	public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
 		Entity attacker = source.getEntity();
-		if (attacker == null
-				|| !CampaignService.canDamageProfessor(
-						level,
-						ownerUuid,
-						encounterUuid,
-						attacker.getUUID()
-				)) {
+		if (attacker == null) {
 			return false;
 		}
 
-		boolean managerWindowOpen = encounterUuid != null
-				&& LectureEncounterManager.isVulnerabilityOpen(encounterUuid);
-		LectureStateMachine.DamageAdmission admission = LectureStateMachine.admitEntityDamage(
-				ownerUuid,
-				encounterUuid,
-				attacker.getUUID(),
-				managerWindowOpen ? encounterUuid : null,
-				vulnerabilityOpen && managerWindowOpen,
-				getHealth(),
-				amount
-		);
+		LectureEncounterManager.ProfessorDamageAdmission admission =
+				LectureEncounterManager.admitProfessorDamage(
+						level,
+						this,
+						attacker.getUUID(),
+						amount
+				);
 		if (!admission.accepted()) {
 			return false;
 		}
 
-		boolean damaged = super.hurtServer(level, source, admission.acceptedDamage());
+		float previousHealth = getHealth();
+		boolean damaged = super.hurtServer(
+				level,
+				source,
+				admission.acceptedDamage()
+		);
 		if (!damaged) {
 			return false;
 		}
-		LectureEncounterManager.onProfessorDamage(this);
-		if (!isRemoved() && getHealth() < admission.thresholdHealth()) {
-			setHealth(admission.thresholdHealth());
-		}
-		if (isRemoved() || getHealth() <= admission.thresholdHealth()) {
-			setVulnerabilityOpen(false);
+		setHealth(admission.projectedHealth());
+		if (!LectureEncounterManager.commitProfessorDamage(this, admission)) {
+			setHealth(previousHealth);
+			invulnerableTime = 0;
+			return false;
 		}
 		return true;
 	}

@@ -108,8 +108,9 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			context.assertTrue(result.professor().isRemoved(), "accepted victory removes the Professor");
 
 			owner.clearRecordedSystemMessages();
-			context.assertFalse(LectureEncounterManager.onProfessorDamage(result.professor()),
-					"a stale manager damage callback cannot reconcile again");
+			context.assertFalse(LectureEncounterManager.admitProfessorDamage(
+					level, result.professor(), ownerUuid, result.professor().getMaxHealth()).accepted(),
+					"a stale Professor cannot obtain another manager damage ticket");
 			List<CampaignTransition.EffectIntent> replayEffects = new ArrayList<>();
 			CampaignTransition replay = CampaignService.commitVictory(
 					level, ownerUuid, result.encounterUuid(), replayEffects::add);
@@ -177,7 +178,8 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 					"wrong owner receives no Remote");
 
 			owner.clearRecordedSystemMessages();
-			context.assertFalse(LectureEncounterManager.onProfessorDamage(result.professor()),
+			context.assertFalse(LectureEncounterManager.admitProfessorDamage(
+					level, result.professor(), ownerUuid, result.professor().getMaxHealth()).accepted(),
 					"full-inventory replay is stale at the manager boundary");
 			context.assertValueEqual(boundSheetEntities(
 					level.getServer(), ownerUuid, result.passed().sheetRecoverySequence()).size(), 1,

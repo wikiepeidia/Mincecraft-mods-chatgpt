@@ -165,23 +165,190 @@ public final class LectureEncounterManager {
 		return runtime != null && runtime.vulnerabilityOpen;
 	}
 
+	/**
+	 * Authorizes one live Professor hit against the authoritative server clock and active act.
+	 * The returned ticket is inert until the entity reports a successful vanilla mutation.
+	 */
+	public static synchronized ProfessorDamageAdmission admitProfessorDamage(
+			ServerLevel level,
+			ModEntities.ProfessorEntity professor,
+			UUID attackerUuid,
+			float requestedDamage
+	) {
+		java.util.Objects.requireNonNull(level, "level");
+		return admitProfessorDamageAtObservedTime(
+				level,
+				professor,
+				attackerUuid,
+				requestedDamage,
+				level.getGameTime()
+		);
+	}
+
+	/** Deterministic clock seam for the half-open damage-boundary GameTest. */
+	public static synchronized ProfessorDamageAdmission admitProfessorDamageAtObservedTime(
+			ServerLevel level,
+			ModEntities.ProfessorEntity professor,
+			UUID attackerUuid,
+			float requestedDamage,
+			long observedGameTime
+	) {
+		java.util.Objects.requireNonNull(level, "level");
+		java.util.Objects.requireNonNull(professor, "professor");
+		if (observedGameTime < 0L || !level.getServer().isSameThread()) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.CLOSED_WINDOW);
+		}
+		UUID encounterUuid = professor.encounterUuid();
+		LectureRuntime runtime = encounterUuid == null ? null : RUNTIMES.get(encounterUuid);
+		if (runtime == null
+				|| runtime.closed
+				|| runtime.level != level
+				|| runtime.professor != professor
+				|| professor.ownerUuid() == null
+				|| !runtime.owner.getUUID().equals(professor.ownerUuid())) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.STALE_ENCOUNTER);
+		}
+		if (attackerUuid == null || !runtime.owner.getUUID().equals(attackerUuid)) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.WRONG_OWNER);
+		}
+		if (!CampaignService.canDamageProfessor(level, runtime.owner.getUUID(), encounterUuid, attackerUuid)) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.STALE_ENCOUNTER);
+		}
+
+		LectureStateMachine.State expectedState = runtime.state;
+		long authorityTime = Math.max(
+				Math.max(level.getGameTime(), runtime.lastObservedGameTime),
+				observedGameTime
+		);
+		boolean activeWindow = expectedState.stage() == LectureStateMachine.Stage.VULNERABLE
+				&& authorityTime >= expectedState.phaseStartedTick()
+				&& authorityTime < expectedState.deadlineTick();
+		if (Math.abs(professor.getHealth() - expectedState.bossHealth()) > 0.001F) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.STALE_ENCOUNTER);
+		}
+		if (!Float.isFinite(requestedDamage) || requestedDamage <= 0.0F) {
+			return ProfessorDamageAdmission.rejected(LectureStateMachine.DamageRejection.INVALID_AMOUNT);
+		}
+
+		int domainDamage = Math.max(1, Math.round(requestedDamage));
+		LectureStateMachine.DamageAdmission projection = LectureStateMachine.admitEntityDamage(
+				expectedState.ownerUuid(),
+				expectedState.encounterUuid(),
+				attackerUuid,
+				encounterUuid,
+				activeWindow,
+				expectedState.bossHealth(),
+				expectedState.act().healthThreshold(),
+				domainDamage
+		);
+		if (!projection.accepted()) {
+			return ProfessorDamageAdmission.rejected(projection.rejection());
+		}
+		int acceptedDamage = Math.round(projection.acceptedDamage());
+		LectureStateMachine.Output output = LectureStateMachine.step(
+				expectedState,
+				new LectureStateMachine.Input.Damage(
+						authorityTime,
+						attackerUuid,
+						encounterUuid,
+						acceptedDamage
+				)
+		);
+		return ProfessorDamageAdmission.accepted(
+				projection,
+				authorityTime,
+				expectedState,
+				output
+		);
+	}
+
 	public static synchronized Optional<ModEntities.ProfessorEntity> professor(UUID encounterUuid) {
 		LectureRuntime runtime = RUNTIMES.get(encounterUuid);
 		return runtime == null ? Optional.empty() : Optional.of(runtime.professor);
 	}
 
-	/**
-	 * Consumes health changed by one admitted entity hit immediately. The exact runtime Professor
-	 * identity is required, so stale or manually-created entities can never reach victory.
-	 */
-	public static synchronized boolean onProfessorDamage(ModEntities.ProfessorEntity professor) {
+	/** Commits an admitted hit exactly once after the entity reached the ticket's projected health. */
+	public static synchronized boolean commitProfessorDamage(
+			ModEntities.ProfessorEntity professor,
+			ProfessorDamageAdmission admission
+	) {
 		java.util.Objects.requireNonNull(professor, "professor");
-		UUID encounterUuid = professor.encounterUuid();
-		LectureRuntime runtime = encounterUuid == null ? null : RUNTIMES.get(encounterUuid);
-		if (runtime == null || runtime.professor != professor || runtime.closed) {
+		java.util.Objects.requireNonNull(admission, "admission");
+		if (!admission.accepted()) {
 			return false;
 		}
-		return runtime.synchronizeProfessorDamage(runtime.lastObservedGameTime);
+		UUID encounterUuid = professor.encounterUuid();
+		LectureRuntime runtime = encounterUuid == null ? null : RUNTIMES.get(encounterUuid);
+		if (runtime == null
+				|| runtime.professor != professor
+				|| runtime.closed
+				|| runtime.state != admission.expectedState
+				|| !runtime.owner.getUUID().equals(admission.expectedState.ownerUuid())
+				|| !encounterUuid.equals(admission.expectedState.encounterUuid())
+				|| Math.abs(professor.getHealth() - admission.projectedHealth()) > 0.001F) {
+			return false;
+		}
+		runtime.lastObservedGameTime = Math.max(runtime.lastObservedGameTime, admission.observedGameTime);
+		runtime.applyOutput(admission.output, admission.observedGameTime);
+		return true;
+	}
+
+	/** One-use manager ticket; only safe scalar projections are exposed to the entity adapter. */
+	public static final class ProfessorDamageAdmission {
+		private final LectureStateMachine.DamageAdmission projection;
+		private final long observedGameTime;
+		private final LectureStateMachine.State expectedState;
+		private final LectureStateMachine.Output output;
+
+		private ProfessorDamageAdmission(
+				LectureStateMachine.DamageAdmission projection,
+				long observedGameTime,
+				LectureStateMachine.State expectedState,
+				LectureStateMachine.Output output
+		) {
+			this.projection = java.util.Objects.requireNonNull(projection, "projection");
+			this.observedGameTime = observedGameTime;
+			this.expectedState = expectedState;
+			this.output = output;
+		}
+
+		private static ProfessorDamageAdmission accepted(
+				LectureStateMachine.DamageAdmission projection,
+				long observedGameTime,
+				LectureStateMachine.State expectedState,
+				LectureStateMachine.Output output
+		) {
+			return new ProfessorDamageAdmission(projection, observedGameTime, expectedState, output);
+		}
+
+		private static ProfessorDamageAdmission rejected(LectureStateMachine.DamageRejection rejection) {
+			return new ProfessorDamageAdmission(
+					new LectureStateMachine.DamageAdmission(false, 0.0F, 0.0F, 0.0F, false, false, rejection),
+					-1L,
+					null,
+					null
+			);
+		}
+
+		public boolean accepted() {
+			return projection.accepted();
+		}
+
+		public float acceptedDamage() {
+			return projection.acceptedDamage();
+		}
+
+		public float projectedHealth() {
+			return projection.projectedHealth();
+		}
+
+		public float thresholdHealth() {
+			return projection.thresholdHealth();
+		}
+
+		public LectureStateMachine.DamageRejection rejection() {
+			return projection.rejection();
+		}
 	}
 
 	/** Immutable pure state view for tests/debugging; never exposes mutable runtime ownership. */
@@ -406,7 +573,7 @@ public final class LectureEncounterManager {
 			}
 			lastObservedGameTime = Math.max(lastObservedGameTime, observedGameTime);
 			maintainHomeworkAdd(observedGameTime);
-			synchronizeProfessorDamage(observedGameTime);
+			restoreAuthoritativeProfessorHealth();
 			if (closed || !isCurrent(this)) {
 				return;
 			}
@@ -421,23 +588,11 @@ public final class LectureEncounterManager {
 			applyOutput(output, observedGameTime);
 		}
 
-		private boolean synchronizeProfessorDamage(long observedGameTime) {
-			int observedHealth = Math.max(0, Math.round(professor.getHealth()));
-			int acceptedDamage = state.bossHealth() - observedHealth;
-			if (acceptedDamage <= 0 || state.stage() == LectureStateMachine.Stage.COMPLETE) {
-				return false;
+		private void restoreAuthoritativeProfessorHealth() {
+			if (state.stage() != LectureStateMachine.Stage.COMPLETE
+					&& Math.abs(professor.getHealth() - state.bossHealth()) > 0.001F) {
+				professor.setHealth(state.bossHealth());
 			}
-			LectureStateMachine.Output output = LectureStateMachine.step(
-					state,
-					new LectureStateMachine.Input.Damage(
-							observedGameTime,
-							owner.getUUID(),
-							encounterUuid(),
-							acceptedDamage
-					)
-			);
-			applyOutput(output, observedGameTime);
-			return true;
 		}
 
 		private void applyOutput(LectureStateMachine.Output output, long observedGameTime) {

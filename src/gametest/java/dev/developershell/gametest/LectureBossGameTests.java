@@ -54,6 +54,7 @@ public final class LectureBossGameTests implements CustomTestMethodInvoker {
 	private static final UUID OTHER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000211");
 	private static final UUID THREE_ACT_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000213");
 	private static final UUID THREE_ACT_OTHER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000214");
+	private static final UUID DEADLINE_OWNER_UUID = UUID.fromString("c0de0000-0000-4000-8000-000000000215");
 
 	@GameTest(maxTicks = 80, padding = 24)
 	public void homeworkAddRegistryIdentityAndOrphanGuardAreStable(GameTestHelper context) {
@@ -166,6 +167,79 @@ public final class LectureBossGameTests implements CustomTestMethodInvoker {
 			}
 			if (otherConnection != null) {
 				otherConnection.close();
+			}
+			if (ownerConnection != null) {
+				ownerConnection.close();
+			}
+			clearArena(level, desk, facing);
+		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void professorDamageUsesHalfOpenAuthoritativeDeadline(GameTestHelper context) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(new BlockPos(12, 2, 4));
+		Direction facing = Direction.SOUTH;
+		buildArena(level, desk, facing);
+		ConnectedPlayer ownerConnection = null;
+		UUID encounterUuid = null;
+		try {
+			ownerConnection = createSurvivalPlayer(
+					context, DEADLINE_OWNER_UUID, "deadline-owner", new BlockPos(12, 2, 2));
+			ServerPlayer owner = ownerConnection.player();
+			PlayerCampaignState active = startAttempt(context, level, owner, desk, facing);
+			encounterUuid = active.encounterUuid();
+
+			LectureStateMachine.State slide = combatState(context, encounterUuid);
+			placeAtLocal(owner, desk, facing, 9, laneCenter(slide.safeLane()));
+			tick(level, encounterUuid, slide.deadlineTick());
+			tick(level, encounterUuid, slide.deadlineTick() + 1L);
+			LectureStateMachine.State window = combatState(context, encounterUuid);
+			context.assertValueEqual(window.stage(), LectureStateMachine.Stage.VULNERABLE,
+					"fixture opens the Slide damage window");
+			var professor = LectureEncounterManager.professor(encounterUuid)
+					.orElseThrow(() -> context.assertionException("missing Professor"));
+			float entityHealthBefore = professor.getHealth();
+			int domainHealthBefore = window.bossHealth();
+
+			LectureEncounterManager.ProfessorDamageAdmission atDeadline =
+					LectureEncounterManager.admitProfessorDamageAtObservedTime(
+							level,
+							professor,
+							owner.getUUID(),
+							professor.getMaxHealth(),
+							window.deadlineTick()
+					);
+			context.assertFalse(atDeadline.accepted(), "tick D is outside the half-open window");
+			context.assertValueEqual(atDeadline.rejection(), LectureStateMachine.DamageRejection.CLOSED_WINDOW,
+					"tick D has the exact closed-window rejection");
+			context.assertValueEqual(professor.getHealth(), entityHealthBefore,
+					"tick D leaves physical health unchanged before mutation");
+			context.assertValueEqual(combatState(context, encounterUuid).bossHealth(), domainHealthBefore,
+					"tick D leaves domain health unchanged");
+
+			LectureEncounterManager.ProfessorDamageAdmission beforeDeadline =
+					LectureEncounterManager.admitProfessorDamageAtObservedTime(
+							level,
+							professor,
+							owner.getUUID(),
+							professor.getMaxHealth(),
+							window.deadlineTick() - 1L
+					);
+			context.assertTrue(beforeDeadline.accepted(), "tick D-1 is admitted");
+			context.assertValueEqual(beforeDeadline.thresholdHealth(), 80.0F,
+					"manager ticket carries the active Slide floor");
+			professor.setHealth(beforeDeadline.projectedHealth());
+			context.assertTrue(LectureEncounterManager.commitProfessorDamage(professor, beforeDeadline),
+					"the one-use D-1 ticket commits after physical mutation");
+			context.assertValueEqual(professor.getHealth(), 80.0F, "D-1 physical health stops at the act floor");
+			context.assertValueEqual(combatState(context, encounterUuid).bossHealth(), 80,
+					"D-1 domain health stops at the same act floor");
+			context.succeed();
+		}
+		finally {
+			if (encounterUuid != null) {
+				LectureEncounterManager.cleanup(encounterUuid);
 			}
 			if (ownerConnection != null) {
 				ownerConnection.close();

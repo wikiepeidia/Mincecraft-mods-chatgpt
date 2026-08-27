@@ -397,24 +397,24 @@ final class LectureStateMachineTest {
 		assertEquals(
 				LectureStateMachine.DamageRejection.CLOSED_WINDOW,
 				LectureStateMachine.admitEntityDamage(
-						OWNER, ENCOUNTER, OWNER, ENCOUNTER, false, 120.0F, 5.0F
+						OWNER, ENCOUNTER, OWNER, ENCOUNTER, false, 120.0F, 80.0F, 5.0F
 				).rejection()
 		);
 		assertEquals(
 				LectureStateMachine.DamageRejection.WRONG_OWNER,
 				LectureStateMachine.admitEntityDamage(
-						OWNER, ENCOUNTER, stranger, ENCOUNTER, true, 120.0F, 5.0F
+						OWNER, ENCOUNTER, stranger, ENCOUNTER, true, 120.0F, 80.0F, 5.0F
 				).rejection()
 		);
 		assertEquals(
 				LectureStateMachine.DamageRejection.STALE_ENCOUNTER,
 				LectureStateMachine.admitEntityDamage(
-						OWNER, ENCOUNTER, OWNER, staleEncounter, true, 120.0F, 5.0F
+						OWNER, ENCOUNTER, OWNER, staleEncounter, true, 120.0F, 80.0F, 5.0F
 				).rejection()
 		);
 		for (float invalid : List.of(0.0F, -1.0F, Float.NaN, Float.POSITIVE_INFINITY)) {
 			LectureStateMachine.DamageAdmission rejected = LectureStateMachine.admitEntityDamage(
-					OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, invalid
+					OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, 80.0F, invalid
 			);
 			assertFalse(rejected.accepted(), () -> "invalid damage=" + invalid);
 			assertEquals(LectureStateMachine.DamageRejection.INVALID_AMOUNT, rejected.rejection(),
@@ -424,18 +424,29 @@ final class LectureStateMachineTest {
 
 	@Test
 	void entityDamageAdmissionClampsAtEachActFloorWithoutSkipping() {
-		assertAdmission(120.0F, 999.0F, 40.0F, 80.0F, false);
-		assertAdmission(80.0F, 999.0F, 40.0F, 40.0F, false);
-		assertAdmission(40.0F, 999.0F, 40.0F, 0.0F, true);
+		assertAdmission(120.0F, 80.0F, 999.0F, 40.0F, 80.0F, false);
+		assertAdmission(80.0F, 40.0F, 999.0F, 40.0F, 40.0F, false);
+		assertAdmission(40.0F, 0.0F, 999.0F, 40.0F, 0.0F, true);
 
 		LectureStateMachine.DamageAdmission partial = LectureStateMachine.admitEntityDamage(
-				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, 7.5F
+				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, 80.0F, 7.5F
 		);
 		assertTrue(partial.accepted());
 		assertEquals(7.5F, partial.acceptedDamage());
 		assertEquals(112.5F, partial.projectedHealth());
 		assertFalse(partial.closesWindow());
 		assertFalse(partial.victoryIntent());
+	}
+
+	@Test
+	void entityDamageAdmissionUsesTheExplicitActiveActFloor() {
+		LectureStateMachine.DamageAdmission quizAdmission = LectureStateMachine.admitEntityDamage(
+				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, 120.0F, 40.0F, 999.0F
+		);
+		assertTrue(quizAdmission.accepted());
+		assertEquals(80.0F, quizAdmission.acceptedDamage());
+		assertEquals(40.0F, quizAdmission.projectedHealth());
+		assertEquals(40.0F, quizAdmission.thresholdHealth());
 	}
 
 	@Test
@@ -543,13 +554,14 @@ final class LectureStateMachineTest {
 
 	private static void assertAdmission(
 			float health,
+			float threshold,
 			float requested,
 			float accepted,
 			float projected,
 			boolean victory
 	) {
 		LectureStateMachine.DamageAdmission admission = LectureStateMachine.admitEntityDamage(
-				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, health, requested
+				OWNER, ENCOUNTER, OWNER, ENCOUNTER, true, health, threshold, requested
 		);
 		assertTrue(admission.accepted(), () -> "health=" + health + ", requested=" + requested);
 		assertEquals(accepted, admission.acceptedDamage(), () -> "health=" + health + ", requested=" + requested);

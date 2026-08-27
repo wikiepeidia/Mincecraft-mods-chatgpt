@@ -333,6 +333,7 @@ public final class LectureStateMachine {
 			UUID currentEncounterUuid,
 			boolean windowOpen,
 			float currentHealth,
+			float thresholdHealth,
 			float requestedDamage
 	) {
 		if (!windowOpen) {
@@ -344,28 +345,30 @@ public final class LectureStateMachine {
 		if (expectedEncounterUuid == null || !expectedEncounterUuid.equals(currentEncounterUuid)) {
 			return rejectedEntityDamage(DamageRejection.STALE_ENCOUNTER, currentHealth);
 		}
-		if (!Float.isFinite(requestedDamage) || requestedDamage <= 0.0F) {
+		if (!Float.isFinite(requestedDamage)
+				|| requestedDamage <= 0.0F
+				|| !Float.isFinite(thresholdHealth)
+				|| thresholdHealth < 0.0F) {
 			return rejectedEntityDamage(DamageRejection.INVALID_AMOUNT, currentHealth);
 		}
 		if (!Float.isFinite(currentHealth) || currentHealth <= 0.0F) {
 			return rejectedEntityDamage(DamageRejection.COMPLETE, 0.0F);
 		}
 
-		float threshold = entityHealthThreshold(currentHealth);
-		float available = Math.max(0.0F, currentHealth - threshold);
+		float available = Math.max(0.0F, currentHealth - thresholdHealth);
 		if (available <= 0.0F) {
 			return rejectedEntityDamage(DamageRejection.AT_THRESHOLD, currentHealth);
 		}
 		float acceptedDamage = Math.min(requestedDamage, available);
-		float projectedHealth = Math.max(threshold, currentHealth - acceptedDamage);
-		boolean closesWindow = projectedHealth <= threshold;
+		float projectedHealth = Math.max(thresholdHealth, currentHealth - acceptedDamage);
+		boolean closesWindow = projectedHealth <= thresholdHealth;
 		return new DamageAdmission(
 				true,
 				acceptedDamage,
 				projectedHealth,
-				threshold,
+				thresholdHealth,
 				closesWindow,
-				closesWindow && threshold == 0.0F,
+				closesWindow && thresholdHealth == 0.0F,
 				DamageRejection.NONE
 		);
 	}
@@ -759,16 +762,6 @@ public final class LectureStateMachine {
 			throw new IllegalArgumentException("Lecture deadlines require non-negative time and positive duration");
 		}
 		return Math.addExact(startTick, durationTicks);
-	}
-
-	private static float entityHealthThreshold(float currentHealth) {
-		if (currentHealth > LectureAct.SLIDE_DECK.healthThreshold()) {
-			return LectureAct.SLIDE_DECK.healthThreshold();
-		}
-		if (currentHealth > LectureAct.SURPRISE_QUIZ.healthThreshold()) {
-			return LectureAct.SURPRISE_QUIZ.healthThreshold();
-		}
-		return LectureAct.ATTENDANCE_CHECK.healthThreshold();
 	}
 
 	private static DamageAdmission rejectedEntityDamage(DamageRejection rejection, float currentHealth) {
