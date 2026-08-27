@@ -859,20 +859,71 @@ function Test-OwnedChildStartOrder {
     return $ChildStartTicks -ge $ParentStartTicks
 }
 
+function Get-VerifiedOwnedRootObservation {
+    param(
+        [Parameter(Mandatory)] $Runtime,
+        [ValidateRange(1, 10)][int] $MaxAttempts = 3,
+        [ValidateRange(0, 1000)][int] $RetryDelayMilliseconds = 25,
+        [scriptblock] $ObservationProvider,
+        [scriptblock] $DelayAction
+    )
+    if ($null -eq $ObservationProvider) {
+        $ObservationProvider = {
+            param([int] $ProcessId)
+            return [pscustomobject]@{
+                StartTicks = Get-LiveProcessStartTicks -ProcessId $ProcessId
+                Rows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop)
+            }
+        }
+    }
+    if ($null -eq $DelayAction) {
+        $DelayAction = {
+            param([int] $Milliseconds)
+            if ($Milliseconds -gt 0) { Start-Sleep -Milliseconds $Milliseconds }
+        }
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ($Runtime.Process.HasExited) { return $null }
+        $observation = & $ObservationProvider ([int]$Runtime.RootPid)
+        if ($Runtime.Process.HasExited) { return $null }
+
+        $observedTicks = if ($null -eq $observation) { $null } else { $observation.StartTicks }
+        if ($null -ne $observedTicks -and [long]$observedTicks -ne [long]$Runtime.RootStartTicks) {
+            throw 'Owned root PID/start-time identity changed.'
+        }
+        $observedRows = @()
+        if ($null -ne $observation) { $observedRows = @($observation.Rows) }
+        if ($observedRows.Count -gt 1) { throw 'Owned root PID is ambiguous.' }
+        if ($null -ne $observedTicks -and $observedRows.Count -eq 1) {
+            $candidatePath = [string]$observedRows[0].ExecutablePath
+            if (-not [string]::IsNullOrWhiteSpace($candidatePath)) {
+                $canonicalExecutable = (Resolve-Path -LiteralPath $candidatePath -ErrorAction Stop).Path
+                if (-not $canonicalExecutable.Equals($Runtime.RootExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'Owned root executable identity changed.'
+                }
+                return [pscustomobject]@{ Row=$observedRows[0]; StartTicks=[long]$observedTicks; Executable=$canonicalExecutable }
+            }
+        }
+        if ($attempt -lt $MaxAttempts) { & $DelayAction $RetryDelayMilliseconds }
+    }
+
+    if ($Runtime.Process.HasExited) { return $null }
+    throw "Owned live root PID $($Runtime.RootPid) lacks a complete executable identity after $MaxAttempts bounded observations."
+}
+
 function Get-OwnedProcessTree {
     param(
         [Parameter(Mandatory)] $Runtime,
         [switch] $RequireServerClasses
     )
     if ($Runtime.Process.HasExited) { return @() }
-    $rootTicks = Get-LiveProcessStartTicks -ProcessId $Runtime.RootPid
-    if ($null -eq $rootTicks -or [long]$rootTicks -ne [long]$Runtime.RootStartTicks) {
-        throw 'Owned root PID/start-time identity changed.'
-    }
-    $rootRows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $($Runtime.RootPid)" -ErrorAction Stop)
-    if ($rootRows.Count -ne 1) { throw 'Owned root PID is absent or ambiguous.' }
+    $rootObservation = Get-VerifiedOwnedRootObservation -Runtime $Runtime
+    if ($null -eq $rootObservation) { return @() }
+    $rootTicks = [long]$rootObservation.StartTicks
+    $rootRow = $rootObservation.Row
     $rows = [System.Collections.Generic.List[object]]::new()
-    $rows.Add($rootRows[0])
+    $rows.Add($rootRow)
     $depth = @{}
     $depth[[string]$Runtime.RootPid] = 0
     $startByPid = @{}
@@ -896,12 +947,8 @@ function Get-OwnedProcessTree {
             $queue.Enqueue([int]$row.ProcessId)
         }
     }
-    $rootExecutable = (Resolve-Path -LiteralPath ([string]$rootRows[0].ExecutablePath) -ErrorAction Stop).Path
-    if (-not $rootExecutable.Equals($Runtime.RootExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Owned root executable identity changed.'
-    }
     foreach ($anchor in $Runtime.RootAnchors) {
-        if ([string]$rootRows[0].CommandLine -notlike ('*' + [string]$anchor + '*')) { throw "Owned root command line lost anchor: $anchor" }
+        if ([string]$rootRow.CommandLine -notlike ('*' + [string]$anchor + '*')) { throw "Owned root command line lost anchor: $anchor" }
     }
     $snapshot = [System.Collections.Generic.List[object]]::new()
     $classes = [System.Collections.Generic.List[string]]::new()
@@ -909,16 +956,20 @@ function Get-OwnedProcessTree {
         $pidValue = [int]$row.ProcessId
         $ticks = Get-LiveProcessStartTicks -ProcessId $pidValue
         if ($null -eq $ticks) { continue }
-        if ([string]::IsNullOrWhiteSpace([string]$row.ExecutablePath)) {
-            $retryRows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)
-            $retryTicks = Get-LiveProcessStartTicks -ProcessId $pidValue
-            if ($retryRows.Count -eq 0 -or $null -eq $retryTicks -or [long]$retryTicks -ne [long]$ticks) { continue }
-            if ($retryRows.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$retryRows[0].ExecutablePath)) {
-                throw "Owned live PID $pidValue parent $([int]$row.ParentProcessId) startTicks $ticks lacks a complete executable identity after exact requery."
+        if ($pidValue -eq $Runtime.RootPid) {
+            $executable = [string]$rootObservation.Executable
+        } else {
+            if ([string]::IsNullOrWhiteSpace([string]$row.ExecutablePath)) {
+                $retryRows = @(Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop)
+                $retryTicks = Get-LiveProcessStartTicks -ProcessId $pidValue
+                if ($retryRows.Count -eq 0 -or $null -eq $retryTicks -or [long]$retryTicks -ne [long]$ticks) { continue }
+                if ($retryRows.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$retryRows[0].ExecutablePath)) {
+                    throw "Owned live PID $pidValue parent $([int]$row.ParentProcessId) startTicks $ticks lacks a complete executable identity after exact requery."
+                }
+                $row = $retryRows[0]
             }
-            $row = $retryRows[0]
+            $executable = (Resolve-Path -LiteralPath ([string]$row.ExecutablePath) -ErrorAction Stop).Path
         }
-        $executable = (Resolve-Path -LiteralPath ([string]$row.ExecutablePath) -ErrorAction Stop).Path
         $commandLine = [string]$row.CommandLine
         if ([string]::IsNullOrWhiteSpace($commandLine)) { throw "Owned PID $pidValue has no command line." }
         $allowed = $executable.Equals($Runtime.RootExecutable, [System.StringComparison]::OrdinalIgnoreCase) -or
@@ -1467,6 +1518,116 @@ function Invoke-SelfCheckMode {
         (Test-OwnedChildStartOrder -ParentStartTicks 1000 -ChildStartTicks 999)) {
         throw 'Owned-child start-order self-check accepted a stale ParentProcessId PID-reuse edge.'
     }
+
+    $rootFixturePath = (Resolve-Path -LiteralPath $script:VerifierScriptPath -ErrorAction Stop).Path
+    $rootFixtureRuntime = [pscustomobject]@{
+        Process = [pscustomobject]@{ HasExited=$false }
+        RootPid = 4242
+        RootStartTicks = 1000L
+        RootExecutable = $rootFixturePath
+    }
+    $completeRootRow = [pscustomobject]@{ ProcessId=4242; ParentProcessId=1; ExecutablePath=$rootFixturePath; CommandLine='synthetic-owned-root' }
+    $blankThenCompleteState = [pscustomobject]@{ Calls=0; Delays=0 }
+    $blankThenCompleteProvider = {
+        param([int] $ProcessId)
+        $blankThenCompleteState.Calls = [int]$blankThenCompleteState.Calls + 1
+        $path = if ($blankThenCompleteState.Calls -eq 1) { '' } else { $rootFixturePath }
+        return [pscustomobject]@{
+            StartTicks = 1000L
+            Rows = @([pscustomobject]@{ ProcessId=$ProcessId; ParentProcessId=1; ExecutablePath=$path; CommandLine='synthetic-owned-root' })
+        }
+    }.GetNewClosure()
+    $blankThenCompleteDelay = {
+        param([int] $Milliseconds)
+        $blankThenCompleteState.Delays = [int]$blankThenCompleteState.Delays + 1
+    }.GetNewClosure()
+    $recoveredRoot = Get-VerifiedOwnedRootObservation `
+        -Runtime $rootFixtureRuntime `
+        -MaxAttempts 3 `
+        -RetryDelayMilliseconds 0 `
+        -ObservationProvider $blankThenCompleteProvider `
+        -DelayAction $blankThenCompleteDelay
+    if ($blankThenCompleteState.Calls -ne 2 -or $blankThenCompleteState.Delays -ne 1 -or
+        [string]$recoveredRoot.Executable -cne $rootFixturePath -or [long]$recoveredRoot.StartTicks -ne 1000L) {
+        throw 'Owned-root blank-path observation did not recover through one bounded exact-identity retry.'
+    }
+
+    foreach ($blankCandidate in @('', ' ')) {
+        $persistentBlankProvider = {
+            param([int] $ProcessId)
+            return [pscustomobject]@{
+                StartTicks = 1000L
+                Rows = @([pscustomobject]@{ ProcessId=$ProcessId; ParentProcessId=1; ExecutablePath=$blankCandidate; CommandLine='synthetic-owned-root' })
+            }
+        }.GetNewClosure()
+        $blankFailure = $null
+        try {
+            [void](Get-VerifiedOwnedRootObservation -Runtime $rootFixtureRuntime -MaxAttempts 2 -RetryDelayMilliseconds 0 -ObservationProvider $persistentBlankProvider -DelayAction { param([int] $Milliseconds) })
+        } catch {
+            $blankFailure = $_.Exception.Message
+        }
+        if ($blankFailure -cne 'Owned live root PID 4242 lacks a complete executable identity after 2 bounded observations.') {
+            throw 'Owned-root persistent blank-path observation did not fail closed with the bounded identity error.'
+        }
+    }
+
+    $completeState = [pscustomobject]@{ Calls=0; Delays=0 }
+    $completeProvider = {
+        param([int] $ProcessId)
+        $completeState.Calls = [int]$completeState.Calls + 1
+        return [pscustomobject]@{ StartTicks=1000L; Rows=@($completeRootRow) }
+    }.GetNewClosure()
+    $completeDelay = {
+        param([int] $Milliseconds)
+        $completeState.Delays = [int]$completeState.Delays + 1
+    }.GetNewClosure()
+    $firstObservation = Get-VerifiedOwnedRootObservation -Runtime $rootFixtureRuntime -ObservationProvider $completeProvider -DelayAction $completeDelay
+    if ($completeState.Calls -ne 1 -or $completeState.Delays -ne 0 -or [string]$firstObservation.Executable -cne $rootFixturePath) {
+        throw 'Owned-root complete first observation was not accepted without retry.'
+    }
+
+    $startMismatchFailure = $null
+    try {
+        [void](Get-VerifiedOwnedRootObservation -Runtime $rootFixtureRuntime -ObservationProvider {
+            param([int] $ProcessId)
+            return [pscustomobject]@{ StartTicks=999L; Rows=@($completeRootRow) }
+        } -DelayAction { param([int] $Milliseconds) })
+    } catch {
+        $startMismatchFailure = $_.Exception.Message
+    }
+    if ($startMismatchFailure -cne 'Owned root PID/start-time identity changed.') {
+        throw 'Owned-root PID reuse boundary was not rejected before executable ownership inference.'
+    }
+
+    $alternateRootPath = (Resolve-Path -LiteralPath $env:ComSpec -ErrorAction Stop).Path
+    $canonicalMismatchFailure = $null
+    try {
+        [void](Get-VerifiedOwnedRootObservation -Runtime $rootFixtureRuntime -ObservationProvider {
+            param([int] $ProcessId)
+            return [pscustomobject]@{
+                StartTicks = 1000L
+                Rows = @([pscustomobject]@{ ProcessId=$ProcessId; ParentProcessId=1; ExecutablePath=$alternateRootPath; CommandLine='synthetic-owned-root' })
+            }
+        } -DelayAction { param([int] $Milliseconds) })
+    } catch {
+        $canonicalMismatchFailure = $_.Exception.Message
+    }
+    if ($canonicalMismatchFailure -cne 'Owned root executable identity changed.') {
+        throw 'Owned-root canonical executable mismatch was not rejected.'
+    }
+
+    $rootFixtureRuntime.Process.HasExited = $true
+    $exitedProviderState = [pscustomobject]@{ Calls=0 }
+    $exitedProvider = {
+        param([int] $ProcessId)
+        $exitedProviderState.Calls = [int]$exitedProviderState.Calls + 1
+        return [pscustomobject]@{ StartTicks=$null; Rows=@() }
+    }.GetNewClosure()
+    $exitedObservation = Get-VerifiedOwnedRootObservation -Runtime $rootFixtureRuntime -ObservationProvider $exitedProvider -DelayAction { param([int] $Milliseconds) }
+    if ($null -ne $exitedObservation -or $exitedProviderState.Calls -ne 0) {
+        throw 'Owned-root exited state was not distinguished from an unverifiable live identity.'
+    }
+    $rootFixtureRuntime.Process.HasExited = $false
 
     $fixtureRoot = Join-Path $script:RepositoryRoot ('.work\lecture-verifier-self-check-' + [guid]::NewGuid().ToString('N'))
     [void](New-Item -ItemType Directory -Path $fixtureRoot)
