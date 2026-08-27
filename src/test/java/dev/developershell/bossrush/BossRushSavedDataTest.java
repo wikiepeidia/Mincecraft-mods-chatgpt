@@ -52,4 +52,14 @@ final class BossRushSavedDataTest {
 		assertEquals(ready, data.snapshot(OWNER));
 		assertThrows(IllegalStateException.class, () -> data.begin(OWNER, BossRushStage.CODEX));
 	}
+
+	@Test
+	void statusSnapshotNeverNormalizesAnActiveRuntime() {
+		BossRushSavedData data = BossRushSavedData.createForTesting(Map.of());
+		data.begin(OWNER, BossRushStage.JURY);
+		data.setDirty(false);
+		assertEquals(BossRushStage.JURY, data.snapshot(OWNER).stage());
+		assertFalse(data.isDirty());
+		assertEquals(BossRushStage.JURY, data.snapshot(OWNER).stage());
+	}
 }

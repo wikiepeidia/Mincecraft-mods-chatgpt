@@ -1,5 +1,6 @@
 package dev.developershell.bossrush;
 
+import dev.developershell.registry.ModItems;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,8 @@ import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerBossEvent;
@@ -25,6 +28,8 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.monster.Silverfish;
 import net.minecraft.world.entity.monster.Vex;
 import net.minecraft.world.entity.monster.illager.Evoker;
@@ -32,6 +37,7 @@ import net.minecraft.world.entity.monster.illager.Vindicator;
 import net.minecraft.world.entity.monster.skeleton.WitherSkeleton;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 
@@ -141,7 +147,7 @@ public final class BossRushManager {
 
 	public synchronized BossRushProgress status(ServerPlayer player) {
 		Objects.requireNonNull(player, "player");
-		return BossRushSavedData.get(player.level()).normalizeRestart(player.getUUID());
+		return BossRushSavedData.get(player.level()).snapshot(player.getUUID());
 	}
 
 	public void tick(MinecraftServer server) {
@@ -233,7 +239,7 @@ public final class BossRushManager {
 	}
 
 	private boolean spawnJury(ActiveEncounter encounter) {
-		for (int index = 0; index < 2; index++) {
+		for (int index = 0; index < BossRushRules.JURY_EVIDENCE_TARGETS; index++) {
 			Silverfish clerk = EntityTypes.SILVERFISH.create(encounter.level, EntitySpawnReason.EVENT);
 			if (clerk == null) {
 				return false;
@@ -244,7 +250,7 @@ public final class BossRushManager {
 				return false;
 			}
 		}
-		for (int index = 0; index < 3; index++) {
+		for (int index = 0; index < BossRushRules.JURY_JURORS; index++) {
 			Vindicator juror = EntityTypes.VINDICATOR.create(encounter.level, EntitySpawnReason.EVENT);
 			if (juror == null) {
 				return false;
@@ -273,7 +279,7 @@ public final class BossRushManager {
 		if (!addOwned(encounter, chairman, Role.CHAIRMAN)) {
 			return false;
 		}
-		for (int index = 0; index < 3; index++) {
+		for (int index = 0; index < BossRushRules.CHAIRMAN_RUBRIC_NODES; index++) {
 			Silverfish node = EntityTypes.SILVERFISH.create(encounter.level, EntitySpawnReason.EVENT);
 			if (node == null) {
 				return false;
@@ -336,6 +342,21 @@ public final class BossRushManager {
 			float remaining = Math.max(0.0F,
 					(encounter.nextActionTick - gameTime) / (float) SPONSOR_COUNTDOWN_TICKS);
 			encounter.bar.setProgress(remaining);
+			int remainingSeconds = (int) Math.ceil(Math.max(0L,
+					encounter.nextActionTick - gameTime) / 20.0D);
+			if (remainingSeconds != encounter.lastCueSecond) {
+				encounter.lastCueSecond = remainingSeconds;
+				owner.sendSystemMessage(Component.translatable(
+						"actionbar.developers_hell.bossrush.sponsor.countdown", remainingSeconds), true);
+				encounter.level.sendParticles(
+						ParticleTypes.END_ROD,
+						encounter.origin.getX() + 0.5D,
+						encounter.origin.getY() + 1.5D,
+						encounter.origin.getZ() + 1.5D,
+						8,
+						1.0D, 1.0D, 1.0D, 0.02D
+				);
+			}
 			if (gameTime >= encounter.nextActionTick) {
 				transformSponsor(encounter);
 			}
@@ -360,6 +381,19 @@ public final class BossRushManager {
 	}
 
 	private void tickJury(ActiveEncounter encounter) {
+		long gameTime = encounter.level.getGameTime();
+		double distanceSquared = encounter.owner.position().distanceToSqr(Vec3.atCenterOf(encounter.origin));
+		if (gameTime >= encounter.nextHazardTick) {
+			encounter.nextHazardTick = gameTime + BossRushRules.HAZARD_PULSE_TICKS;
+			emitRing(encounter, BossRushRules.JURY_SCOPE_RADIUS, ParticleTypes.WAX_ON);
+			if (!BossRushRules.insideScope(distanceSquared)) {
+				encounter.owner.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, 40, 1));
+				encounter.owner.hurtServer(
+						encounter.level, encounter.owner.damageSources().magic(), 2.0F);
+				encounter.owner.sendSystemMessage(Component.translatable(
+						"actionbar.developers_hell.bossrush.jury.scope_creep"), true);
+			}
+		}
 		if (encounter.allDead(Role.EVIDENCE)) {
 			int aliveJuror = encounter.firstAlive(Role.JUROR_ONE, Role.JUROR_TWO, Role.JUROR_THREE);
 			if (aliveJuror < 0) {
@@ -375,14 +409,159 @@ public final class BossRushManager {
 	}
 
 	private void tickChairman(ActiveEncounter encounter) {
-		if (encounter.allDead(Role.RUBRIC) && encounter.allDead(Role.CHAIRMAN)) {
+		if (!encounter.allDead(Role.RUBRIC)) {
+			return;
+		}
+		LivingEntity chairman = encounter.living(Role.CHAIRMAN).orElse(null);
+		if (chairman == null || !chairman.isAlive() || encounter.allDead(Role.CHAIRMAN)) {
 			completeFight(encounter);
+			return;
+		}
+		long gameTime = encounter.level.getGameTime();
+		if (encounter.phase == 0
+				&& chairman.getHealth() / chairman.getMaxHealth()
+						<= BossRushRules.CHAIRMAN_MINOR_REVISIONS_HEALTH_FRACTION) {
+			encounter.phase = 1;
+			spawnMinorRevisions(encounter);
+			encounter.owner.sendSystemMessage(Component.translatable(
+					"message.developers_hell.bossrush.chairman.minor_revisions"));
+			return;
+		}
+		if (encounter.phase == 1 && encounter.allDead(Role.REVISION)) {
+			encounter.phase = 2;
+			encounter.windowOpen = true;
+			encounter.nextActionTick = gameTime + BossRushRules.CHAIRMAN_ACCEPTANCE_WINDOW_TICKS;
+			encounter.owner.sendSystemMessage(Component.translatable(
+					"message.developers_hell.bossrush.chairman.major_revisions"));
+		}
+		if (encounter.phase >= 2) {
+			cycleWindow(
+					encounter,
+					gameTime,
+					BossRushRules.CHAIRMAN_ACCEPTANCE_WINDOW_TICKS,
+					BossRushRules.CHAIRMAN_ACCEPTANCE_RECOVERY_TICKS,
+					"actionbar.developers_hell.bossrush.chairman.window",
+					"actionbar.developers_hell.bossrush.chairman.recovery"
+			);
+			if (gameTime >= encounter.nextHazardTick) {
+				encounter.nextHazardTick = gameTime + BossRushRules.HAZARD_PULSE_TICKS;
+				emitRing(
+						encounter,
+						Vec3.atCenterOf(encounter.origin.offset(0, 0, 4)),
+						BossRushRules.CHAIRMAN_ACCEPTANCE_RADIUS,
+						ParticleTypes.HAPPY_VILLAGER
+				);
+			}
 		}
 	}
 
 	private void tickCodex(ActiveEncounter encounter) {
-		if (encounter.allDead(Role.AGENT) && encounter.allDead(Role.CODEX)) {
+		if (!encounter.allDead(Role.AGENT)) {
+			return;
+		}
+		LivingEntity codex = encounter.living(Role.CODEX).orElse(null);
+		if (codex == null || !codex.isAlive() || encounter.allDead(Role.CODEX)) {
 			completeFight(encounter);
+			return;
+		}
+		long gameTime = encounter.level.getGameTime();
+		if (gameTime >= encounter.nextHazardTick) {
+			encounter.nextHazardTick = gameTime + BossRushRules.HAZARD_PULSE_TICKS;
+			emitRing(encounter, BossRushRules.CODEX_OVERFLOW_INNER_RADIUS, ParticleTypes.ELECTRIC_SPARK);
+			emitRing(encounter, BossRushRules.CODEX_OVERFLOW_OUTER_RADIUS, ParticleTypes.SOUL_FIRE_FLAME);
+			double distanceSquared = encounter.owner.position().distanceToSqr(Vec3.atCenterOf(encounter.origin));
+			if (BossRushRules.insideOverflowRing(distanceSquared)) {
+				encounter.owner.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0));
+				encounter.owner.hurtServer(
+						encounter.level, encounter.owner.damageSources().magic(), 2.0F);
+				encounter.owner.sendSystemMessage(Component.translatable(
+						"actionbar.developers_hell.bossrush.codex.context_overflow"), true);
+			}
+		}
+		if (encounter.phase == 0
+				&& codex.getHealth() / codex.getMaxHealth()
+						<= BossRushRules.CODEX_MAX_REASONING_HEALTH_FRACTION) {
+			encounter.phase = 1;
+			encounter.windowOpen = true;
+			encounter.nextActionTick = gameTime + BossRushRules.CODEX_MAX_REASONING_WINDOW_TICKS;
+			encounter.owner.sendSystemMessage(Component.translatable(
+					"message.developers_hell.bossrush.codex.max_reasoning"));
+		}
+		if (encounter.phase >= 1) {
+			cycleWindow(
+					encounter,
+					gameTime,
+					BossRushRules.CODEX_MAX_REASONING_WINDOW_TICKS,
+					BossRushRules.CODEX_MAX_REASONING_RECOVERY_TICKS,
+					"actionbar.developers_hell.bossrush.codex.max_window",
+					"actionbar.developers_hell.bossrush.codex.recovery"
+			);
+		}
+	}
+
+	private void spawnMinorRevisions(ActiveEncounter encounter) {
+		for (int index = 0; index < BossRushRules.CHAIRMAN_MINOR_REVISIONS; index++) {
+			Vindicator revision = EntityTypes.VINDICATOR.create(
+					encounter.level, EntitySpawnReason.EVENT);
+			if (revision == null) {
+				continue;
+			}
+			prepareMob(
+					revision,
+					encounter.owner,
+					"entity.developers_hell.minor_revision",
+					24.0F,
+					false
+			);
+			revision.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.IRON_AXE));
+			spawnAt(encounter, revision, index == 0 ? -4 : 4, 5);
+			addOwned(encounter, revision, Role.REVISION);
+		}
+	}
+
+	private static void cycleWindow(
+			ActiveEncounter encounter,
+			long gameTime,
+			int openTicks,
+			int recoveryTicks,
+			String openKey,
+			String recoveryKey
+	) {
+		if (gameTime >= encounter.nextActionTick) {
+			encounter.windowOpen = !encounter.windowOpen;
+			encounter.nextActionTick = gameTime + (encounter.windowOpen ? openTicks : recoveryTicks);
+			encounter.lastCueSecond = -1;
+		}
+		int seconds = (int) Math.ceil(Math.max(0L, encounter.nextActionTick - gameTime) / 20.0D);
+		if (seconds != encounter.lastCueSecond) {
+			encounter.lastCueSecond = seconds;
+			encounter.owner.sendSystemMessage(Component.translatable(
+					encounter.windowOpen ? openKey : recoveryKey,
+					seconds
+			), true);
+		}
+	}
+
+	private static void emitRing(ActiveEncounter encounter, double radius, ParticleOptions particle) {
+		emitRing(encounter, Vec3.atCenterOf(encounter.origin), radius, particle);
+	}
+
+	private static void emitRing(
+			ActiveEncounter encounter,
+			Vec3 center,
+			double radius,
+			ParticleOptions particle
+	) {
+		for (int index = 0; index < BossRushRules.CODEX_RING_PARTICLES; index++) {
+			double angle = Math.PI * 2.0D * index / BossRushRules.CODEX_RING_PARTICLES;
+			encounter.level.sendParticles(
+					particle,
+					center.x + Math.cos(angle) * radius,
+					center.y - 0.25D,
+					center.z + Math.sin(angle) * radius,
+					1,
+					0.0D, 0.0D, 0.0D, 0.0D
+			);
 		}
 	}
 
@@ -419,6 +598,9 @@ public final class BossRushManager {
 
 		BossRushProgress.Completion completion = BossRushSavedData.get(encounter.level)
 				.complete(encounter.ownerUuid, encounter.stage);
+		if (completion.firstClear()) {
+			grantFirstClearRewards(encounter.owner, encounter.stage);
+		}
 		encounter.owner.sendSystemMessage(Component.translatable(
 				"message.developers_hell.bossrush.completed." + encounter.stage.serializedName()));
 		if (completion.progress().stage() != BossRushStage.GRADUATED) {
@@ -445,6 +627,38 @@ public final class BossRushManager {
 		return true;
 	}
 
+	private static void grantFirstClearRewards(ServerPlayer player, BossRushStage stage) {
+		switch (stage) {
+			case JURY -> {
+				ensureReward(player, ModItems.SIGNED_DEFENSE_MINUTES);
+				ensureReward(player, ModItems.EVIDENCE_BINDER);
+			}
+			case CHAIRMAN -> {
+				ensureReward(player, ModItems.APPROVED_REVISION_STAMP);
+				ensureReward(player, ModItems.RED_PEN);
+			}
+			case CODEX -> ensureReward(player, ModItems.DEFINITELY_LEGITIMATE_DIPLOMA);
+			default -> {
+			}
+		}
+		player.sendSystemMessage(Component.translatable(
+				"message.developers_hell.bossrush.reward." + stage.serializedName()));
+		player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 0.8F, 1.25F);
+	}
+
+	private static boolean ensureReward(ServerPlayer player, Item item) {
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			if (player.getInventory().getItem(slot).is(item)) {
+				return false;
+			}
+		}
+		ItemStack reward = new ItemStack(item);
+		if (!player.addItem(reward)) {
+			player.drop(reward, false, false);
+		}
+		return true;
+	}
+
 	private boolean allowDamage(LivingEntity entity, net.minecraft.world.damagesource.DamageSource source, float amount) {
 		ActiveEncounter encounter = encounterForEntity(entity.getUUID()).orElse(null);
 		if (encounter == null) {
@@ -457,12 +671,21 @@ public final class BossRushManager {
 		Role role = encounter.roles.get(entity.getUUID());
 		return switch (encounter.stage) {
 			case JURY -> role == Role.EVIDENCE
-					|| (encounter.allDead(Role.EVIDENCE)
-						&& role == encounter.currentJurorRole());
-			case CHAIRMAN -> role == Role.RUBRIC
-					|| (role == Role.CHAIRMAN && encounter.allDead(Role.RUBRIC));
+					|| BossRushRules.juryJurorUnlocked(
+							encounter.allDead(Role.EVIDENCE),
+							encounter.currentJurorIndex(),
+							encounter.jurorIndex(role)
+					);
+			case CHAIRMAN -> role == Role.RUBRIC || role == Role.REVISION
+					|| (role == Role.CHAIRMAN && BossRushRules.chairmanCoreUnlocked(
+							encounter.allDead(Role.RUBRIC),
+							encounter.phase,
+							encounter.windowOpen,
+							encounter.ownerInsideAcceptancePad()
+					));
 			case CODEX -> role == Role.AGENT
-					|| (role == Role.CODEX && encounter.allDead(Role.AGENT));
+					|| (role == Role.CODEX && BossRushRules.codexCoreUnlocked(
+							encounter.allDead(Role.AGENT), encounter.phase, encounter.windowOpen));
 			default -> false;
 		};
 	}
@@ -595,6 +818,7 @@ public final class BossRushManager {
 		JUROR_THREE,
 		CHAIRMAN,
 		RUBRIC,
+		REVISION,
 		SPONSOR,
 		CODEX,
 		AGENT
@@ -624,6 +848,9 @@ public final class BossRushManager {
 		private final Set<UUID> deadEntities = new java.util.LinkedHashSet<>();
 		private int phase;
 		private long nextActionTick;
+		private long nextHazardTick;
+		private boolean windowOpen;
+		private int lastCueSecond = -1;
 
 		private ActiveEncounter(ServerPlayer owner, BossRushStage stage, boolean replay) {
 			this.ownerUuid = owner.getUUID();
@@ -667,9 +894,35 @@ public final class BossRushManager {
 			return -1;
 		}
 
+		private Optional<LivingEntity> living(Role role) {
+			return roles.entrySet().stream()
+					.filter(entry -> entry.getValue() == role)
+					.map(entry -> level.getEntityInAnyDimension(entry.getKey()))
+					.filter(LivingEntity.class::isInstance)
+					.map(LivingEntity.class::cast)
+					.findFirst();
+		}
+
+		private boolean ownerInsideAcceptancePad() {
+			return BossRushRules.insideAcceptancePad(owner.position().distanceToSqr(
+					Vec3.atCenterOf(origin.offset(0, 0, 4))));
+		}
+
 		private Role currentJurorRole() {
-			int index = firstAlive(Role.JUROR_ONE, Role.JUROR_TWO, Role.JUROR_THREE);
+			int index = currentJurorIndex();
 			return index < 0 ? null : Role.values()[Role.JUROR_ONE.ordinal() + index];
+		}
+
+		private int currentJurorIndex() {
+			return firstAlive(Role.JUROR_ONE, Role.JUROR_TWO, Role.JUROR_THREE);
+		}
+
+		private int jurorIndex(Role role) {
+			if (role == null || role.ordinal() < Role.JUROR_ONE.ordinal()
+					|| role.ordinal() > Role.JUROR_THREE.ordinal()) {
+				return -1;
+			}
+			return role.ordinal() - Role.JUROR_ONE.ordinal();
 		}
 
 		private void close() {

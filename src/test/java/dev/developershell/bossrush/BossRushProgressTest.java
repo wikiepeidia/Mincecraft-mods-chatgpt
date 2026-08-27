@@ -62,4 +62,17 @@ final class BossRushProgressTest {
 		assertTrue(result.progress().juryCleared());
 		assertTrue(result.progress().diplomaGranted());
 	}
+
+	@Test
+	void completedCheckpointNeverReopensAFirstClearGrantAfterRestart() {
+		BossRushProgress graduated = new BossRushProgress(
+				OWNER, BossRushStage.GRADUATED, true, true, true);
+		assertEquals(graduated, graduated.normalizeRestart());
+		BossRushProgress replayJury = graduated.withStage(BossRushStage.JURY);
+		assertFalse(replayJury.complete(BossRushStage.JURY).firstClear());
+		BossRushProgress replayChairman = graduated.withStage(BossRushStage.CHAIRMAN);
+		assertFalse(replayChairman.complete(BossRushStage.CHAIRMAN).firstClear());
+		BossRushProgress replayCodex = graduated.withStage(BossRushStage.CODEX);
+		assertFalse(replayCodex.complete(BossRushStage.CODEX).firstClear());
+	}
 }

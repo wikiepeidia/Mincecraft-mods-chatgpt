@@ -34,6 +34,31 @@ public final class ModItems {
 			InfiniteSlidesRemoteItem::new,
 			new Item.Properties().stacksTo(1)
 	);
+	public static final Item SIGNED_DEFENSE_MINUTES = register(
+			ModItemIds.SIGNED_DEFENSE_MINUTES,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final Item EVIDENCE_BINDER = register(
+			ModItemIds.EVIDENCE_BINDER,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final Item APPROVED_REVISION_STAMP = register(
+			ModItemIds.APPROVED_REVISION_STAMP,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final Item RED_PEN = register(
+			ModItemIds.RED_PEN,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
+	public static final Item DEFINITELY_LEGITIMATE_DIPLOMA = register(
+			ModItemIds.DEFINITELY_LEGITIMATE_DIPLOMA,
+			Item::new,
+			new Item.Properties().stacksTo(1)
+	);
 
 	private static <T extends Item> T register(
 			ResourceKey<Item> key,
