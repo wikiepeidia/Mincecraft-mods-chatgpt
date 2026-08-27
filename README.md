@@ -1,6 +1,6 @@
 # Developer's Hell
 
-Developer's Hell is an offline-first Fabric comedy mod for Minecraft: Java Edition. The current `0.1.0` foundation build registers the Foundation Token and provides the stable base for the university/developer boss campaign.
+Developer's Hell is an offline-first Fabric comedy mod for Minecraft: Java Edition. The current `0.1.0` JAR contains the complete persistent Lecture vertical slice: discover and craft the cursed Contract, sign it at a valid lectern, survive Professor Infinite Slides, recover from failure, and earn the Attendance Sheet plus Infinite Slides Remote.
 
 ## Player installation
 
@@ -16,10 +16,10 @@ Install Fabric for Minecraft `26.2`, place Fabric API and the one ordinary mod J
 
 ```text
 dist/developers-hell-0.1.0.jar
-SHA-256: 8d3006dca37b3987ccf949f8881ecc5fc56f20d78d0af665f2b11b71c77ea5c8
+SHA-256: 3e691776e6bb0f1371eedb341cc5874fc107bd254769e8bc0abb5fffb783907c
 ```
 
-Do not substitute a development, sources, test, or separately rebuilt JAR. The clean-checkout online build, the same-cache Gradle offline build, and the retained `dist` copy all produced that identical SHA-256.
+Do not substitute a development, sources, test, or separately rebuilt JAR. The current Phase 2 verifier freshly built and inspected the ordinary build JAR, exercised the real dedicated-server stopping callback, and promoted those exact bytes to `dist` only after every automated gate passed. The earlier Phase 1 clean-checkout online/offline proof remains historical foundation evidence for hash `8d3006…ea5c8`; it is not a client-UAT claim for the current Phase 2 hash.
 
 Once the game files and libraries are downloaded, ordinary singleplayer play is offline. This is distinct from both Gradle's cache-only `--offline` mode and the release proof's operating-system firewall isolation:
 
@@ -28,6 +28,18 @@ Once the game files and libraries are downloaded, ordinary singleplayer play is 
 - **OS-isolated runtime:** starts the exact verified Java runtime while temporary outbound block rules cover both `java.exe` and `javaw.exe`; the verifier proves the rules work and removes their exact IDs afterward.
 
 No OpenAI or ChatGPT API, account, subscription, network service, telemetry, analytics, or remote configuration is used at runtime. “The Rich ChatGPT” and all sponsor jokes are fictional parody, not claims of sponsorship, payment, affiliation, or endorsement by OpenAI or anyone else.
+
+## Lecture campaign
+
+1. Carry paper and an ink sac to unlock **A Suspicious Opportunity**, then craft the Cursed Unpaid Internship Contract with those two ingredients in any shapeless crafting grid.
+2. Use the Contract on a lectern in the Overworld. The lectern becomes your Internship Desk only when it faces a loaded, world-border-safe arena with a solid `17x17` floor, four blocks of combat-interior headroom, and a safe Professor spawn. A rejected placement consumes nothing and gives localized repair guidance.
+3. Survive the three acts: hold the named safe lane during **Slide Deck**, answer A/B/C on the matching shape pad during **Surprise Quiz**, and report to the named quadrant during **Attendance**. Each resolved telegraph opens a short projector-cooldown damage window.
+4. Death, escape, timeout, dimension change, disconnect, unload, reload, abort, or server stop clears owned hazards and converges to safe persisted state. A failed attempt issues one owner/encounter-bound Retake Form; use it on the same Internship Desk. If recovery is needed, a game master can use `/devhell recover retake`.
+5. Victory commits one Attendance Sheet entitlement and the first Infinite Slides Remote exactly once. The Sheet is proof of passing. The Remote projects a short bounded knockback slide, then follows a server-owned 20-second cooldown with recharge and one ready cue.
+
+The session reads one complete strict local file at `config/developers-hell.json`. On first run it attempts to write the safe schema-v1 template. Missing, malformed, duplicate, unknown, symlinked, non-regular, or oversized input activates the complete immutable defaults; no partial values are applied and rejected bytes are not rewritten. `/devhell status` shows the accepted source, campaign/difficulty/accessibility values, schedules, and all eight module gates. Restart the game/server after changing the file because one validated snapshot is held for the session.
+
+Automated Phase 2 evidence is green for all nine validation IDs: 75 unit tests, 31 GameTest anchors, dependency/source/archive gates, equal source/build/dist hashes, and a bounded dedicated server whose log ordered `FIRST_TICK_READY -> STOPPING_CLEANUP_COMPLETE -> Stopping server -> All dimensions are saved`. This does **not** prove visual readability, fun, audio balance, motion comfort, or model rendering. No client was launched by the verifier; seven direct-client backstops remain `PENDING` in `02-LECTURE-EVIDENCE.md`.
 
 ## Contributor proof contract
 
@@ -55,13 +67,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\audit-foundati
 
 The production JAR must contain exactly one renamed root license, `LICENSE_developers-hell`. It must not contain unit-test output, `dev/developershell/gametest/**`, `FoundationGameTests*.class`, `ModuleGateTest*.class`, the `developers_hell_test` identity, or a `fabric-gametest` entrypoint.
 
-The authoritative release proof is the committed harness, not a build performed in a dirty working tree:
+Phase 1's clean-worktree online/offline and OS-isolated client machinery remains the historical foundation proof:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-foundation.ps1 -PrimeAndCompare -RunServerSmoke -ClientPreflight -ValidateEvidence -DistributionPath .\dist\developers-hell-0.1.0.jar -EvidencePath .\.planning\phases\01-java-25-and-fabric-26-2-foundation\01-FOUNDATION-EVIDENCE.md
 ```
 
 That harness verifies itself against committed `HEAD`, creates a registered detached clean worktree at the same commit, proves the required manifest is tracked and clean, performs fresh online and same-cache-offline builds with the Loom probe, compares archive entries and hashes, copies only the verified bytes to `dist`, and removes only its exact guarded worktree registration. It also runs the comprehensive audit before and after the production client/server checks.
+
+The current Phase 2 artifact/evidence transaction is:
+
+```powershell
+$jdkRoot = (Resolve-Path '.work/toolchain/temurin-25.0.4+7-x64').Path
+$env:JAVA_HOME = $jdkRoot
+$env:Path = "$(Join-Path $jdkRoot 'bin');$env:Path"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-lecture.ps1 -SelfCheck
+pwsh -NoProfile -File .\scripts\verify-lecture.ps1 -SelfCheck
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-lecture.ps1 -Verify -EvidencePath .\.planning\phases\02-persistent-lecture-vertical-slice\02-LECTURE-EVIDENCE.md -DistributionPath .\dist\developers-hell-0.1.0.jar
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-lecture.ps1 -ValidateEvidence -EvidencePath .\.planning\phases\02-persistent-lecture-vertical-slice\02-LECTURE-EVIDENCE.md -DistributionPath .\dist\developers-hell-0.1.0.jar
+```
+
+`-Verify` runs the pinned-JDK same-cache offline `clean test runGameTest auditDirectDependencies build` transaction, captures the raw foundation audit result and its single pinned safe-sanitizer false positive honestly, applies an independent operational network/API scan and the Phase 2 archive contract, then supervises only its exact child process tree. The ignored smoke profile is loopback-only with online mode, query, RCON, status, and resource-pack URL disabled. The verifier requires the real stop-cleanup callback, clean exit, and zero owned PID/start-time residue before it replaces `dist` atomically.
 
 ## Two-session client check
 
