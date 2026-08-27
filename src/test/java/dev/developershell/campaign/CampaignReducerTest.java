@@ -643,7 +643,15 @@ final class CampaignReducerTest {
 
 		CampaignEvent.RewardFallback sheetMaterialized = new CampaignEvent.RewardFallback(
 				sheetKey, FALLBACK, pending.deskDimension(), pending.retryPos(),
-				CampaignEvent.RewardFallbackOperation.MATERIALIZED);
+				CampaignEvent.RewardFallbackOperation.MATERIALIZED,
+				expectedSheetReservation);
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(bothReserved), new CampaignEvent.RewardFallback(
+						sheetKey, FALLBACK, pending.deskDimension(), pending.retryPos(),
+						CampaignEvent.RewardFallbackOperation.MATERIALIZED)),
+				bothReserved,
+				"stale_reward_fallback_context"
+		);
 		assertNoOp(
 				CampaignReducer.reduce(Optional.of(bothReserved), new CampaignEvent.RewardFallback(
 						sheetKey, THIRD_FALLBACK, pending.deskDimension(), pending.retryPos(),
@@ -655,7 +663,8 @@ final class CampaignReducerTest {
 				Optional.of(bothReserved), sheetMaterialized).nextState().orElseThrow();
 		CampaignEvent.RewardFallback remoteMaterialized = new CampaignEvent.RewardFallback(
 				remoteKey, OTHER_FALLBACK, pending.deskDimension(), pending.retryPos(),
-				CampaignEvent.RewardFallbackOperation.MATERIALIZED);
+				CampaignEvent.RewardFallbackOperation.MATERIALIZED,
+				bothReserved.remoteFallback());
 		PlayerCampaignState bothMaterialized = CampaignReducer.reduce(
 				Optional.of(sheetMaterializedState), remoteMaterialized).nextState().orElseThrow();
 		assertTrue(bothMaterialized.sheetFallback().materialized());
@@ -663,11 +672,20 @@ final class CampaignReducerTest {
 
 		CampaignEvent.RewardFallback relocated = new CampaignEvent.RewardFallback(
 				sheetKey, FALLBACK, pending.deskDimension(), OTHER_DESK,
-				CampaignEvent.RewardFallbackOperation.RELOCATED);
+				CampaignEvent.RewardFallbackOperation.RELOCATED,
+				bothMaterialized.sheetFallback());
 		CampaignTransition relocation = CampaignReducer.reduce(Optional.of(bothMaterialized), relocated);
 		assertAccepted(relocation, "reward_fallback_relocated");
 		PlayerCampaignState relocatedState = relocation.nextState().orElseThrow();
 		assertEquals(OTHER_DESK, relocatedState.sheetFallback().position());
+		assertNoOp(
+				CampaignReducer.reduce(Optional.of(relocatedState), new CampaignEvent.RewardFallback(
+						sheetKey, FALLBACK, pending.deskDimension(), RETRY,
+						CampaignEvent.RewardFallbackOperation.RELOCATED,
+						bothMaterialized.sheetFallback())),
+				relocatedState,
+				"stale_reward_fallback_context"
+		);
 
 		CampaignTransition sheetConfirmed = CampaignReducer.reduce(
 				Optional.of(relocatedState),
@@ -697,7 +715,8 @@ final class CampaignReducerTest {
 				Optional.of(bothMaterialized),
 				new CampaignEvent.RewardFallback(
 						sheetKey, FALLBACK, pending.deskDimension(), pending.retryPos(),
-						CampaignEvent.RewardFallbackOperation.LOST));
+						CampaignEvent.RewardFallbackOperation.LOST,
+						bothMaterialized.sheetFallback()));
 		assertAccepted(lost, "reward_fallback_lost");
 		PlayerCampaignState retryable = lost.nextState().orElseThrow();
 		assertTrue(retryable.sheetProjectionPending());

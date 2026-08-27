@@ -172,7 +172,8 @@ public sealed interface CampaignEvent permits
 			UUID entityUuid,
 			String dimension,
 			BlockPos position,
-			RewardFallbackOperation operation
+			RewardFallbackOperation operation,
+			PlayerCampaignState.RewardFallbackRef expectedPrior
 	) implements CampaignEvent {
 		public RewardFallback {
 			Objects.requireNonNull(key, "key");
@@ -182,6 +183,19 @@ public sealed interface CampaignEvent permits
 			}
 			position = Objects.requireNonNull(position, "position").immutable();
 			Objects.requireNonNull(operation, "operation");
+			if (expectedPrior != null && !expectedPrior.entityUuid().equals(entityUuid)) {
+				throw new IllegalArgumentException("expected fallback authority must name the event entity");
+			}
+		}
+
+		public RewardFallback(
+				RewardProjectionKey key,
+				UUID entityUuid,
+				String dimension,
+				BlockPos position,
+				RewardFallbackOperation operation
+		) {
+			this(key, entityUuid, dimension, position, operation, null);
 		}
 
 		@Override

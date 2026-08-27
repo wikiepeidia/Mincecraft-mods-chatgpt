@@ -42,6 +42,12 @@ public final class RewardService {
 	private static final String VICTORY_KEY = "message.developers_hell.reward.victory";
 	private static final String REMOTE_READY_KEY = "message.developers_hell.remote.ready";
 	private static final Map<ItemEntity, LiveTransfer> LIVE_TRANSFERS = new IdentityHashMap<>();
+	private static final Map<UUID, PendingDimensionTransfer> PENDING_DIMENSION_TRANSFERS =
+			new java.util.HashMap<>();
+	private static final Map<ItemEntity, AdmittedDimensionTransfer> ADMITTED_DIMENSION_TRANSFERS =
+			new IdentityHashMap<>();
+	private static final Map<ItemEntity, Boolean> SUPPRESSED_DIMENSION_UNLOADS =
+			new IdentityHashMap<>();
 	private static final Map<Inventory, List<RejectedDeathDrop>> REJECTED_DEATH_DROPS =
 			new IdentityHashMap<>();
 	private static boolean sheetLifecycleRegistered;
@@ -383,7 +389,9 @@ public final class RewardService {
 		if (observed.presence() == RepresentationPresence.FALLBACK) {
 			ItemEntity fallback = observed.entity().orElseThrow();
 			fallback.setTarget(state.ownerUuid());
-			return markFallbackMaterialized(level, key, fallback) && ensureSheetConfirmed(level, binding)
+			return markFallbackMaterialized(
+					level, key, fallback, Objects.requireNonNull(state.sheetFallback()))
+					&& ensureSheetConfirmed(level, binding)
 					? ProjectionAttempt.OBSERVED
 					: ProjectionAttempt.FAILED;
 		}
@@ -429,7 +437,9 @@ public final class RewardService {
 		if (observed.presence() == RepresentationPresence.FALLBACK) {
 			ItemEntity fallback = observed.entity().orElseThrow();
 			fallback.setTarget(state.ownerUuid());
-			return markFallbackMaterialized(level, key, fallback) && ensureRemoteConfirmed(level, binding)
+			return markFallbackMaterialized(
+					level, key, fallback, Objects.requireNonNull(state.remoteFallback()))
+					&& ensureRemoteConfirmed(level, binding)
 					? ProjectionAttempt.OBSERVED
 					: ProjectionAttempt.FAILED;
 		}
@@ -580,7 +590,7 @@ public final class RewardService {
 				return MaterializationResult.FAILED;
 			}
 			item.setTarget(owner.getUUID());
-			return markFallbackMaterialized(sourceLevel, key, item)
+			return markFallbackMaterialized(sourceLevel, key, item, fallbackRef)
 					? MaterializationResult.OBSERVED
 					: MaterializationResult.FAILED;
 		}
@@ -604,7 +614,7 @@ public final class RewardService {
 		if (!targetLevel.addFreshEntity(fallback)) {
 			return MaterializationResult.FAILED;
 		}
-		return markFallbackMaterialized(sourceLevel, key, fallback)
+		return markFallbackMaterialized(sourceLevel, key, fallback, fallbackRef)
 				? MaterializationResult.SPAWNED
 				: MaterializationResult.FAILED;
 	}
@@ -621,7 +631,8 @@ public final class RewardService {
 						fallback.entityUuid(),
 						fallback.dimension(),
 						fallback.position(),
-						CampaignEvent.RewardFallbackOperation.LOST
+						CampaignEvent.RewardFallbackOperation.LOST,
+						fallback
 				),
 				ignored -> {
 				}
@@ -632,17 +643,21 @@ public final class RewardService {
 	private static boolean markFallbackMaterialized(
 			ServerLevel level,
 			CampaignEvent.RewardProjectionKey key,
-			ItemEntity item
+			ItemEntity item,
+			PlayerCampaignState.RewardFallbackRef expectedPrior
 	) {
 		ServerLevel itemLevel = (ServerLevel) item.level();
+		PlayerCampaignState.RewardFallbackRef observed = expectedPrior.at(
+				dimensionId(itemLevel), item.blockPosition(), true);
 		CampaignTransition materialized = CampaignService.apply(
 				level,
 				new CampaignEvent.RewardFallback(
 						key,
 						item.getUUID(),
-						dimensionId(itemLevel),
-						item.blockPosition(),
-						CampaignEvent.RewardFallbackOperation.MATERIALIZED
+						observed.dimension(),
+						observed.position(),
+						CampaignEvent.RewardFallbackOperation.MATERIALIZED,
+						expectedPrior
 				),
 				ignored -> {
 				}
@@ -650,8 +665,7 @@ public final class RewardService {
 		if (materialized.accepted()) {
 			return true;
 		}
-		return currentFallback(level, key).filter(ref ->
-				ref.entityUuid().equals(item.getUUID()) && ref.materialized()).isPresent();
+		return currentFallback(level, key).filter(observed::equals).isPresent();
 	}
 
 	private static boolean ensureProjectionConfirmed(
@@ -779,6 +793,44 @@ public final class RewardService {
 				&& ChunkPos.containing(item.blockPosition()).equals(ChunkPos.containing(fallbackRef.position()));
 	}
 
+	/** Package-private GameTest seam for the otherwise event-owned source-unload half of travel. */
+	static synchronized void beginDimensionTransferForGameTest(ItemEntity item) {
+		Objects.requireNonNull(item, "item");
+		if (!(item.level() instanceof ServerLevel level) || level.getEntity(item.getUUID()) != item) {
+			throw new IllegalArgumentException("GameTest transfer source must be the tracked server entity");
+		}
+		CampaignSavedData.RewardFallbackAuthority authority = CampaignSavedData.get(level)
+				.rewardFallbackByEntityUuid(item.getUUID())
+				.orElseThrow(() -> new IllegalArgumentException("GameTest transfer source lacks durable authority"));
+		beginDimensionTransfer(level, authority, item);
+	}
+
+	/** Package-private GameTest seam suppressing only the staged source's synthetic discard callback. */
+	static synchronized void suppressNextDimensionUnloadForGameTest(ItemEntity item) {
+		Objects.requireNonNull(item, "item");
+		if (!(item.level() instanceof ServerLevel level) || level.getEntity(item.getUUID()) != item) {
+			throw new IllegalArgumentException("GameTest unload suppression requires the tracked source");
+		}
+		SUPPRESSED_DIMENSION_UNLOADS.put(item, Boolean.TRUE);
+	}
+
+	/** Package-private read-only GameTest seam proving a rejected handoff leaves no pending ticket. */
+	static synchronized boolean hasPendingDimensionTransferForGameTest(UUID entityUuid) {
+		return PENDING_DIMENSION_TRANSFERS.containsKey(
+				Objects.requireNonNull(entityUuid, "entityUuid"));
+	}
+
+	/** Disk copies must still belong to the one durable dimension/chunk authority. */
+	private static boolean durableChunkContextAllowed(
+			PlayerCampaignState.RewardFallbackRef fallbackRef,
+			ItemEntity item
+	) {
+		return item.level() instanceof ServerLevel level
+				&& dimensionId(level).equals(fallbackRef.dimension())
+				&& ChunkPos.containing(item.blockPosition())
+						.equals(ChunkPos.containing(fallbackRef.position()));
+	}
+
 	private static boolean matchesProjection(
 			ItemStack stack,
 			CampaignEvent.RewardProjectionKey key
@@ -824,8 +876,11 @@ public final class RewardService {
 			AttendanceSheetItem.Binding binding = sheetBinding.get();
 			CampaignEvent.SheetProjectionKey key = new CampaignEvent.SheetProjectionKey(
 					binding.ownerUuid(), binding.recoverySequence());
-			if (trackedSheetFallback(level, binding, item).isPresent()) {
-				return true;
+			Optional<PlayerCampaignState.RewardFallbackRef> tracked =
+					trackedSheetFallback(level, binding, item);
+			if (tracked.isPresent()) {
+				return allowTrackedRewardLoad(
+						level, key, tracked.get(), item, spawnReason, loadedFromDisk);
 			}
 			return !loadedFromDisk && spawnReason == null
 					&& transferAuthoritativeLiveDrop(level, key, item);
@@ -838,11 +893,78 @@ public final class RewardService {
 		InfiniteSlidesRemoteItem.Binding binding = remoteBinding.get();
 		CampaignEvent.RemoteProjectionKey key = new CampaignEvent.RemoteProjectionKey(
 				binding.ownerUuid(), binding.projectionUuid());
-		if (trackedRemoteFallback(level, binding, item).isPresent()) {
-			return true;
+		Optional<PlayerCampaignState.RewardFallbackRef> tracked =
+				trackedRemoteFallback(level, binding, item);
+		if (tracked.isPresent()) {
+			return allowTrackedRewardLoad(
+					level, key, tracked.get(), item, spawnReason, loadedFromDisk);
 		}
 		return !loadedFromDisk && spawnReason == null
 				&& transferAuthoritativeLiveDrop(level, key, item);
+	}
+
+	private static boolean allowTrackedRewardLoad(
+			ServerLevel level,
+			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef current,
+			ItemEntity item,
+			net.minecraft.world.entity.EntitySpawnReason spawnReason,
+			boolean loadedFromDisk
+	) {
+		if (loadedFromDisk) {
+			Entity liveWithDurableUuid = findEntity(level.getServer(), current.entityUuid());
+			return spawnReason == net.minecraft.world.entity.EntitySpawnReason.LOAD
+					&& durableChunkContextAllowed(current, item)
+					&& (liveWithDurableUuid == null || liveWithDurableUuid == item);
+		}
+		if (spawnReason == net.minecraft.world.entity.EntitySpawnReason.DIMENSION_TRAVEL) {
+			return admitDimensionTransfer(level, key, current, item);
+		}
+		return spawnReason == null && durableChunkContextAllowed(current, item);
+	}
+
+	private static boolean admitDimensionTransfer(
+			ServerLevel targetLevel,
+			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef current,
+			ItemEntity candidate
+	) {
+		AdmittedDimensionTransfer existing = ADMITTED_DIMENSION_TRANSFERS.get(candidate);
+		if (existing != null) {
+			return existing.pending().key().equals(key)
+					&& existing.targetRef().equals(current);
+		}
+		PendingDimensionTransfer pending = PENDING_DIMENSION_TRANSFERS.get(candidate.getUUID());
+		if (pending == null
+				|| !pending.key().equals(key)
+				|| !pending.sourceRef().equals(current)
+				|| pending.sourceLevel() == targetLevel
+				|| !matchesProjection(candidate.getItem(), key)) {
+			return false;
+		}
+		PlayerCampaignState.RewardFallbackRef targetRef = current.at(
+				dimensionId(targetLevel), candidate.blockPosition(), true);
+		CampaignTransition relocated = CampaignService.apply(
+				targetLevel,
+				new CampaignEvent.RewardFallback(
+						key,
+						targetRef.entityUuid(),
+						targetRef.dimension(),
+						targetRef.position(),
+						CampaignEvent.RewardFallbackOperation.RELOCATED,
+						current
+				),
+				ignored -> {
+				}
+		);
+		if (!relocated.accepted()
+				|| currentFallback(targetLevel, key).filter(targetRef::equals).isEmpty()) {
+			PENDING_DIMENSION_TRANSFERS.remove(candidate.getUUID(), pending);
+			return false;
+		}
+		ADMITTED_DIMENSION_TRANSFERS.put(
+				candidate, new AdmittedDimensionTransfer(pending, targetRef));
+		return true;
 	}
 
 	private static boolean transferAuthoritativeLiveDrop(
@@ -926,6 +1048,19 @@ public final class RewardService {
 		if (!(entity instanceof ItemEntity item)) {
 			return;
 		}
+		AdmittedDimensionTransfer dimensionTransfer = ADMITTED_DIMENSION_TRANSFERS.remove(item);
+		if (!added) {
+			if (dimensionTransfer != null) {
+				rollbackRejectedDimensionTransfer(dimensionTransfer, null);
+			}
+			else {
+				compensateRejectedPendingDimensionTransfer(item);
+			}
+		}
+		else if (added && dimensionTransfer != null) {
+			PENDING_DIMENSION_TRANSFERS.remove(
+					item.getUUID(), dimensionTransfer.pending());
+		}
 		LiveTransfer transfer = LIVE_TRANSFERS.remove(item);
 		if (added || transfer == null || !(item.level() instanceof ServerLevel level)) {
 			return;
@@ -937,7 +1072,8 @@ public final class RewardService {
 						transfer.ref().entityUuid(),
 						transfer.ref().dimension(),
 						transfer.ref().position(),
-						CampaignEvent.RewardFallbackOperation.CLEARED
+						CampaignEvent.RewardFallbackOperation.CLEARED,
+						transfer.ref()
 				),
 				ignored -> {
 				}
@@ -953,6 +1089,77 @@ public final class RewardService {
 		else {
 			restoreRejectedReward(transfer.inventory(), transfer.restoreSlot(), item.getItem());
 		}
+	}
+
+	private static boolean compensateRejectedPendingDimensionTransfer(ItemEntity candidate) {
+		PendingDimensionTransfer pending = PENDING_DIMENSION_TRANSFERS.get(candidate.getUUID());
+		if (pending == null
+				|| !(candidate.level() instanceof ServerLevel targetLevel)
+				|| targetLevel.getServer() != pending.sourceLevel().getServer()
+				|| targetLevel == pending.sourceLevel()
+				|| pending.stack().isEmpty()
+				|| !matchesProjection(candidate.getItem(), pending.key())
+				|| currentFallback(pending.sourceLevel(), pending.key())
+						.filter(pending.sourceRef()::equals).isEmpty()) {
+			return false;
+		}
+		PENDING_DIMENSION_TRANSFERS.remove(candidate.getUUID(), pending);
+		return restoreDimensionTransferSource(pending);
+	}
+
+	private static boolean rollbackRejectedDimensionTransfer(
+			AdmittedDimensionTransfer admitted,
+			ItemEntity trackedTarget
+	) {
+		PendingDimensionTransfer pending = admitted.pending();
+		if (trackedTarget != null && !trackedTarget.isRemoved()) {
+			SUPPRESSED_DIMENSION_UNLOADS.put(trackedTarget, Boolean.TRUE);
+			trackedTarget.discard();
+		}
+		PENDING_DIMENSION_TRANSFERS.remove(pending.sourceRef().entityUuid(), pending);
+		CampaignTransition rollback = CampaignService.apply(
+				pending.sourceLevel(),
+				new CampaignEvent.RewardFallback(
+						pending.key(),
+						pending.sourceRef().entityUuid(),
+						pending.sourceRef().dimension(),
+						pending.sourceRef().position(),
+						CampaignEvent.RewardFallbackOperation.RELOCATED,
+						admitted.targetRef()
+				),
+				ignored -> {
+				}
+		);
+		if (!rollback.accepted()
+				|| currentFallback(pending.sourceLevel(), pending.key())
+						.filter(pending.sourceRef()::equals).isEmpty()
+				|| pending.stack().isEmpty()) {
+			return false;
+		}
+		return restoreDimensionTransferSource(pending);
+	}
+
+	private static boolean restoreDimensionTransferSource(PendingDimensionTransfer pending) {
+		PlayerCampaignState.RewardFallbackRef sourceRef = pending.sourceRef();
+		Entity existing = findEntity(pending.sourceLevel().getServer(), sourceRef.entityUuid());
+		if (existing != null) {
+			return existing instanceof ItemEntity item
+					&& !item.isRemoved()
+					&& item.level() == pending.sourceLevel()
+					&& matchesProjection(item.getItem(), pending.key())
+					&& durableChunkContextAllowed(sourceRef, item);
+		}
+		ItemEntity restored = new ItemEntity(
+				pending.sourceLevel(),
+				sourceRef.position().getX() + 0.5D,
+				sourceRef.position().getY() + 0.25D,
+				sourceRef.position().getZ() + 0.5D,
+				pending.stack().copy()
+		);
+		restored.setUUID(sourceRef.entityUuid());
+		restored.setTarget(pending.key().ownerUuid());
+		restored.setDefaultPickUpDelay();
+		return pending.sourceLevel().addFreshEntity(restored);
 	}
 
 	/** Restores exact death-drop stacks after vanilla has finished clearing every source slot. */
@@ -983,15 +1190,40 @@ public final class RewardService {
 	}
 
 	private static synchronized void onEntityLoad(Entity entity, ServerLevel level) {
-		if (!(entity instanceof ItemEntity item)) {
+		if (!(entity instanceof ItemEntity item) || level.getEntity(item.getUUID()) != item) {
 			return;
 		}
 		LIVE_TRANSFERS.remove(item);
+		AdmittedDimensionTransfer dimensionTransfer = ADMITTED_DIMENSION_TRANSFERS.remove(item);
+		if (dimensionTransfer != null) {
+			if (!markFallbackMaterialized(
+					level,
+					dimensionTransfer.pending().key(),
+					item,
+					dimensionTransfer.targetRef())) {
+				rollbackRejectedDimensionTransfer(dimensionTransfer, item);
+				return;
+			}
+			PENDING_DIMENSION_TRANSFERS.remove(
+					item.getUUID(), dimensionTransfer.pending());
+			item.setTarget(dimensionTransfer.pending().key().ownerUuid());
+			if (dimensionTransfer.pending().key() instanceof CampaignEvent.SheetProjectionKey sheet) {
+				ensureSheetConfirmed(level, new AttendanceSheetItem.Binding(
+						sheet.ownerUuid(), sheet.recoverySequence()));
+			}
+			else {
+				CampaignEvent.RemoteProjectionKey remote =
+						(CampaignEvent.RemoteProjectionKey) dimensionTransfer.pending().key();
+				ensureRemoteConfirmed(level, new InfiniteSlidesRemoteItem.Binding(
+						remote.ownerUuid(), remote.projectionUuid()));
+			}
+			return;
+		}
 		AttendanceSheetItem.binding(item.getItem()).ifPresent(binding ->
 				trackedSheetFallback(level, binding, item).ifPresent(ref -> {
 					CampaignEvent.SheetProjectionKey key = new CampaignEvent.SheetProjectionKey(
 							binding.ownerUuid(), binding.recoverySequence());
-					if (markFallbackMaterialized(level, key, item)) {
+					if (markFallbackMaterialized(level, key, item, ref)) {
 						item.setTarget(binding.ownerUuid());
 						ensureSheetConfirmed(level, binding);
 					}
@@ -1000,7 +1232,7 @@ public final class RewardService {
 				trackedRemoteFallback(level, binding, item).ifPresent(ref -> {
 					CampaignEvent.RemoteProjectionKey key = new CampaignEvent.RemoteProjectionKey(
 							binding.ownerUuid(), binding.projectionUuid());
-					if (markFallbackMaterialized(level, key, item)) {
+					if (markFallbackMaterialized(level, key, item, ref)) {
 						item.setTarget(binding.ownerUuid());
 						ensureRemoteConfirmed(level, binding);
 					}
@@ -1011,14 +1243,56 @@ public final class RewardService {
 		if (!(entity instanceof ItemEntity item)) {
 			return;
 		}
+		if (SUPPRESSED_DIMENSION_UNLOADS.remove(item) != null
+				|| level.getEntity(item.getUUID()) != item) {
+			return;
+		}
 		CampaignSavedData.get(level).rewardFallbackByEntityUuid(item.getUUID())
 				.filter(authority -> authority.ref().dimension().equals(dimensionId(level)))
-				.ifPresent(authority -> recordFallbackUnload(level, authority.key(), item));
+				.ifPresent(authority -> {
+					if (item.getRemovalReason() == Entity.RemovalReason.CHANGED_DIMENSION) {
+						beginDimensionTransfer(level, authority, item);
+					}
+					else {
+						recordFallbackUnload(level, authority.key(), authority.ref(), item);
+					}
+				});
+	}
+
+	private static void beginDimensionTransfer(
+			ServerLevel sourceLevel,
+			CampaignSavedData.RewardFallbackAuthority authority,
+			ItemEntity item
+	) {
+		PlayerCampaignState.RewardFallbackRef sourceRef = authority.ref().at(
+				dimensionId(sourceLevel), item.blockPosition(), true);
+		CampaignTransition relocated = CampaignService.apply(
+				sourceLevel,
+				new CampaignEvent.RewardFallback(
+						authority.key(),
+						sourceRef.entityUuid(),
+						sourceRef.dimension(),
+						sourceRef.position(),
+						CampaignEvent.RewardFallbackOperation.RELOCATED,
+						authority.ref()
+				),
+				ignored -> {
+				}
+		);
+		if (!relocated.accepted()
+				&& currentFallback(sourceLevel, authority.key()).filter(sourceRef::equals).isEmpty()) {
+			return;
+		}
+		PENDING_DIMENSION_TRANSFERS.put(
+				item.getUUID(),
+				new PendingDimensionTransfer(
+						authority.key(), sourceRef, sourceLevel, item.getItem().copy()));
 	}
 
 	private static void recordFallbackUnload(
 			ServerLevel level,
 			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef expectedPrior,
 			ItemEntity item
 	) {
 		Entity.RemovalReason reason = item.getRemovalReason();
@@ -1032,7 +1306,8 @@ public final class RewardService {
 						item.getUUID(),
 						dimensionId(level),
 						item.blockPosition(),
-						operation
+						operation,
+						expectedPrior
 				),
 				ignored -> {
 				}
@@ -1049,7 +1324,7 @@ public final class RewardService {
 						&& state.sheetEntitled()
 						&& state.sheetRecoverySequence() == binding.recoverySequence()
 		).map(PlayerCampaignState::sheetFallback).filter(ref ->
-				ref.entityUuid().equals(item.getUUID()) && loadContextAllowed(ref, item));
+				ref.entityUuid().equals(item.getUUID()));
 	}
 
 	private static Optional<PlayerCampaignState.RewardFallbackRef> trackedRemoteFallback(
@@ -1062,7 +1337,7 @@ public final class RewardService {
 						&& state.remoteIssued()
 						&& binding.projectionUuid().equals(state.remoteProjectionUuid())
 		).map(PlayerCampaignState::remoteFallback).filter(ref ->
-				ref.entityUuid().equals(item.getUUID()) && loadContextAllowed(ref, item));
+				ref.entityUuid().equals(item.getUUID()));
 	}
 
 	public enum Outcome {
@@ -1112,6 +1387,33 @@ public final class RewardService {
 	private record RejectedDeathDrop(int restoreSlot, ItemStack stack) {
 		private RejectedDeathDrop {
 			Objects.requireNonNull(stack, "stack");
+		}
+	}
+
+	private record PendingDimensionTransfer(
+			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef sourceRef,
+			ServerLevel sourceLevel,
+			ItemStack stack
+	) {
+		private PendingDimensionTransfer {
+			Objects.requireNonNull(key, "key");
+			Objects.requireNonNull(sourceRef, "sourceRef");
+			Objects.requireNonNull(sourceLevel, "sourceLevel");
+			Objects.requireNonNull(stack, "stack");
+		}
+	}
+
+	private record AdmittedDimensionTransfer(
+			PendingDimensionTransfer pending,
+			PlayerCampaignState.RewardFallbackRef targetRef
+	) {
+		private AdmittedDimensionTransfer {
+			Objects.requireNonNull(pending, "pending");
+			Objects.requireNonNull(targetRef, "targetRef");
+			if (!pending.sourceRef().entityUuid().equals(targetRef.entityUuid())) {
+				throw new IllegalArgumentException("dimension transfer target identity changed");
+			}
 		}
 	}
 

@@ -1,6 +1,7 @@
 package dev.developershell.gametest;
 
 import com.mojang.authlib.GameProfile;
+import dev.developershell.DevelopersHell;
 import dev.developershell.campaign.CampaignEvent;
 import dev.developershell.campaign.CampaignSavedData;
 import dev.developershell.campaign.CampaignService;
@@ -59,9 +60,12 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.TooltipDisplay;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.level.storage.TagValueInput;
 import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.BlockHitResult;
@@ -361,6 +365,22 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 	@GameTest(maxTicks = 100, padding = 24)
 	public void remotePickupClearsFallbackBeforeStaleDiskCopyCanReload(GameTestHelper context) {
 		assertPickupClearsUuidAuthority(context, owner(1721), "reward-pickup-remote", true);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void materializedSheetRejectsSameDimensionStalePreRelocationDiskCopy(
+			GameTestHelper context
+	) {
+		assertSameDimensionStaleRelocationRejected(
+				context, owner(1722), "reward-relocation-sheet");
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void materializedRemoteDimensionTravelRollsBackRejectedTargetAndRejectsStaleSource(
+			GameTestHelper context
+	) {
+		assertDimensionTravelIsAtomic(
+				context, owner(1723), "reward-dimension-remote");
 	}
 
 	@GameTest(maxTicks = 100, padding = 24)
@@ -1216,6 +1236,362 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			removeBoundRewards(level.getServer(), ownerUuid);
 			close(connection);
 			clearArena(level, desk, FACING);
+		}
+	}
+
+	private static void assertSameDimensionStaleRelocationRejected(
+			GameTestHelper context,
+			UUID seed,
+			String playerName
+	) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(seed, desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		boolean cleanupScheduled = false;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, playerName);
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+			context.assertValueEqual(RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"same-dimension relocation fixture confirms both projections");
+			PlayerCampaignState confirmed = state(level, ownerUuid);
+			ItemStack sheet = findBoundSheet(owner, ownerUuid, confirmed.sheetRecoverySequence());
+			retainOnlySelected(owner, sheet);
+			owner.drop(false);
+			ItemEntity current = boundSheetEntities(
+					level.getServer(), ownerUuid, confirmed.sheetRecoverySequence()).getFirst();
+			ItemEntity staleDisk = diskRoundTripItem(level, current);
+			PlayerCampaignState.RewardFallbackRef prior = Objects.requireNonNull(
+					state(level, ownerUuid).sheetFallback(), "current Sheet authority");
+			ChunkPos sourceChunk = ChunkPos.containing(prior.position());
+			AttendanceSheetItem.Binding expected = new AttendanceSheetItem.Binding(
+					ownerUuid, confirmed.sheetRecoverySequence());
+			context.assertTrue(level.getEntity(current.getUUID()) == current,
+					"the pre-relocation Sheet UUID resolves to the one current live entity");
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleDisk, level, EntitySpawnReason.LOAD, true),
+					"a same-UUID live entity vetoes its pre-relocation disk copy before any later callback");
+
+			BlockPos relocatedPos = prior.position().offset(48, 0, 0);
+			level.getChunkAt(relocatedPos);
+			current.snapTo(Vec3.atCenterOf(relocatedPos));
+			PlayerCampaignState afterMovement = state(level, ownerUuid);
+			boolean realLifecycleCallback = !afterMovement.sheetFallback().equals(prior);
+			if (!realLifecycleCallback) {
+				context.assertTrue(level.getEntity(current.getUUID()) == current,
+						"headless callback seam starts with the exact live Sheet still tracked");
+				context.assertFalse(current.isRemoved(),
+						"headless callback seam cannot relocate a removed representation");
+				context.assertValueEqual(current.blockPosition(), relocatedPos,
+						"headless callback seam observes the intended current position");
+				ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(current, level);
+				DevelopersHell.LOGGER.info("REWARD_RELOCATION_TEST_PATH=PRODUCTION_UNLOAD_ADAPTER");
+			}
+			else {
+				context.assertValueEqual(afterMovement.sheetFallback().entityUuid(), current.getUUID(),
+						"real lifecycle relocation preserves the exact current UUID");
+				context.assertValueEqual(afterMovement.sheetFallback().position(), current.blockPosition(),
+						"real lifecycle callback records the current Sheet position");
+				context.assertTrue(afterMovement.sheetFallback().materialized(),
+						"real lifecycle relocation preserves materialized authority");
+				context.assertFalse(current.isRemoved(),
+						"real section transfer keeps the current Sheet alive");
+				context.assertFalse(current.getItem().isEmpty(),
+						"real section transfer keeps the exact Sheet stack nonempty");
+				context.assertTrue(AttendanceSheetItem.binding(current.getItem())
+						.filter(expected::equals).isPresent(),
+						"real section transfer keeps the exact confirmed Sheet binding");
+				DevelopersHell.LOGGER.info("REWARD_RELOCATION_TEST_PATH=REAL_LIFECYCLE_CALLBACK");
+			}
+			PlayerCampaignState relocated = state(level, ownerUuid);
+			PlayerCampaignState.RewardFallbackRef expectedRelocated = prior.at(
+					level.dimension().identifier().toString(), current.blockPosition(), true);
+			context.assertValueEqual(relocated.sheetFallback(), expectedRelocated,
+					"the production lifecycle path CAS-relocates the exact durable Sheet context");
+			if (!realLifecycleCallback) {
+				context.assertTrue(level.getEntity(current.getUUID()) == current,
+						"the adapter-relocated current Sheet remains the one tracked live entity");
+			}
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleDisk, level, EntitySpawnReason.LOAD, true),
+					"the old-chunk disk copy cannot reclaim materialized Sheet authority");
+			if (realLifecycleCallback) {
+				ConnectedPlayer cleanupConnection = connection;
+				context.runAfterDelay(3, () -> {
+					try {
+						context.assertTrue(level.getEntity(current.getUUID()) == current,
+								"real section transfer restores exact UUID visibility within three ticks");
+						context.assertTrue(boundSheetEntities(
+								level.getServer(), ownerUuid, confirmed.sheetRecoverySequence()).stream()
+								.noneMatch(item -> ChunkPos.containing(item.blockPosition()).equals(sourceChunk)),
+								"settled real relocation leaves no bound Sheet in the old source chunk");
+						context.assertValueEqual(countLiveRewardRepresentations(
+								level.getServer(), owner, state(level, ownerUuid), false), 1,
+								"settled real relocation retains exactly one Sheet representation");
+					}
+					finally {
+						removeBoundRewards(level.getServer(), ownerUuid);
+						close(cleanupConnection);
+						clearArena(level, desk, FACING);
+					}
+					context.succeed();
+				});
+				cleanupScheduled = true;
+				return;
+			}
+			context.assertTrue(boundSheetEntities(
+					level.getServer(), ownerUuid, confirmed.sheetRecoverySequence()).stream()
+					.noneMatch(item -> ChunkPos.containing(item.blockPosition()).equals(sourceChunk)),
+					"adapter relocation leaves no bound Sheet in the old source chunk");
+			context.assertValueEqual(countLiveRewardRepresentations(
+					level.getServer(), owner, relocated, false), 1,
+					"same-dimension stale admission leaves exactly one current Sheet");
+			context.succeed();
+		}
+		finally {
+			if (!cleanupScheduled) {
+				removeBoundRewards(level.getServer(), ownerUuid);
+				close(connection);
+				clearArena(level, desk, FACING);
+			}
+		}
+	}
+
+	private static void assertDimensionTravelIsAtomic(
+			GameTestHelper context,
+			UUID seed,
+			String playerName
+	) {
+		ServerLevel sourceLevel = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(seed, desk, sourceLevel.getGameTime());
+		ConnectedPlayer connection = null;
+		ServerLevel forcedTargetLevel = null;
+		ChunkPos forcedTargetChunk = null;
+		boolean cleanupScheduled = false;
+		try {
+			buildArena(sourceLevel, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, playerName);
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+			context.assertValueEqual(RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"dimension-travel fixture confirms both projections");
+			PlayerCampaignState confirmed = state(sourceLevel, ownerUuid);
+			ItemStack remote = findBoundRemote(owner, ownerUuid, confirmed.remoteProjectionUuid());
+			retainOnlySelected(owner, remote);
+			owner.drop(false);
+			ItemEntity source = boundRemoteEntities(
+					sourceLevel.getServer(), ownerUuid, confirmed.remoteProjectionUuid()).getFirst();
+			UUID entityUuid = source.getUUID();
+			ItemEntity staleSourceDisk = diskRoundTripItem(sourceLevel, source);
+			PlayerCampaignState.RewardFallbackRef sourceRef = Objects.requireNonNull(
+					state(sourceLevel, ownerUuid).remoteFallback(), "source Remote authority");
+
+			ServerLevel targetLevel = Objects.requireNonNull(
+					sourceLevel.getServer().getLevel(Level.NETHER), "GameTest Nether");
+			int offset = Math.floorMod(ownerUuid.hashCode(), 512) * 32;
+			BlockPos targetPos = new BlockPos(12000 + offset, 80, 12000 + offset);
+			forcedTargetLevel = targetLevel;
+			forcedTargetChunk = ChunkPos.containing(targetPos);
+			context.assertTrue(targetLevel.setChunkForced(
+					forcedTargetChunk.x(), forcedTargetChunk.z(), true),
+					"cross-dimension fixture pins a real entity-ticking target chunk");
+			targetLevel.getChunkAt(targetPos);
+			Entity targetOwner = owner.teleport(new TeleportTransition(
+					targetLevel,
+					Vec3.atCenterOf(targetPos),
+					Vec3.ZERO,
+					owner.getYRot(),
+					owner.getXRot(),
+					TeleportTransition.DO_NOTHING
+			));
+			context.assertTrue(targetOwner == owner,
+					"the authenticated owner supplies a real target-dimension player ticket");
+			AtomicBoolean rejectTargetOnce = new AtomicBoolean(true);
+			AtomicBoolean observedStateFirstTarget = new AtomicBoolean(false);
+			InfiniteSlidesRemoteItem.Binding expected = new InfiniteSlidesRemoteItem.Binding(
+					ownerUuid, confirmed.remoteProjectionUuid());
+			ServerEntityEvents.ALLOW_LOAD.register((entity, candidateLevel, spawnReason, loadedFromDisk) -> {
+				if (candidateLevel == targetLevel
+						&& spawnReason == EntitySpawnReason.DIMENSION_TRAVEL
+						&& entity instanceof ItemEntity item
+						&& item.getUUID().equals(entityUuid)
+						&& InfiniteSlidesRemoteItem.binding(item.getItem()).filter(expected::equals).isPresent()
+						&& rejectTargetOnce.compareAndSet(true, false)) {
+					PlayerCampaignState.RewardFallbackRef observed =
+							state(candidateLevel, ownerUuid).remoteFallback();
+					observedStateFirstTarget.set(observed != null
+							&& observed.dimension().equals(targetLevel.dimension().identifier().toString())
+							&& ChunkPos.containing(observed.position()).equals(ChunkPos.containing(targetPos)));
+					return false;
+				}
+				return true;
+			});
+
+			ConnectedPlayer cleanupConnection = connection;
+			ChunkPos cleanupTargetChunk = forcedTargetChunk;
+			context.runAfterDelay(20, () -> {
+				try {
+			PlayerCampaignState.RewardFallbackRef expectedFirstRollback = sourceRef.at(
+					sourceLevel.dimension().identifier().toString(), source.blockPosition(), true);
+			Entity rejectedReplacement = source.teleport(new TeleportTransition(
+					targetLevel,
+					Vec3.atCenterOf(targetPos),
+					Vec3.ZERO,
+					source.getYRot(),
+					source.getXRot(),
+					TeleportTransition.DO_NOTHING
+			));
+			context.assertTrue(rejectedReplacement != null && rejectedReplacement != source,
+					"Minecraft creates the documented replacement before target admission");
+			context.assertValueEqual(rejectedReplacement.getUUID(), entityUuid,
+					"dimension-travel replacement preserves exact entity identity");
+			context.assertFalse(rejectTargetOnce.get(),
+					"a later listener exercises the ignored target-add failure");
+			context.assertTrue(observedStateFirstTarget.get(),
+					"target authority is durable before the later listener can reject add");
+			context.assertTrue(targetLevel.getEntity(entityUuid) == null,
+					"the rejected target replacement is never tracked");
+			List<ItemEntity> restoredSource = boundRemoteEntities(
+					sourceLevel.getServer(), ownerUuid, confirmed.remoteProjectionUuid());
+			context.assertValueEqual(restoredSource.size(), 1,
+					"target rejection restores exactly one source Remote");
+			context.assertTrue(restoredSource.getFirst().level() == sourceLevel,
+					"the exact rejected transfer returns to its authenticated source level");
+			context.assertValueEqual(
+					state(sourceLevel, ownerUuid).remoteFallback(), expectedFirstRollback,
+					"target rejection CAS-rolls durable authority back to the exact source ref");
+
+			ItemEntity restored = restoredSource.getFirst();
+			context.assertTrue(sourceLevel.getEntity(entityUuid) == restored,
+					"source UUID lookup resolves the compensated physical Remote before retry");
+			context.assertTrue(InfiniteSlidesRemoteItem.binding(restored.getItem())
+					.filter(expected::equals).isPresent(),
+					"later-listener compensation preserves the exact confirmed Remote binding");
+
+			RewardServiceGameTestAccess.beginDimensionTransfer(restored);
+			PlayerCampaignState.RewardFallbackRef beforeEarlyRejection = Objects.requireNonNull(
+					state(sourceLevel, ownerUuid).remoteFallback(), "pre-admission source authority");
+			context.assertValueEqual(beforeEarlyRejection, expectedFirstRollback,
+					"the earlier-listener fixture stages the exact authoritative source ref");
+			ItemStack preAdmissionStack = restored.getItem().copy();
+			context.assertTrue(InfiniteSlidesRemoteItem.binding(preAdmissionStack)
+					.filter(expected::equals).isPresent(),
+					"the staged source stack carries the exact durable owner/projection identity");
+			RewardServiceGameTestAccess.suppressNextDimensionUnload(restored);
+			restored.discard();
+			context.assertTrue(sourceLevel.getEntity(entityUuid) == null,
+					"synthetic earlier-listener fixture removes the staged source exactly once");
+			ItemEntity preAdmissionRejected = fallbackItem(
+					targetLevel, targetPos, preAdmissionStack, entityUuid);
+			preAdmissionRejected.setTarget(ownerUuid);
+			RewardService.onEntityAddResult(preAdmissionRejected, false);
+			List<ItemEntity> restoredBeforeAdmission = boundRemoteEntities(
+					sourceLevel.getServer(), ownerUuid, confirmed.remoteProjectionUuid());
+			context.assertValueEqual(restoredBeforeAdmission.size(), 1,
+					"earlier-listener rejection restores exactly one authenticated source Remote");
+			ItemEntity exactPreAdmissionRestore = restoredBeforeAdmission.getFirst();
+			context.assertValueEqual(exactPreAdmissionRestore.getUUID(), entityUuid,
+					"pre-admission compensation preserves the exact pending entity UUID");
+			context.assertTrue(sourceLevel.getEntity(entityUuid) == exactPreAdmissionRestore,
+					"source UUID lookup resolves only the compensated Remote");
+			context.assertTrue(targetLevel.getEntity(entityUuid) == null,
+					"earlier-listener rejection creates no alternate target authority");
+			context.assertValueEqual(
+					state(sourceLevel, ownerUuid).remoteFallback(), expectedFirstRollback,
+					"pre-admission rejection keeps durable authority at the exact source ref");
+			context.assertTrue(InfiniteSlidesRemoteItem.binding(
+					exactPreAdmissionRestore.getItem()).filter(expected::equals).isPresent(),
+					"pre-admission compensation preserves the exact Remote binding");
+			context.assertFalse(RewardServiceGameTestAccess.hasPendingDimensionTransfer(entityUuid),
+					"successful pre-admission compensation consumes the one pending handoff ticket");
+			context.assertValueEqual(countLiveRewardRepresentations(
+					sourceLevel.getServer(), owner, state(sourceLevel, ownerUuid), true), 1,
+					"pre-admission compensation leaves exactly one physical Remote representation");
+
+			restored = exactPreAdmissionRestore;
+			Entity transferred = restored.teleport(new TeleportTransition(
+					targetLevel,
+					Vec3.atCenterOf(targetPos),
+					Vec3.ZERO,
+					restored.getYRot(),
+					restored.getXRot(),
+					TeleportTransition.DO_NOTHING
+			));
+			context.assertTrue(transferred instanceof ItemEntity && transferred != restored,
+					"the accepted retry uses the real cross-dimension replacement path");
+			context.assertValueEqual(transferred.getUUID(), entityUuid,
+					"accepted dimension travel preserves the durable entity UUID");
+			context.assertTrue(sourceLevel.getEntity(entityUuid) == null,
+					"accepted transfer leaves no source entity with the reward UUID");
+			ItemEntity returnedTarget = (ItemEntity) transferred;
+			context.assertFalse(returnedTarget.isRemoved(),
+					"the accepted target Remote remains a physical entity");
+			context.assertFalse(returnedTarget.getItem().isEmpty(),
+					"the accepted target Remote retains its exact physical stack");
+			context.assertTrue(InfiniteSlidesRemoteItem.binding(returnedTarget.getItem())
+					.filter(expected::equals).isPresent(),
+					"the accepted target entity retains the confirmed Remote binding");
+			List<ItemEntity> acceptedTargets = boundRemoteEntities(
+					sourceLevel.getServer(), ownerUuid, confirmed.remoteProjectionUuid());
+			context.assertTrue(acceptedTargets.size() <= 1,
+					"the target entity store never exposes duplicate bound Remotes");
+			if (acceptedTargets.isEmpty()) {
+				context.assertTrue(targetLevel.getEntity(entityUuid) == null,
+						"the headless Nether keeps the accepted Remote in its hidden durable section");
+			}
+			else {
+				context.assertTrue(acceptedTargets.getFirst() == returnedTarget,
+						"a visible target lookup resolves the accepted replacement itself");
+				context.assertTrue(targetLevel.getEntity(entityUuid) == returnedTarget,
+						"target UUID lookup resolves the one visible physical Remote");
+			}
+			ItemEntity duplicateUuidProbe = new ItemEntity(
+					targetLevel, targetPos.getX(), targetPos.getY(), targetPos.getZ(),
+					new ItemStack(Items.STONE));
+			duplicateUuidProbe.setUUID(entityUuid);
+			context.assertFalse(targetLevel.addFreshEntity(duplicateUuidProbe),
+					"the durable target entity store reserves the exact accepted UUID once");
+			PlayerCampaignState moved = state(sourceLevel, ownerUuid);
+			context.assertValueEqual(moved.remoteFallback().dimension(),
+					targetLevel.dimension().identifier().toString(),
+					"dimension-travel CAS commits target dimension authority");
+			context.assertValueEqual(ChunkPos.containing(moved.remoteFallback().position()),
+					ChunkPos.containing(targetPos),
+					"dimension-travel CAS commits target chunk authority");
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					staleSourceDisk, sourceLevel, EntitySpawnReason.LOAD, true),
+					"the stale source-dimension disk copy cannot reclaim moved authority");
+			int hiddenTargetRepresentation = acceptedTargets.isEmpty() ? 1 : 0;
+			context.assertValueEqual(countLiveRewardRepresentations(
+					sourceLevel.getServer(), owner, moved, true) + hiddenTargetRepresentation, 1,
+					"cross-dimension transfer retains one authoritative Remote representation");
+				}
+				finally {
+					removeBoundRewards(sourceLevel.getServer(), ownerUuid);
+					targetLevel.setChunkForced(
+							cleanupTargetChunk.x(), cleanupTargetChunk.z(), false);
+					close(cleanupConnection);
+					clearArena(sourceLevel, desk, FACING);
+				}
+				context.succeed();
+			});
+			cleanupScheduled = true;
+		}
+		finally {
+			if (!cleanupScheduled) {
+				removeBoundRewards(sourceLevel.getServer(), ownerUuid);
+				if (forcedTargetLevel != null && forcedTargetChunk != null) {
+					forcedTargetLevel.setChunkForced(
+							forcedTargetChunk.x(), forcedTargetChunk.z(), false);
+				}
+				close(connection);
+				clearArena(sourceLevel, desk, FACING);
+			}
 		}
 	}
 

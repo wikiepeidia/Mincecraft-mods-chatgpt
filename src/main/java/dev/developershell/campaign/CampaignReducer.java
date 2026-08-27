@@ -317,6 +317,9 @@ public final class CampaignReducer {
 		}
 
 		if (event.operation() == CampaignEvent.RewardFallbackOperation.RESERVE) {
+			if (event.expectedPrior() != null) {
+				return noOp(state, "stale_reward_fallback_context");
+			}
 			if (!projectionPending
 					|| current != null
 					|| (!sheet && state.legacyRemoteAdoptionPending())
@@ -338,6 +341,9 @@ public final class CampaignReducer {
 			);
 		}
 		if (event.operation() == CampaignEvent.RewardFallbackOperation.TRANSFERRED) {
+			if (event.expectedPrior() != null) {
+				return noOp(state, "stale_reward_fallback_context");
+			}
 			if (projectionPending
 					|| current != null
 					|| (!sheet && state.legacyRemoteAdoptionPending())) {
@@ -355,6 +361,9 @@ public final class CampaignReducer {
 
 		if (current == null || !current.entityUuid().equals(event.entityUuid())) {
 			return noOp(state, "wrong_reward_fallback");
+		}
+		if (!Objects.equals(current, event.expectedPrior())) {
+			return noOp(state, "stale_reward_fallback_context");
 		}
 		PlayerCampaignState.RewardFallbackRef nextRef = switch (event.operation()) {
 			case MATERIALIZED -> current.at(event.dimension(), event.position(), true);
