@@ -214,7 +214,7 @@ public final class DevHellConfigLoader {
 			return null;
 		}
 		rejectUnknown(lecture, LECTURE_PROPERTIES, "$.lecture", "known lecture tuning property", issues);
-		Integer professorHealth = requiredInteger(lecture, "professorHealth", "$.lecture", 40, 400, issues);
+		Integer professorHealth = requiredInteger(lecture, "professorHealth", "$.lecture", 81, 400, issues);
 		Integer missDamage = requiredInteger(lecture, "missDamage", "$.lecture", 1, 20, issues);
 		Integer maxAdds = requiredInteger(lecture, "maxAdds", "$.lecture", 0, 8, issues);
 		Integer slideTicks = requiredInteger(lecture, "slideDeckTelegraphTicks", "$.lecture", 60, 200, issues);

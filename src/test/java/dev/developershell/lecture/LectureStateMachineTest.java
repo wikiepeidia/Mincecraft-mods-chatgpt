@@ -264,6 +264,53 @@ final class LectureStateMachineTest {
 	}
 
 	@Test
+	void minimumConfiguredHealthCanCompleteAllThreeActs() {
+		LectureRules minimumRules = LectureRules.configured(
+				100, 80, 20, 10, 6, 24, 8, 81, 4, 3, 160, 120
+		);
+		LectureStateMachine.State slide = LectureStateMachine.start(
+				ENCOUNTER, OWNER, 1, 0L, minimumRules, false
+		).state();
+		LectureStateMachine.State slideWindow = settle(LectureStateMachine.step(
+				slide,
+				new LectureStateMachine.Input.Tick(slide.deadlineTick(), laneCenter(slide.safeLane()), 20)
+		)).state();
+		LectureStateMachine.Output slideHit = LectureStateMachine.step(
+				slideWindow,
+				new LectureStateMachine.Input.Damage(slideWindow.phaseStartedTick(), OWNER, ENCOUNTER, 999)
+		);
+		assertEquals(80, slideHit.state().bossHealth());
+
+		LectureStateMachine.State quiz = finishRecovery(slideHit);
+		LectureStateMachine.State quizWindow = settle(LectureStateMachine.step(
+				quiz,
+				new LectureStateMachine.Input.Tick(quiz.deadlineTick(), padCenter(quiz.correctPad()), 20)
+		)).state();
+		LectureStateMachine.Output quizHit = LectureStateMachine.step(
+				quizWindow,
+				new LectureStateMachine.Input.Damage(quizWindow.phaseStartedTick(), OWNER, ENCOUNTER, 999)
+		);
+		assertEquals(40, quizHit.state().bossHealth());
+
+		LectureStateMachine.State attendance = finishRecovery(quizHit);
+		LectureStateMachine.State attendanceWindow = settle(LectureStateMachine.step(
+				attendance,
+				new LectureStateMachine.Input.Tick(
+						attendance.deadlineTick(),
+						LectureGeometry.attendanceCenter(attendance.attendanceQuadrant()),
+						20
+				)
+		)).state();
+		LectureStateMachine.Output victory = LectureStateMachine.step(
+				attendanceWindow,
+				new LectureStateMachine.Input.Damage(attendanceWindow.phaseStartedTick(), OWNER, ENCOUNTER, 999)
+		);
+		assertEquals(LectureStateMachine.Stage.COMPLETE, victory.state().stage());
+		assertEquals(0, victory.state().bossHealth());
+		assertEquals(1L, victory.intents().stream().filter(LectureStateMachine.Intent.Victory.class::isInstance).count());
+	}
+
+	@Test
 	void vulnerabilityUsesHalfOpenEightyTickBoundaryAndTimeoutRepeatsOnlyCurrentAct() {
 		LectureStateMachine.State windUp = LectureStateMachine.start(ENCOUNTER, OWNER, 3, 0L, RULES, false).state();
 		LectureStateMachine.State vulnerable = settle(LectureStateMachine.step(

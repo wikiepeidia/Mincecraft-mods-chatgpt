@@ -149,6 +149,21 @@ final class DevHellConfigTest {
 	}
 
 	@Test
+	void professorHealthMustStartAboveTheFirstActFloor() {
+		DevHellConfigLoader.LoadResult impossible = loadDocument(
+				validDocument().replace("\"professorHealth\": 120", "\"professorHealth\": 80")
+		);
+		assertEquals(DevHellConfigLoader.SourceStatus.INVALID_DEFAULTED, impossible.sourceStatus());
+		assertIssue(impossible, "$.lecture.professorHealth", "80", "81..400");
+
+		DevHellConfigLoader.LoadResult minimumPlayable = loadDocument(
+				validDocument().replace("\"professorHealth\": 120", "\"professorHealth\": 81")
+		);
+		assertEquals(DevHellConfigLoader.SourceStatus.VALID, minimumPlayable.sourceStatus());
+		assertEquals(81, minimumPlayable.config().lecture().professorHealth());
+	}
+
+	@Test
 	void malformedAndNonStrictJsonFailClosedWithoutWriting() {
 		List<String> malformedDocuments = List.of(
 				"{\"schemaVersion\": 1",
@@ -227,7 +242,7 @@ final class DevHellConfigTest {
 		)) {
 			assertPath(result, path);
 		}
-		assertTrue(result.issues().stream().anyMatch(issue -> issue.expected().contains("40..400")));
+		assertTrue(result.issues().stream().anyMatch(issue -> issue.expected().contains("81..400")));
 		assertTrue(result.issues().stream().anyMatch(issue -> issue.expected().contains("manual|automatic")));
 		assertPublicSafe(result.issues());
 	}

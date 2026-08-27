@@ -141,7 +141,7 @@ public record DevHellConfig(
 		);
 
 		public LectureTuning {
-			requireRange("professorHealth", professorHealth, 40, 400);
+			requireRange("professorHealth", professorHealth, 81, 400);
 			requireRange("missDamage", missDamage, 1, 20);
 			requireRange("maxAdds", maxAdds, 0, 8);
 			requireRange("slideDeckTelegraphTicks", slideDeckTelegraphTicks, 60, 200);

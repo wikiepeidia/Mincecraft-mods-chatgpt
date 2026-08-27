@@ -89,7 +89,7 @@ public final class LectureRules {
 		requireRange("particlesPerRefresh", particlesPerRefresh, 1, 12);
 		requireRange("maxParticleBurstsPerEncounter", maxParticleBurstsPerEncounter, 1, 40);
 		requireRange("maxTransitionSoundsPerEncounter", maxTransitionSoundsPerEncounter, 1, 12);
-		requireRange("bossMaxHealth", bossMaxHealth, 40, 400);
+		requireRange("bossMaxHealth", bossMaxHealth, 81, 400);
 		requireRange("missDamage", missDamage, 1, 20);
 		requireRange("maxHomeworkAdds", maxHomeworkAdds, 0, 8);
 		requireRange("quizTelegraphTicks", quizTelegraphTicks, 80, 300);
