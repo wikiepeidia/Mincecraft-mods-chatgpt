@@ -245,7 +245,7 @@ final class RewardDropGuard {
 	}
 
 	static synchronized int pendingTransferCount() {
-		return LIVE_TRANSFERS.size();
+		return LIVE_TRANSFERS.size() + ACTIVE.get().size();
 	}
 
 	private static Candidate findCandidate(ServerLevel level, ItemStack stack) {

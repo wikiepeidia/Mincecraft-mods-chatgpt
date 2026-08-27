@@ -1146,10 +1146,8 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			context.assertTrue((remote ? state(level, ownerUuid).remoteFallback()
 					: state(level, ownerUuid).sheetFallback()) == null,
 					"rejected fabrication creates no durable fallback authority");
-			if (!remote || earlyRejection) {
-				authoritative = assertRejectedLiveDropRollsBack(
-						context, level, owner, confirmed, remote, deathDrop, earlyRejection);
-			}
+			authoritative = assertRejectedLiveDropRollsBack(
+					context, level, owner, confirmed, remote, deathDrop, earlyRejection);
 
 			if (deathDrop) {
 				owner.dropEquipmentForTest();
@@ -1240,6 +1238,7 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			ServerEntityEvents.ALLOW_LOAD.register(rejector);
 		}
 		ItemStack unrelated = deathDrop ? ItemStack.EMPTY : new ItemStack(Items.DIRT, 7);
+		int sourceSlot = owner.getInventory().getSelectedSlot();
 		int unrelatedSlot = owner.getInventory().getSelectedSlot() == 1 ? 2 : 1;
 		if (!deathDrop) {
 			owner.getInventory().setItem(unrelatedSlot, unrelated);
@@ -1249,13 +1248,17 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			owner.dropEquipmentForTest();
 		}
 
-		context.assertFalse(rejectNext.get(),
-				"the exact production live drop reached the later rejection seam");
+		context.assertFalse(rejectNext.get(), earlyRejection
+				? "the exact production live drop reached the earlier ordered rejection listener"
+				: "the exact production live drop reached the later rejection listener");
 		context.assertValueEqual(RewardServiceGameTestAccess.pendingLiveTransferCount(), 0,
 				"rejected live drop leaves zero transient source/admission tickets");
 		context.assertTrue((remote ? state(level, owner.getUUID()).remoteFallback()
 				: state(level, owner.getUUID()).sheetFallback()) == null,
 				"the ServerLevel RETURN mixin rolls rejected admission authority back synchronously");
+		context.assertFalse(remote ? state(level, owner.getUUID()).remoteProjectionPending()
+				: state(level, owner.getUUID()).sheetProjectionPending(),
+				"exact source restoration reconfirms the projection without a pending ticket");
 		if (!deathDrop) {
 			context.assertTrue(owner.getInventory().getItem(unrelatedSlot) == unrelated
 					&& unrelated.getCount() == 7,
@@ -1265,7 +1268,21 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 				? boundRemoteEntities(level.getServer(), owner.getUUID(), confirmed.remoteProjectionUuid())
 				: boundSheetEntities(level.getServer(), owner.getUUID(), confirmed.sheetRecoverySequence())).size(), 0,
 				"a rejected add leaves no tracked reward entity");
-		Objects.requireNonNull(rejectedEntity.get(), "rejected live-drop entity");
+		ItemStack exactRejectedStack = Objects.requireNonNull(
+				Objects.requireNonNull(rejectedEntity.get(), "rejected live-drop entity").getItem(),
+				"rejected live-drop stack");
+		context.assertTrue(level.getEntity(rejectedEntity.get().getUUID()) == null,
+				"the exact rejected entity UUID never becomes live authority");
+		context.assertTrue(remote
+				? InfiniteSlidesRemoteItem.binding(exactRejectedStack).filter(binding ->
+						binding.ownerUuid().equals(owner.getUUID())
+								&& binding.projectionUuid().equals(confirmed.remoteProjectionUuid())).isPresent()
+				: AttendanceSheetItem.binding(exactRejectedStack).filter(binding ->
+						binding.ownerUuid().equals(owner.getUUID())
+								&& binding.recoverySequence() == confirmed.sheetRecoverySequence()).isPresent(),
+				"the restored object retains the exact confirmed reward binding");
+		context.assertTrue(owner.getInventory().getItem(sourceSlot) == exactRejectedStack,
+				"rollback restores the exact rejected stack object to its exact vanilla source slot");
 		context.assertValueEqual(remote
 					? countBoundRemotes(owner, owner.getUUID(), confirmed.remoteProjectionUuid())
 					: countBoundSheets(owner, owner.getUUID(), confirmed.sheetRecoverySequence()), 1,
