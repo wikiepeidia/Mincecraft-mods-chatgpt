@@ -7,6 +7,10 @@ import dev.developershell.campaign.PlayerCampaignState;
 import dev.developershell.item.AttendanceSheetItem;
 import dev.developershell.item.InfiniteSlidesRemoteItem;
 import dev.developershell.registry.ModItems;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,6 +28,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -35,6 +40,9 @@ import net.minecraft.world.level.Level;
 public final class RewardService {
 	private static final String VICTORY_KEY = "message.developers_hell.reward.victory";
 	private static final String REMOTE_READY_KEY = "message.developers_hell.remote.ready";
+	private static final Map<ItemEntity, LiveTransfer> LIVE_TRANSFERS = new IdentityHashMap<>();
+	private static final Map<Inventory, List<RejectedDeathDrop>> REJECTED_DEATH_DROPS =
+			new IdentityHashMap<>();
 	private static boolean sheetLifecycleRegistered;
 
 	/**
@@ -801,7 +809,7 @@ public final class RewardService {
 		return Optional.empty();
 	}
 
-	private static boolean allowRewardLoad(
+	private static synchronized boolean allowRewardLoad(
 			Entity entity,
 			ServerLevel level,
 			net.minecraft.world.entity.EntitySpawnReason spawnReason,
@@ -812,17 +820,172 @@ public final class RewardService {
 		}
 		Optional<AttendanceSheetItem.Binding> sheetBinding = AttendanceSheetItem.binding(item.getItem());
 		if (sheetBinding.isPresent()) {
-			return trackedSheetFallback(level, sheetBinding.get(), item).isPresent();
+			AttendanceSheetItem.Binding binding = sheetBinding.get();
+			CampaignEvent.SheetProjectionKey key = new CampaignEvent.SheetProjectionKey(
+					binding.ownerUuid(), binding.recoverySequence());
+			if (trackedSheetFallback(level, binding, item).isPresent()) {
+				return true;
+			}
+			return !loadedFromDisk && spawnReason == null
+					&& transferAuthoritativeLiveDrop(level, key, item);
 		}
 		Optional<InfiniteSlidesRemoteItem.Binding> remoteBinding =
 				InfiniteSlidesRemoteItem.binding(item.getItem());
-		return remoteBinding.isEmpty() || trackedRemoteFallback(level, remoteBinding.get(), item).isPresent();
+		if (remoteBinding.isEmpty()) {
+			return true;
+		}
+		InfiniteSlidesRemoteItem.Binding binding = remoteBinding.get();
+		CampaignEvent.RemoteProjectionKey key = new CampaignEvent.RemoteProjectionKey(
+				binding.ownerUuid(), binding.projectionUuid());
+		if (trackedRemoteFallback(level, binding, item).isPresent()) {
+			return true;
+		}
+		return !loadedFromDisk && spawnReason == null
+				&& transferAuthoritativeLiveDrop(level, key, item);
 	}
 
-	private static void onEntityLoad(Entity entity, ServerLevel level) {
+	private static boolean transferAuthoritativeLiveDrop(
+			ServerLevel level,
+			CampaignEvent.RewardProjectionKey key,
+			ItemEntity item
+	) {
+		Optional<PlayerCampaignState> stateView = CampaignService.snapshot(level, key.ownerUuid());
+		if (stateView.isEmpty()) {
+			return false;
+		}
+		PlayerCampaignState state = stateView.get();
+		boolean currentProjection = key instanceof CampaignEvent.SheetProjectionKey sheet
+				? state.status() == PlayerCampaignState.LectureStatus.PASSED
+						&& state.sheetEntitled()
+						&& !state.sheetProjectionPending()
+						&& state.sheetFallback() == null
+						&& sheet.recoverySequence() == state.sheetRecoverySequence()
+				: state.status() == PlayerCampaignState.LectureStatus.PASSED
+						&& state.remoteIssued()
+						&& !state.remoteProjectionPending()
+						&& !state.legacyRemoteAdoptionPending()
+						&& state.remoteFallback() == null
+						&& ((CampaignEvent.RemoteProjectionKey) key).projectionUuid()
+								.equals(state.remoteProjectionUuid());
+		if (!currentProjection) {
+			return false;
+		}
+		ServerPlayer owner = level.getServer().getPlayerList().getPlayer(key.ownerUuid());
+		if (owner == null || owner.level() != level) {
+			return false;
+		}
+		Inventory inventory = owner.getInventory();
+		int identitySlot = inventoryIdentitySlot(owner, item.getItem());
+		int selectedSlot = inventory.getSelectedSlot();
+		boolean ownerQDrop = item.getOwner() == owner && inventory.getItem(selectedSlot).isEmpty();
+		boolean ownerDeathDrop = item.getOwner() == null && owner.isDeadOrDying() && identitySlot >= 0;
+		if (!ownerQDrop && !ownerDeathDrop) {
+			return false;
+		}
+
+		PlayerCampaignState.RewardFallbackRef transferred = new PlayerCampaignState.RewardFallbackRef(
+				item.getUUID(), dimensionId(level), item.blockPosition(), true);
+		CampaignTransition transition = CampaignService.apply(
+				level,
+				new CampaignEvent.RewardFallback(
+						key,
+						transferred.entityUuid(),
+						transferred.dimension(),
+						transferred.position(),
+						CampaignEvent.RewardFallbackOperation.TRANSFERRED
+				),
+				ignored -> {
+				}
+		);
+		if (!transition.accepted()
+				|| currentFallback(level, key).filter(transferred::equals).isEmpty()) {
+			return false;
+		}
+		LIVE_TRANSFERS.put(item, new LiveTransfer(
+				key,
+				transferred,
+				inventory,
+				ownerDeathDrop ? identitySlot : selectedSlot,
+				ownerDeathDrop
+		));
+		return true;
+	}
+
+	private static int inventoryIdentitySlot(ServerPlayer owner, ItemStack expected) {
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			if (owner.getInventory().getItem(slot) == expected) {
+				return slot;
+			}
+		}
+		return -1;
+	}
+
+	/** Synchronous compensation invoked after Minecraft finishes its private entity-add transaction. */
+	public static synchronized void onEntityAddResult(Entity entity, boolean added) {
 		if (!(entity instanceof ItemEntity item)) {
 			return;
 		}
+		LiveTransfer transfer = LIVE_TRANSFERS.remove(item);
+		if (added || transfer == null || !(item.level() instanceof ServerLevel level)) {
+			return;
+		}
+		CampaignTransition rollback = CampaignService.apply(
+				level,
+				new CampaignEvent.RewardFallback(
+						transfer.key(),
+						transfer.ref().entityUuid(),
+						transfer.ref().dimension(),
+						transfer.ref().position(),
+						CampaignEvent.RewardFallbackOperation.CLEARED
+				),
+				ignored -> {
+				}
+		);
+		if (!rollback.accepted() || currentFallback(level, transfer.key()).isPresent()) {
+			return;
+		}
+		if (transfer.deathDrop()) {
+			REJECTED_DEATH_DROPS.computeIfAbsent(
+					transfer.inventory(), ignored -> new ArrayList<>())
+					.add(new RejectedDeathDrop(transfer.restoreSlot(), item.getItem()));
+		}
+		else {
+			restoreRejectedReward(transfer.inventory(), transfer.restoreSlot(), item.getItem());
+		}
+	}
+
+	/** Restores exact death-drop stacks after vanilla has finished clearing every source slot. */
+	public static synchronized void onDeathInventoryDropComplete(Inventory inventory) {
+		Objects.requireNonNull(inventory, "inventory");
+		List<RejectedDeathDrop> rejected = REJECTED_DEATH_DROPS.remove(inventory);
+		if (rejected == null) {
+			return;
+		}
+		for (RejectedDeathDrop drop : rejected) {
+			restoreRejectedReward(inventory, drop.restoreSlot(), drop.stack());
+		}
+	}
+
+	private static void restoreRejectedReward(Inventory inventory, int preferredSlot, ItemStack stack) {
+		if (stack.isEmpty()) {
+			return;
+		}
+		int target = preferredSlot >= 0
+				&& preferredSlot < inventory.getContainerSize()
+				&& inventory.getItem(preferredSlot).isEmpty()
+				? preferredSlot
+				: inventory.getFreeSlot();
+		if (target < 0) {
+			throw new IllegalStateException("Rejected reward add lost its reserved inventory slot");
+		}
+		inventory.setItem(target, stack);
+	}
+
+	private static synchronized void onEntityLoad(Entity entity, ServerLevel level) {
+		if (!(entity instanceof ItemEntity item)) {
+			return;
+		}
+		LIVE_TRANSFERS.remove(item);
 		AttendanceSheetItem.binding(item.getItem()).ifPresent(binding ->
 				trackedSheetFallback(level, binding, item).ifPresent(ref -> {
 					CampaignEvent.SheetProjectionKey key = new CampaignEvent.SheetProjectionKey(
@@ -939,6 +1102,29 @@ public final class RewardService {
 		FALLBACK,
 		WAITING,
 		FAILED
+	}
+
+	private record LiveTransfer(
+			CampaignEvent.RewardProjectionKey key,
+			PlayerCampaignState.RewardFallbackRef ref,
+			Inventory inventory,
+			int restoreSlot,
+			boolean deathDrop
+	) {
+		private LiveTransfer {
+			Objects.requireNonNull(key, "key");
+			Objects.requireNonNull(ref, "ref");
+			Objects.requireNonNull(inventory, "inventory");
+			if (restoreSlot < 0 || restoreSlot >= inventory.getContainerSize()) {
+				throw new IllegalArgumentException("restoreSlot outside owner inventory");
+			}
+		}
+	}
+
+	private record RejectedDeathDrop(int restoreSlot, ItemStack stack) {
+		private RejectedDeathDrop {
+			Objects.requireNonNull(stack, "stack");
+		}
 	}
 
 	private enum RepresentationPresence {

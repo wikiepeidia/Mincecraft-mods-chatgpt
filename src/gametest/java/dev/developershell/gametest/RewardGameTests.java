@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -330,6 +331,26 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 			close(ownerConnection);
 			clearArena(level, desk, FACING);
 		}
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void ownerQDropPreservesConfirmedSheet(GameTestHelper context) {
+		assertOwnerLiveDropRoundTrip(context, owner(1716), "reward-q-sheet", false, false);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void ownerQDropPreservesConfirmedRemoteAndRemoteRemainsUsable(GameTestHelper context) {
+		assertOwnerLiveDropRoundTrip(context, owner(1717), "reward-q-remote", true, false);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void ownerDeathDropPreservesConfirmedSheet(GameTestHelper context) {
+		assertOwnerLiveDropRoundTrip(context, owner(1718), "reward-death-sheet", false, true);
+	}
+
+	@GameTest(maxTicks = 100, padding = 24)
+	public void ownerDeathDropPreservesConfirmedRemoteAndRemoteRemainsUsable(GameTestHelper context) {
+		assertOwnerLiveDropRoundTrip(context, owner(1719), "reward-death-remote", true, true);
 	}
 
 	@GameTest(maxTicks = 100, padding = 24)
@@ -974,6 +995,208 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 		return transition.nextState().orElseThrow();
 	}
 
+	private static void assertOwnerLiveDropRoundTrip(
+			GameTestHelper context,
+			UUID seed,
+			String playerName,
+			boolean remote,
+			boolean deathDrop
+	) {
+		ServerLevel level = context.getLevel();
+		BlockPos desk = context.absolutePos(RELATIVE_DESK);
+		UUID ownerUuid = invocationOwnerUuid(seed, desk, level.getGameTime());
+		ConnectedPlayer connection = null;
+		try {
+			buildArena(level, desk, FACING);
+			connection = createSurvivalPlayer(context, ownerUuid, playerName);
+			RecordingServerPlayer owner = connection.player();
+			persistPendingVictory(context, owner, desk, FACING);
+			context.assertValueEqual(
+					RewardService.reconcilePending(owner),
+					RewardService.Outcome.INVENTORY_ISSUED,
+					"the live-drop fixture confirms both durable reward projections"
+			);
+			PlayerCampaignState confirmed = state(level, ownerUuid);
+			context.assertFalse(confirmed.sheetProjectionPending(), "Sheet is confirmed before transfer");
+			context.assertFalse(confirmed.remoteProjectionPending(), "Remote is confirmed before transfer");
+
+			ItemStack authoritative = remote
+					? findBoundRemote(owner, ownerUuid, confirmed.remoteProjectionUuid())
+					: findBoundSheet(owner, ownerUuid, confirmed.sheetRecoverySequence());
+			retainOnlySelected(owner, authoritative);
+			context.assertValueEqual(countLiveRewardRepresentations(
+					level.getServer(), owner, confirmed, remote), 1,
+					"the confirmed reward starts with exactly one inventory representation");
+
+			ItemEntity copiedEqual = fallbackItem(
+					level, owner.blockPosition(), authoritative.copy(), UUID.randomUUID());
+			if (deathDrop) {
+				owner.setHealth(0.0F);
+			}
+			context.assertFalse(ServerEntityEvents.ALLOW_LOAD.invoker().onAllowLoad(
+					copiedEqual, level, null, false),
+					deathDrop
+							? "a copied-equal stack cannot impersonate the exact death inventory object"
+							: "a fabricated bound entity without the real Q-drop thrower is rejected");
+			context.assertTrue((remote ? state(level, ownerUuid).remoteFallback()
+					: state(level, ownerUuid).sheetFallback()) == null,
+					"rejected fabrication creates no durable fallback authority");
+			if (!remote) {
+				authoritative = assertRejectedLiveDropRollsBack(
+						context, level, owner, confirmed, deathDrop);
+			}
+
+			if (deathDrop) {
+				owner.dropEquipmentForTest();
+				owner.setHealth(owner.getMaxHealth());
+			}
+			else {
+				owner.drop(false);
+			}
+			List<ItemEntity> dropped = remote
+					? boundRemoteEntities(level.getServer(), ownerUuid, confirmed.remoteProjectionUuid())
+					: boundSheetEntities(level.getServer(), ownerUuid, confirmed.sheetRecoverySequence());
+			context.assertValueEqual(dropped.size(), 1,
+					"the production live-drop path materializes exactly one reward entity");
+			PlayerCampaignState afterDrop = state(level, ownerUuid);
+			PlayerCampaignState.RewardFallbackRef fallback = Objects.requireNonNull(
+					remote ? afterDrop.remoteFallback() : afterDrop.sheetFallback(),
+					"live transfer fallback");
+			context.assertValueEqual(fallback.entityUuid(), dropped.getFirst().getUUID(),
+					"state-first transfer names the exact admitted entity");
+			context.assertTrue(fallback.materialized(),
+					"an admitted live transfer is immediately durable and materialized");
+			context.assertValueEqual(countLiveRewardRepresentations(
+					level.getServer(), owner, afterDrop, remote), 1,
+					"the live transfer replaces inventory authority without duplication");
+
+			ItemEntity rewardEntity = dropped.getFirst();
+			rewardEntity.setNoPickUpDelay();
+			rewardEntity.playerTouch(owner);
+			context.assertTrue(rewardEntity.isRemoved(), "the owner recovers the exact live-drop entity");
+			context.assertValueEqual(countLiveRewardRepresentations(
+					level.getServer(), owner, state(level, ownerUuid), remote), 1,
+					"pickup restores exactly one inventory representation");
+			if (remote) {
+				ItemStack recovered = findBoundRemote(owner, ownerUuid, confirmed.remoteProjectionUuid());
+				retainOnlySelected(owner, recovered);
+				long beforeUse = state(level, ownerUuid).remoteCooldownUntilGameTime();
+				context.assertValueEqual(
+						owner.gameMode.useItem(owner, level, recovered, InteractionHand.MAIN_HAND),
+						InteractionResult.SUCCESS_SERVER,
+						"the recovered Remote remains server-authorized and usable"
+				);
+				context.assertTrue(state(level, ownerUuid).remoteCooldownUntilGameTime() > beforeUse,
+						"recovered Remote use commits its durable cooldown");
+			}
+			context.succeed();
+		}
+		finally {
+			removeBoundRewards(level.getServer(), ownerUuid);
+			close(connection);
+			clearArena(level, desk, FACING);
+		}
+	}
+
+	private static ItemStack assertRejectedLiveDropRollsBack(
+			GameTestHelper context,
+			ServerLevel level,
+			RecordingServerPlayer owner,
+			PlayerCampaignState confirmed,
+			boolean deathDrop
+	) {
+		AttendanceSheetItem.Binding expected = new AttendanceSheetItem.Binding(
+				owner.getUUID(), confirmed.sheetRecoverySequence());
+		AtomicBoolean rejectNext = new AtomicBoolean(true);
+		AtomicReference<ItemEntity> rejectedEntity = new AtomicReference<>();
+		ServerEntityEvents.ALLOW_LOAD.register((entity, candidateLevel, spawnReason, loadedFromDisk) -> {
+			if (entity instanceof ItemEntity item
+					&& (deathDrop ? item.getOwner() == null : item.getOwner() == owner)
+					&& AttendanceSheetItem.binding(item.getItem()).filter(expected::equals).isPresent()
+					&& rejectNext.compareAndSet(true, false)) {
+				rejectedEntity.set(item);
+				return false;
+			}
+			return true;
+		});
+		ItemStack unrelated = deathDrop ? ItemStack.EMPTY : new ItemStack(Items.DIRT, 7);
+		int unrelatedSlot = owner.getInventory().getSelectedSlot() == 1 ? 2 : 1;
+		if (!deathDrop) {
+			owner.getInventory().setItem(unrelatedSlot, unrelated);
+			owner.drop(false);
+		}
+		else {
+			owner.dropEquipmentForTest();
+		}
+
+		context.assertFalse(rejectNext.get(),
+				"the exact production live drop reached the later rejection seam");
+		context.assertTrue(state(level, owner.getUUID()).sheetFallback() == null,
+				"the ServerLevel RETURN mixin rolls rejected admission authority back synchronously");
+		if (!deathDrop) {
+			context.assertTrue(owner.getInventory().getItem(unrelatedSlot) == unrelated
+					&& unrelated.getCount() == 7,
+					"rollback neither overwrites nor deletes an unrelated inventory stack");
+		}
+		context.assertValueEqual(boundSheetEntities(
+				level.getServer(), owner.getUUID(), confirmed.sheetRecoverySequence()).size(), 0,
+				"a rejected add leaves no tracked Sheet entity");
+		Objects.requireNonNull(rejectedEntity.get(), "rejected live-drop entity");
+		context.assertValueEqual(countBoundSheets(
+				owner, owner.getUUID(), confirmed.sheetRecoverySequence()), 1,
+				"rejected admission restores exactly one reward to its authenticated origin inventory");
+		if (!deathDrop) {
+			owner.getInventory().setItem(unrelatedSlot, ItemStack.EMPTY);
+		}
+		ItemStack restored = findBoundSheet(owner, owner.getUUID(), confirmed.sheetRecoverySequence());
+		retainOnlySelected(owner, restored);
+		return restored;
+	}
+
+	private static ItemStack findBoundSheet(ServerPlayer owner, UUID ownerUuid, long sequence) {
+		AttendanceSheetItem.Binding expected = new AttendanceSheetItem.Binding(ownerUuid, sequence);
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = owner.getInventory().getItem(slot);
+			if (AttendanceSheetItem.binding(stack).filter(expected::equals).isPresent()) {
+				return stack;
+			}
+		}
+		throw new IllegalStateException("missing confirmed Attendance Sheet");
+	}
+
+	private static ItemStack findBoundRemote(ServerPlayer owner, UUID ownerUuid, UUID projectionUuid) {
+		InfiniteSlidesRemoteItem.Binding expected =
+				new InfiniteSlidesRemoteItem.Binding(ownerUuid, projectionUuid);
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = owner.getInventory().getItem(slot);
+			if (InfiniteSlidesRemoteItem.binding(stack).filter(expected::equals).isPresent()) {
+				return stack;
+			}
+		}
+		throw new IllegalStateException("missing confirmed Infinite Slides Remote");
+	}
+
+	private static void retainOnlySelected(ServerPlayer owner, ItemStack retained) {
+		int selected = owner.getInventory().getSelectedSlot();
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			owner.getInventory().setItem(slot, ItemStack.EMPTY);
+		}
+		owner.getInventory().setItem(selected, retained);
+	}
+
+	private static int countLiveRewardRepresentations(
+			MinecraftServer server,
+			ServerPlayer owner,
+			PlayerCampaignState state,
+			boolean remote
+	) {
+		return remote
+				? countBoundRemotes(owner, state.ownerUuid(), state.remoteProjectionUuid())
+						+ boundRemoteEntities(server, state.ownerUuid(), state.remoteProjectionUuid()).size()
+				: countBoundSheets(owner, state.ownerUuid(), state.sheetRecoverySequence())
+						+ boundSheetEntities(server, state.ownerUuid(), state.sheetRecoverySequence()).size();
+	}
+
 	private static ItemEntity fallbackItem(
 			ServerLevel level,
 			BlockPos position,
@@ -1500,6 +1723,10 @@ public final class RewardGameTests implements CustomTestMethodInvoker {
 
 		private List<String> recordedSystemMessageKeys() {
 			return recordedSystemMessages.stream().map(RewardGameTests::translationKey).toList();
+		}
+
+		private void dropEquipmentForTest() {
+			super.dropEquipment(level());
 		}
 	}
 

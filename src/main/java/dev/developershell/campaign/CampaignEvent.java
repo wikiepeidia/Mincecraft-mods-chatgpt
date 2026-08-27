@@ -276,6 +276,7 @@ public sealed interface CampaignEvent permits
 
 	enum RewardFallbackOperation {
 		RESERVE("reserved"),
+		TRANSFERRED("transferred"),
 		MATERIALIZED("materialized"),
 		RELOCATED("relocated"),
 		LOST("lost"),

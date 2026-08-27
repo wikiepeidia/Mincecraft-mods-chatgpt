@@ -13,6 +13,9 @@
       "dev.developershell.client.DevelopersHellClient"
     ]
   },
+  "mixins": [
+    "developers_hell.mixins.json"
+  ],
   "license": "Unlicense",
   "depends": {
     "fabricloader": ">=0.19.3",

@@ -337,6 +337,21 @@ public final class CampaignReducer {
 					new EffectIntent.MaterializeRewardFallback(event.key(), reservation)
 			);
 		}
+		if (event.operation() == CampaignEvent.RewardFallbackOperation.TRANSFERRED) {
+			if (projectionPending
+					|| current != null
+					|| (!sheet && state.legacyRemoteAdoptionPending())) {
+				return noOp(state, "reward_fallback_not_transferable");
+			}
+			PlayerCampaignState.RewardFallbackRef transferred = new PlayerCampaignState.RewardFallbackRef(
+					event.entityUuid(), event.dimension(), event.position(), true);
+			PlayerCampaignState next = copyRewardFallbackState(
+					state,
+					sheet ? transferred : state.sheetFallback(),
+					sheet ? state.remoteFallback() : transferred
+			);
+			return CampaignTransition.accepted(next, "reward_fallback_transferred");
+		}
 
 		if (current == null || !current.entityUuid().equals(event.entityUuid())) {
 			return noOp(state, "wrong_reward_fallback");
@@ -348,7 +363,7 @@ public final class CampaignReducer {
 					: null;
 			case LOST -> null;
 			case CLEARED -> null;
-			case RESERVE -> throw new IllegalStateException("RESERVE handled above");
+			case RESERVE, TRANSFERRED -> throw new IllegalStateException("initial operations handled above");
 		};
 		if (event.operation() == CampaignEvent.RewardFallbackOperation.RELOCATED && nextRef == null) {
 			return noOp(state, "reward_fallback_not_materialized");
