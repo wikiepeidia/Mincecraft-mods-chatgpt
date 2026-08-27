@@ -1,6 +1,6 @@
 # Developer's Hell
 
-Developer's Hell is an offline-first Fabric comedy mod for Minecraft: Java Edition. The current `0.1.0` JAR contains the complete persistent Lecture vertical slice: discover and craft the cursed Contract, sign it at a valid lectern, survive Professor Infinite Slides, recover from failure, and earn the Attendance Sheet plus Infinite Slides Remote.
+Developer's Hell is an offline-first Fabric comedy mod for Minecraft: Java Edition. Its campaign keeps the existing cursed Contract and Professor Infinite Slides path, then adds a bounded direct-start boss rush through the Jury Gauntlet, the Chairman, a fictional radiant sponsor countdown, and Codex Overdraft. The deadline build uses vanilla-rendered mobs and icons plus local scripted mechanics so the joke remains playable without accounts, services, downloads, or admin setup at runtime.
 
 ## Player installation
 
@@ -12,14 +12,16 @@ Use this exact runtime tuple:
 - Fabric API `0.158.0+26.2`
 - Developer's Hell `0.1.0`
 
-Install Fabric for Minecraft `26.2`, place Fabric API and the one ordinary mod JAR in the profile's `mods` directory, then launch that Fabric profile with Java 25. The verified local handoff is the Git-ignored file:
+Install Fabric for Minecraft `26.2`, place both Fabric API `0.158.0+26.2` and the one ordinary Developer's Hell JAR in that Fabric 26.2 profile's `mods` directory, then launch the profile with Java 25. Keep this profile separate from installations for other Minecraft, Fabric, Forge, or OptiFine versions.
+
+The deadline release output will use this location, but its final checksum and automated gate result will be recorded separately after verification; this README does not claim them in advance:
 
 ```text
 dist/developers-hell-0.1.0.jar
-SHA-256: 768723bb534b5e35553a9b714f23c416c838b3688791a552cdf0bc91fdebf423
+SHA-256: pending separate verified build record
 ```
 
-Do not substitute a development, sources, test, or separately rebuilt JAR. The current Phase 2 verifier built from clean source commit `f68a8a404c5e1318c2c860cff08e03951b715b4b` (tree `3400035f77fd13586643450284c87d1aeca6054d`), inspected the ordinary build JAR, exercised the real dedicated-server stopping callback, and atomically promoted the JAR/evidence pair only after every automated gate passed. The earlier Phase 1 clean-checkout online/offline proof remains historical foundation evidence for hash `8d3006…ea5c8`; it is not a client-UAT claim for the current Phase 2 hash.
+Install only the ordinary remapped release JAR recorded by the final build. Do not substitute a development, sources, test, or arbitrary local rebuild. Earlier Phase 1 and Phase 2 hashes remain historical foundation/Lecture evidence; neither is the checksum for this deadline boss-rush build.
 
 Once the game files and libraries are downloaded, ordinary singleplayer play is offline. This is distinct from both Gradle's cache-only `--offline` mode and the release proof's operating-system firewall isolation:
 
@@ -28,6 +30,29 @@ Once the game files and libraries are downloaded, ordinary singleplayer play is 
 - **OS-isolated runtime:** starts the exact verified Java runtime while temporary outbound block rules cover both `java.exe` and `javaw.exe`; the verifier proves the rules work and removes their exact IDs afterward.
 
 No OpenAI or ChatGPT API, account, subscription, network service, telemetry, analytics, or remote configuration is used at runtime. “The Rich ChatGPT” and all sponsor jokes are fictional parody, not claims of sponsorship, payment, affiliation, or endorsement by OpenAI or anyone else.
+
+## Deadline boss rush
+
+The boss rush can be played without reconstructing the Lecture arena or changing config files:
+
+```text
+/devhell bossrush start
+/devhell bossrush status
+/devhell bossrush abort
+```
+
+- `start` begins or resumes the next first-clear checkpoint and can take a player directly to the Jury.
+- `status` reports the saved boss-rush checkpoint and active stage.
+- `abort` ends the player's active encounter and returns it to a safe saved checkpoint.
+- After earning the Diploma, `/devhell bossrush replay <jury|chairman|codex>` replays an encounter without granting progression rewards again.
+
+The bounded sequence is Jury, Chairman, the local fictional-sponsor countdown, and Codex. First clears award five deliberately vanilla-icon artifacts:
+
+- **Signed Defense Minutes** and **Evidence Binder** from the Jury chapter.
+- **Approved Revision Stamp** and **Red Pen** from the Chairman chapter.
+- **Definitely Legitimate Diploma** for graduating after Codex.
+
+The original Contract/Lecture route remains available and independent of the direct boss-rush start.
 
 ## Lecture campaign
 
@@ -39,7 +64,11 @@ No OpenAI or ChatGPT API, account, subscription, network service, telemetry, ana
 
 The session reads one complete strict local file at `config/developers-hell.json`. On first run it attempts to write the safe schema-v1 template. Missing, malformed, duplicate, unknown, symlinked, non-regular, or oversized input activates the complete immutable defaults; no partial values are applied and rejected bytes are not rewritten. `/devhell status` shows the accepted source, campaign/difficulty/accessibility values, schedules, and all eight module gates. Restart the game/server after changing the file because one validated snapshot is held for the session.
 
-Automated Phase 2 evidence is green for all nine validation IDs: 88 exact unit-test receipts, 55 exact GameTest receipts, dependency/source/archive gates, equal source/build/dist hashes, and a bounded dedicated server whose log ordered `FIRST_TICK_READY -> STOPPING_CLEANUP_COMPLETE -> Stopping server -> All dimensions are saved`. This does **not** prove visual readability, fun, audio balance, motion comfort, or model rendering. No client was launched by the verifier; seven direct-client backstops remain `PENDING` in `02-LECTURE-EVIDENCE.md`.
+The Phase 2 evidence files document the earlier Lecture-only automated baseline. They do **not** validate the new deadline boss rush, prove visual readability, fun, audio balance, motion comfort, or model rendering, and they must not be quoted as the deadline build result.
+
+## Known deadline limitations
+
+This build intentionally defers the Python, terminal, Git, Totem, Duck, and Deadline chaos modules; Metadata Roulette; custom models, textures, sounds, GUI, cinematics, and other custom assets. It also does not claim exhaustive handling of exotic reward-custody or crash-window paths. Manual visual client UAT for encounter readability, rendering, comfort, and fun remains pending until a human completes it.
 
 ## Contributor proof contract
 
