@@ -412,7 +412,11 @@ function Get-TestExecutionReceipts {
     foreach ($file in $unitFiles) {
         $document = Read-SafeXmlDocument -LiteralPath $file.FullName
         $suite = $document.DocumentElement
-        if ($null -eq $suite -or $suite.Name -cne 'testsuite') { throw 'Unit receipt root must be one testsuite.' }
+        if ($null -eq $suite -or
+            [string]$suite.PSBase.LocalName -cne 'testsuite' -or
+            -not [string]::IsNullOrEmpty([string]$suite.PSBase.NamespaceURI)) {
+            throw 'Unit receipt root must be one unnamespaced testsuite.'
+        }
         $cases = @($suite.SelectNodes('./testcase'))
         foreach ($attribute in @('tests','failures','errors','skipped')) {
             if (-not $suite.HasAttribute($attribute) -or $suite.GetAttribute($attribute) -notmatch '^[0-9]+$') { throw "Unit receipt lacks a numeric $attribute count." }
@@ -1289,7 +1293,9 @@ function New-SyntheticTestReceiptSet {
         [Parameter(Mandatory)] $Manifest,
         [Parameter(Mandatory)][string] $Root,
         [ValidateSet('none','missing','duplicate','unexpected','fail','error','skip')][string] $GameTestMutation = 'none',
-        [ValidateSet('none','missing','duplicate','unexpected','fail','error','skip')][string] $UnitMutation = 'none'
+        [ValidateSet('none','missing','duplicate','unexpected','fail','error','skip')][string] $UnitMutation = 'none',
+        [ValidateSet('testsuite','testsuites')][string] $UnitRootElement = 'testsuite',
+        [ValidateSet('none','synthetic')][string] $UnitRootNamespace = 'none'
     )
     $unitDirectory = Join-Path $Root 'unit'
     $gameTestPath = Join-Path $Root 'gametest.xml'
@@ -1315,7 +1321,12 @@ function New-SyntheticTestReceiptSet {
         $writer = [System.Xml.XmlWriter]::Create($path, $settings)
         try {
             $writer.WriteStartDocument()
-            $writer.WriteStartElement('testsuite')
+            if ($UnitRootNamespace -ceq 'synthetic') {
+                $writer.WriteStartElement($UnitRootElement, 'urn:developers-hell:self-check')
+            } else {
+                $writer.WriteStartElement($UnitRootElement)
+            }
+            $writer.WriteAttributeString('name', 'arbitrary.class')
             $writer.WriteAttributeString('tests', [string]$ids.Count)
             $writer.WriteAttributeString('failures', $(if ($UnitMutation -ceq 'fail' -and @($ids) -ccontains $firstUnit) { '1' } else { '0' }))
             $writer.WriteAttributeString('errors', $(if ($UnitMutation -ceq 'error' -and @($ids) -ccontains $firstUnit) { '1' } else { '0' }))
@@ -1497,6 +1508,14 @@ function Invoke-SelfCheckMode {
         $testReceipts = Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $receiptPaths.UnitDirectory -GameTestReportPath $receiptPaths.GameTestPath
         if ([System.IO.File]::ReadAllText($commentedSource) -notmatch '@GameTest' -or $testReceipts.UnitCount -ne 88 -or $testReceipts.GameTestCount -ne 47) {
             throw 'Comment-only source affected receipt-derived execution counts or the reviewed 88/47 manifest drifted.'
+        }
+        $wrongRoot = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -UnitRootElement 'testsuites'
+        Assert-SelfCheckRejects -Label 'unit receipt wrong XML root element' -Action {
+            Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $wrongRoot.UnitDirectory -GameTestReportPath $wrongRoot.GameTestPath
+        }
+        $namespacedRoot = New-SyntheticTestReceiptSet -Manifest $manifest -Root $receiptRoot -UnitRootNamespace 'synthetic'
+        Assert-SelfCheckRejects -Label 'unit receipt namespaced XML root element' -Action {
+            Get-TestExecutionReceipts -Manifest $manifest -UnitReportDirectory $namespacedRoot.UnitDirectory -GameTestReportPath $namespacedRoot.GameTestPath
         }
         $gateResults = [ordered]@{ gradle_transaction=$true; foundation_audit=$true; source_archive=$true; phase2_archive=$true; production_server=$true }
         $validationRows = Get-ValidationRowReceipts -Manifest $manifest -TestReceipts $testReceipts -GateResults $gateResults
