@@ -372,8 +372,13 @@ function Assert-ProductionArchive {
 			'LICENSE_developers-hell',
 			'dev/developershell/DevelopersHell.class',
 			'dev/developershell/client/DevelopersHellClient.class',
+			'dev/developershell/mixin/AbstractContainerMenuRewardDropMixin.class',
+			'dev/developershell/mixin/ContainersRewardDropMixin.class',
 			'dev/developershell/mixin/InventoryRewardDropMixin.class',
+			'dev/developershell/mixin/ItemStackRewardSplitMixin.class',
 			'dev/developershell/mixin/ServerLevelRewardAdmissionMixin.class',
+			'dev/developershell/mixin/ServerLevelRewardSectionMixin.class',
+			'dev/developershell/mixin/ServerPlayerRewardDropMixin.class',
 			'dev/developershell/module/ModuleGate.class',
 			'dev/developershell/module/ModuleId.class',
 			'dev/developershell/registry/ModItemIds.class',
@@ -390,8 +395,13 @@ function Assert-ProductionArchive {
 		}
 
 		$expectedMixinArtifacts = @(
+			'dev/developershell/mixin/AbstractContainerMenuRewardDropMixin.class',
+			'dev/developershell/mixin/ContainersRewardDropMixin.class',
 			'dev/developershell/mixin/InventoryRewardDropMixin.class',
+			'dev/developershell/mixin/ItemStackRewardSplitMixin.class',
 			'dev/developershell/mixin/ServerLevelRewardAdmissionMixin.class',
+			'dev/developershell/mixin/ServerLevelRewardSectionMixin.class',
+			'dev/developershell/mixin/ServerPlayerRewardDropMixin.class',
 			'developers_hell.mixins.json'
 		) | Sort-Object
 		$mixinArtifactPattern = '(?i)(?:^|/)(?:mixin|mixins)(?:/|$)|(?:^|/)[^/]*Mixin(?:\$[^/]*)?[.]class$|[.]mixins?[.]json$'
@@ -507,7 +517,15 @@ function Assert-ProductionArchive {
 		if (($actualMixinProperties -join "`n") -cne ($expectedMixinProperties -join "`n")) {
 			throw 'Approved production mixin config has missing or unknown top-level properties.'
 		}
-		$expectedMixinNames = @('InventoryRewardDropMixin', 'ServerLevelRewardAdmissionMixin')
+		$expectedMixinNames = @(
+			'AbstractContainerMenuRewardDropMixin',
+			'ContainersRewardDropMixin',
+			'InventoryRewardDropMixin',
+			'ItemStackRewardSplitMixin',
+			'ServerLevelRewardAdmissionMixin',
+			'ServerLevelRewardSectionMixin',
+			'ServerPlayerRewardDropMixin'
+		)
 		$actualMixinNames = @($mixinConfig.mixins | ForEach-Object { [string] $_ })
 		$injectorProperties = @($mixinConfig.injectors.PSObject.Properties | ForEach-Object { $_.Name })
 		if ($mixinConfig.required -isnot [bool] -or -not [bool] $mixinConfig.required -or
